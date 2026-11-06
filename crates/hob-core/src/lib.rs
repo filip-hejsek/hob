@@ -7,7 +7,10 @@
 //! a frozen island (e.g. a result), and [`Context::show`] shows a kettle-ui
 //! island and blocks until the user submits or cancels it. [`Context::error`],
 //! [`warn`](Context::warn), [`info`](Context::info) and
-//! [`debug`](Context::debug) log messages ([`LogRecord`]s).
+//! [`debug`](Context::debug) log messages ([`LogRecord`]s), and
+//! [`Context::log_records`] reads back all records the frontend has.
+//!
+//! [`builtins`] has commands that work with any frontend, such as a log viewer.
 //!
 //! A frontend (such as `hob-gui`) carries out these [`Request`]s. For its
 //! prompt, there's a [`History`] of entered lines and
@@ -26,6 +29,7 @@
 //! let requests = interpreter.run("hello world").unwrap();
 //! ```
 
+pub mod builtins;
 mod history;
 mod log;
 mod session;
@@ -255,6 +259,15 @@ impl Context {
         let _ = self.sender.unbounded_send(Request::Log(record));
     }
 
+    /// All log records the frontend has, oldest first: from commands and from
+    /// elsewhere, including hidden and ephemeral ones.
+    pub fn log_records(&self) -> Result<Vec<LogRecord>, Closed> {
+        let (reply, receiver) = std_mpsc::channel();
+        let request = Request::LogRecords(RecordsReply(reply));
+        self.sender.unbounded_send(request).map_err(|_| Closed)?;
+        receiver.recv().map_err(|_| Closed)
+    }
+
     /// Shows a frozen island, e.g. to present a result. Create it with
     /// [`IslandBuilder::freeze`].
     pub fn print_island(&self, island: FrozenIsland) {
@@ -301,6 +314,19 @@ impl fmt::Display for ShowError {
 
 impl std::error::Error for ShowError {}
 
+/// The frontend dropped a request without replying, e.g. because it is
+/// shutting down.
+#[derive(Debug)]
+pub struct Closed;
+
+impl fmt::Display for Closed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the frontend closed the request")
+    }
+}
+
+impl std::error::Error for Closed {}
+
 /// Something a running command asks the frontend to do.
 pub enum Request {
     /// Show a message to the user.
@@ -311,6 +337,18 @@ pub enum Request {
     PrintIsland(FrozenIsland),
     /// Show an island, and reply with its outcome.
     Show(Show),
+    /// Reply with all log records; see [`Context::log_records`].
+    LogRecords(RecordsReply),
+}
+
+/// Sends log records back to the command; see [`Context::log_records`].
+pub struct RecordsReply(std_mpsc::Sender<Vec<LogRecord>>);
+
+impl RecordsReply {
+    /// Sends the records, oldest first.
+    pub fn send(self, records: Vec<LogRecord>) {
+        let _ = self.0.send(records);
+    }
 }
 
 /// A request to show an island; see [`Context::show`].

@@ -6,6 +6,7 @@ use hob_core::Interpreter;
 
 fn main() -> iced::Result {
     let mut interpreter = Interpreter::new();
+    hob_core::builtins::register(&mut interpreter);
     hob_demo::register(&mut interpreter);
     hob_gui::run(interpreter, session_path())
 }

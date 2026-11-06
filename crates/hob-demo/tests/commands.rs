@@ -19,6 +19,7 @@ fn rest(requests: BlockingStream<Requests>) -> Vec<String> {
             Request::Log(record) => record.to_string(),
             Request::PrintIsland(island) => outline(&island),
             Request::Show(_) => panic!("unexpected Show"),
+            Request::LogRecords(_) => panic!("unexpected LogRecords"),
         })
         .collect()
 }

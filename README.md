@@ -32,8 +32,8 @@ The history and scrollback are restored on the next start. They're saved in
 the platform's state directory (e.g. `~/.local/state/hob/session.json`); set
 `HOB_SESSION` to use another file.
 
-Errors and warnings are shown in the scrollback. Set `HOB_LOG=debug` to also
-show debug messages.
+Errors and warnings are shown in the scrollback; the `messages` command lists
+all messages. Set `HOB_LOG=debug` to also show debug messages.
 
 Early prototype; expect everything to change.
 

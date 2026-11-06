@@ -11,6 +11,8 @@
 //! or dependencies, through the `log` crate) are added to the scrollback as
 //! notices; errors and warnings among them are shown. `HOB_LOG` sets the
 //! lowest level shown (`info` by default; `debug` shows debug records).
+//! Commands can read all records with
+//! [`Context::log_records`](hob_core::Context::log_records).
 //!
 //! The prompt works like a shell's: Up and Down browse the history, and Tab
 //! completes command names.
@@ -313,7 +315,12 @@ impl Shell {
             Message::PromptKeyFocused(key) => self.prompt_key(key),
             Message::Request(block, request) => match request.take() {
                 Some(request) => {
-                    let ephemeral = matches!(&request, Request::Log(r) if r.ephemeral);
+                    let ephemeral = match &request {
+                        Request::Log(record) => record.ephemeral,
+                        // Changes nothing.
+                        Request::LogRecords(_) => true,
+                        _ => false,
+                    };
                     let task = self.handle(block, request);
                     if !ephemeral {
                         self.save();
@@ -425,6 +432,13 @@ impl Shell {
     }
 
     fn handle(&mut self, block: BlockId, request: Request) -> Task<Message> {
+        let request = match request {
+            Request::LogRecords(reply) => {
+                reply.send(self.log_records());
+                return Task::none();
+            }
+            request => request,
+        };
         let island_id = self.next_id();
         let Some(block) = self.block_mut(block) else {
             return Task::none();
@@ -442,6 +456,7 @@ impl Shell {
                 Entry::Log(record)
             }
             Request::PrintIsland(island) => Entry::Frozen(island),
+            Request::LogRecords(_) => unreachable!("handled above"),
             Request::Show(show) => {
                 let (builder, reply) = show.into_parts();
                 match Island::new(builder) {
@@ -462,6 +477,21 @@ impl Shell {
         };
         block.entries.push(entry);
         Task::none()
+    }
+
+    /// All log records in the scrollback, oldest first.
+    fn log_records(&self) -> Vec<LogRecord> {
+        (self.scrollback.iter())
+            .flat_map(|item| match item {
+                Item::Block(block) => (block.entries.iter())
+                    .filter_map(|entry| match entry {
+                        Entry::Log(record) => Some(record.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                Item::Notice(record) => vec![record.clone()],
+            })
+            .collect()
     }
 
     fn update_island(&mut self, id: IslandId, message: kettle_ui_iced::Message) -> Task<Message> {

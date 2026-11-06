@@ -139,15 +139,21 @@ Done. Decisions:
   doesn't cause another save. When saving works again, that's noted.
 - Records reach the shell through a channel, so logging during a save
   doesn't touch the session being saved.
+- `messages [LEVEL]` lists all records (not `log`, which sounds like it
+  writes one), with time, level and source, from `info` up by default. It's a
+  built-in command in hob-core (`hob_core::builtins`), registered by `hob`;
+  it gets the records from the frontend with `ctx.log_records()`. The list is
+  printed as plain text, so it's a snapshot, and it's not coloured.
 
 Open:
 
-- A `log` command to show all records, including hidden info notices.
 - `log` records from a command's thread could go into its block.
 - Dependency warnings can be noisy (winit warns on every start under Xvfb);
   maybe deduplicate them, or show them more quietly.
 - kettle-ui's warnings are lost when no logger is installed (e.g. in tests).
-- Record times are saved but not shown.
+- Record times are only shown by `messages`, in local time (UTC if the
+  system time zone can't be found).
+- `messages` could filter by source, or colour its output.
 
 ## hob-gui (shell)
 
