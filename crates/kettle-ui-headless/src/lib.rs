@@ -11,7 +11,8 @@
 //! after an action returns, everything derived from the fields is up to date.
 //! Updates from [`StateHandle`](kettle_ui::StateHandle)s arrive from other
 //! threads: apply them with [`Island::poll`], or wait for them with
-//! [`Island::wait_until`].
+//! [`Island::wait_until`]. An event loop can use [`Island::poll_waking`] to be
+//! told when more arrive.
 //!
 //! ```
 //! use kettle_ui::IslandBuilder;
@@ -212,10 +213,15 @@ impl Island {
     }
 
     /// Applies the [`StateHandle`](kettle_ui::StateHandle) updates that have
-    /// arrived, without waiting for more.
-    pub fn poll(&mut self) {
-        let waker = Waker::noop();
-        self.poll_with(waker);
+    /// arrived, without waiting for more. Returns whether there were any.
+    pub fn poll(&mut self) -> bool {
+        self.poll_waking(Waker::noop())
+    }
+
+    /// Like [`poll`](Self::poll), but `waker` is woken when the next update
+    /// arrives (then call this again).
+    pub fn poll_waking(&mut self, waker: &Waker) -> bool {
+        self.poll_with(waker)
     }
 
     /// Applies [`StateHandle`](kettle_ui::StateHandle) updates as they arrive
@@ -239,18 +245,22 @@ impl Island {
         }
     }
 
-    fn poll_with(&mut self, waker: &Waker) {
+    /// Applies the updates that have arrived; returns whether there were any.
+    fn poll_with(&mut self, waker: &Waker) -> bool {
         let mut cx = Context::from_waker(waker);
+        let mut any = false;
         while !self.updates_ended {
             match Pin::new(&mut self.updates).poll_next(&mut cx) {
                 Poll::Ready(Some(update)) => {
                     let jobs = self.model.apply(update);
                     self.settle(jobs);
+                    any = true;
                 }
                 Poll::Ready(None) => self.updates_ended = true,
                 Poll::Pending => break,
             }
         }
+        any
     }
 
     /// Runs the jobs, and the ones they lead to, until there are none left.
@@ -449,6 +459,31 @@ mod tests {
         assert_eq!(outline(&frozen), island.to_string());
         island.set_checked("c", true).unwrap();
         assert_ne!(outline(&frozen), island.to_string());
+    }
+
+    #[test]
+    fn poll_waking_wakes_when_an_update_arrives() {
+        struct Flag(std::sync::atomic::AtomicBool);
+        impl Wake for Flag {
+            fn wake(self: Arc<Self>) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let woken = |flag: &Flag| flag.0.load(std::sync::atomic::Ordering::SeqCst);
+
+        let mut builder = IslandBuilder::new(label(state("s")));
+        builder.set_state("s", "start");
+        let handle = builder.handle();
+        let mut island = Island::new(builder).unwrap();
+        let flag = Arc::new(Flag(false.into()));
+        let waker = Waker::from(flag.clone());
+        assert!(!island.poll_waking(&waker));
+        assert!(!woken(&flag));
+        handle.set("s", "done");
+        assert!(woken(&flag));
+        assert!(island.poll_waking(&waker));
+        assert_eq!(island.state("s"), Some(&"done".into()));
+        assert!(!island.poll());
     }
 
     #[test]
