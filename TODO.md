@@ -137,6 +137,10 @@ Done. Decisions:
   dependencies, and errors saving the session.
 - A failed save is reported once until the error changes, and the report
   doesn't cause another save. When saving works again, that's noted.
+- kettle-ui prints its warnings to stderr when no logger is installed
+  (`log::max_level()` is still `Off`), e.g. in tests, where the harness
+  shows them for failing tests. It doesn't install a logger itself, since
+  that's the application's choice.
 - Records reach the shell through a channel, so logging during a save
   doesn't touch the session being saved.
 - `messages [LEVEL]` lists all records (not `log`, which sounds like it
@@ -150,7 +154,6 @@ Open:
 - `log` records from a command's thread could go into its block.
 - Dependency warnings can be noisy (winit warns on every start under Xvfb);
   maybe deduplicate them, or show them more quietly.
-- kettle-ui's warnings are lost when no logger is installed (e.g. in tests).
 - Record times are only shown by `messages`, in local time (UTC if the
   system time zone can't be found).
 - `messages` could filter by source, or colour its output.

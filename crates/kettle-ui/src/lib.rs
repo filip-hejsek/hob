@@ -43,7 +43,8 @@
 //! Some mistakes can only be caught while the UI runs, such as a
 //! [`StateHandle`] setting state that has no initial value. In strict mode
 //! they panic; otherwise they're logged as warnings (with the `log` crate)
-//! and ignored.
+//! and ignored. Without a logger (`log::max_level()` is still `Off`), as in
+//! tests, warnings go to stderr instead, so they aren't lost.
 //! Strict mode is on in debug builds and off in release builds. The
 //! `KETTLE_UI_STRICT` environment variable overrides this: `1` turns it on,
 //! `0` turns it off.
@@ -516,7 +517,17 @@ fn misuse(strict: bool, message: String, fallback: &str) {
     if strict {
         panic!("{message}");
     }
-    log::warn!("{message}; {fallback}");
+    warn(format_args!("{message}; {fallback}"));
+}
+
+/// Logs a warning, or prints it to stderr if no logger is installed. (Test
+/// harnesses capture stderr and show it for failing tests.)
+fn warn(message: fmt::Arguments<'_>) {
+    if log::max_level() == log::LevelFilter::Off {
+        eprintln!("kettle-ui: warning: {message}");
+    } else {
+        log::warn!("{message}");
+    }
 }
 
 /// Whether [strict mode](crate#strict-mode) is on.
@@ -526,7 +537,9 @@ fn strict() -> bool {
         Ok("1") => true,
         Ok("0") => false,
         Ok(other) => {
-            log::warn!("ignoring KETTLE_UI_STRICT={other:?} (expected 0 or 1)");
+            warn(format_args!(
+                "ignoring KETTLE_UI_STRICT={other:?} (expected 0 or 1)"
+            ));
             cfg!(debug_assertions)
         }
         Err(_) => cfg!(debug_assertions),
@@ -601,8 +614,45 @@ mod tests {
     #[test]
     fn setting_unknown_state_is_ignored_otherwise() {
         let mut ui = IslandBuilder::new(column([]));
-        ui.handle().set_with(false, "s", "b".into());
+        let warnings = capture_warnings(|| ui.handle().set_with(false, "s", "b".into()));
         assert!(ui.receiver.try_recv().is_err());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("ignoring the update"), "{warnings:?}");
+    }
+
+    thread_local! {
+        static WARNINGS: std::cell::RefCell<Vec<String>> = const {
+            std::cell::RefCell::new(Vec::new())
+        };
+    }
+
+    /// Collects warnings logged on the current thread.
+    struct Capture;
+
+    impl log::Log for Capture {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            metadata.level() <= log::Level::Warn
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if self.enabled(record.metadata()) {
+                WARNINGS.with(|w| w.borrow_mut().push(record.args().to_string()));
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    /// Runs `f`, and returns the warnings it logged on this thread.
+    fn capture_warnings(f: impl FnOnce()) -> Vec<String> {
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            log::set_logger(&Capture).unwrap();
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+        WARNINGS.with(|w| w.borrow_mut().clear());
+        f();
+        WARNINGS.with(|w| w.take())
     }
 
     #[test]
