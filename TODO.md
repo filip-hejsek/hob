@@ -54,7 +54,8 @@ building block, e.g. for the scrollback. Decisions:
   live islands too.
 - Serializable with serde, for saved sessions. Values and field values are
   plain JSON (strings, numbers, lists, bools); maps are ordered, so output is
-  stable. Deserializing checks the field values against the tree.
+  stable. Deserializing checks the field values against the tree. JSON has
+  no NaN or infinity: they're saved as `null`, which is restored as NaN.
 
 Open:
 
@@ -131,7 +132,11 @@ Works like a terminal: a scrollback with the prompt below it. Decisions:
   change to the scrollback and on window close, and restored on start. Live
   islands are saved frozen, as they are at that moment. The file is in the
   platform state directory (`HOB_SESSION` overrides it); writes are atomic,
-  and a file that can't be read is moved aside to `*.bad`.
+  and a file that can't be read is moved aside to `*.bad`. A single island
+  that can't be read is shown as an error and saved back unchanged, so the
+  rest of the session still loads.
+- Commands still running when the session was last saved are marked as
+  interrupted after a restore.
 - The prompt has history (Up/Down; the line being typed is kept as a draft)
   and Tab completion of command names: unambiguous part completed, the
   candidates listed below the prompt if there are several. Both live in
@@ -145,10 +150,7 @@ Open:
   is rewritten in full on every change.
 - Edits in a live island are only saved on close (or with the next
   scrollback change), so a crash loses them.
-- Restored islands of commands that were still running look the same as
-  finished ones; maybe mark them as interrupted.
 - Errors loading or saving the session only go to stderr.
-- A NaN number can't be saved (JSON has no NaN), which makes saving fail.
 - Completion works only at the end of the line (iced doesn't tell the app
   where the cursor is; see ICED_WISHLIST.md), and doesn't complete
   arguments: commands would need a way to say what they accept.

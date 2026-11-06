@@ -158,6 +158,18 @@ mod tests {
     }
 
     #[test]
+    fn non_finite_numbers_are_restored_as_nan() {
+        let mut b = IslandBuilder::new(column([progress("p"), progress("q")]));
+        b.set_state("p", f64::NAN);
+        b.set_state("q", f64::INFINITY);
+        let json = serde_json::to_string(&b.freeze().unwrap()).unwrap();
+        let back: FrozenIsland = serde_json::from_str(&json).unwrap();
+        for name in ["p", "q"] {
+            assert!(matches!(back.state(name), Some(Value::Number(n)) if n.is_nan()));
+        }
+    }
+
+    #[test]
     fn deserializing_checks_the_fields() {
         let mut json = serde_json::to_value(frozen()).unwrap();
         json["fields"]["sub"] = json!("text");

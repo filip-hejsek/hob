@@ -11,7 +11,8 @@
 //! completes command names.
 //!
 //! The history and scrollback are saved as a [`Session`] after every change
-//! and on exit, and restored on the next start.
+//! and on exit, and restored on the next start. Commands still running on
+//! exit are marked as interrupted.
 
 use std::fmt;
 use std::mem;
@@ -69,6 +70,10 @@ struct Block {
     id: BlockId,
     line: String,
     entries: Vec<Entry>,
+    /// Whether the command is still running.
+    running: bool,
+    /// Whether the command was interrupted by exiting, in an earlier session.
+    interrupted: bool,
 }
 
 /// Something a command showed.
@@ -80,6 +85,11 @@ enum Entry {
         reply: Reply,
     },
     Frozen(FrozenIsland),
+    /// A saved island that couldn't be restored. It's saved back unchanged.
+    Unreadable {
+        error: String,
+        raw: serde_json::Value,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +103,8 @@ enum Message {
     /// A request from the command of a block.
     Request(BlockId, Pending<Request>),
     Island(IslandId, kettle_ui_iced::Message),
+    /// The command of a block finished.
+    Finished(BlockId),
     CloseRequested,
 }
 
@@ -153,12 +165,15 @@ impl Shell {
                 .map(|entry| match entry {
                     hob_core::Entry::Text(text) => Entry::Text(text),
                     hob_core::Entry::Island(island) => Entry::Frozen(island),
+                    hob_core::Entry::Unreadable { error, raw } => Entry::Unreadable { error, raw },
                 })
                 .collect();
             shell.blocks.push(Block {
                 id,
                 line: block.line,
                 entries,
+                running: false,
+                interrupted: block.interrupted,
             });
         }
         (shell, operation::focus(Id::new(PROMPT)))
@@ -178,8 +193,13 @@ impl Shell {
                         Entry::Text(text) => hob_core::Entry::Text(text.clone()),
                         Entry::Live { island, .. } => hob_core::Entry::Island(island.freeze()),
                         Entry::Frozen(island) => hob_core::Entry::Island(island.clone()),
+                        Entry::Unreadable { error, raw } => hob_core::Entry::Unreadable {
+                            error: error.clone(),
+                            raw: raw.clone(),
+                        },
                     })
                     .collect(),
+                interrupted: block.running || block.interrupted,
             })
             .collect();
         let session = Session {
@@ -228,6 +248,13 @@ impl Shell {
                 None => Task::none(),
             },
             Message::Island(id, message) => self.update_island(id, message),
+            Message::Finished(id) => {
+                if let Some(block) = self.blocks.iter_mut().find(|b| b.id == id) {
+                    block.running = false;
+                }
+                self.save();
+                Task::none()
+            }
             Message::CloseRequested => {
                 self.save();
                 iced::exit()
@@ -247,9 +274,16 @@ impl Shell {
             id,
             line,
             entries: Vec::new(),
+            running: false,
+            interrupted: false,
         };
         let task = match self.interpreter.run(&block.line) {
-            Ok(requests) => Task::run(requests, move |r| Message::Request(id, Pending::new(r))),
+            Ok(requests) => {
+                block.running = true;
+                // The stream ends when the command finishes.
+                Task::run(requests, move |r| Message::Request(id, Pending::new(r)))
+                    .chain(Task::done(Message::Finished(id)))
+            }
             Err(e) => {
                 block.entries.push(Entry::Text(e.to_string()));
                 Task::none()
@@ -392,7 +426,12 @@ fn view_block(block: &Block) -> Element<'_, Message> {
         weight: font::Weight::Bold,
         ..Font::DEFAULT
     };
-    let entries = column(block.entries.iter().map(view_entry)).spacing(spacing());
+    let note = block.interrupted.then(|| {
+        text("Interrupted: hob exited while this command was running.")
+            .style(text::secondary)
+            .into()
+    });
+    let entries = column(block.entries.iter().map(view_entry).chain(note)).spacing(spacing());
     column([
         text(format!("> {}", block.line)).font(bold).into(),
         container(entries)
@@ -411,6 +450,9 @@ fn view_entry(entry: &Entry) -> Element<'_, Message> {
             island.view().map(move |m| Message::Island(id, m))
         }
         Entry::Frozen(island) => view_frozen(island),
+        Entry::Unreadable { error, .. } => text(format!("Couldn't restore this island: {error}"))
+            .style(text::danger)
+            .into(),
     }
 }
 

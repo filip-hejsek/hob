@@ -1201,6 +1201,7 @@ dependencies = [
  "iced",
  "kettle-ui",
  "kettle-ui-iced",
+ "serde_json",
 ]
 
 [[package]]

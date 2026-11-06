@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use kettle_ui::FrozenIsland;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The version of the session file format. Bump it on incompatible changes.
 const VERSION: u32 = 1;
@@ -28,16 +28,63 @@ pub struct Block {
     pub line: String,
     /// What the command showed, in order.
     pub entries: Vec<Entry>,
+    /// Whether the command was still running when the session was saved, so
+    /// it was interrupted when the frontend exited.
+    #[serde(default)]
+    pub interrupted: bool,
 }
 
 /// Something a command showed.
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Entry {
     /// A printed message.
     Text(String),
     /// An island, frozen (live islands are saved as they were).
     Island(FrozenIsland),
+    /// A saved island that couldn't be read, e.g. one saved by a newer
+    /// version. It's saved back unchanged, so it isn't lost.
+    Unreadable {
+        /// Why it couldn't be read.
+        error: String,
+        /// The island as saved.
+        raw: serde_json::Value,
+    },
+}
+
+/// How an [`Entry`] is saved.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EntryRepr<I> {
+    Text(String),
+    Island(I),
+}
+
+impl Serialize for Entry {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Entry::Text(text) => EntryRepr::<()>::Text(text.clone()).serialize(serializer),
+            Entry::Island(island) => EntryRepr::Island(island).serialize(serializer),
+            Entry::Unreadable { raw, .. } => EntryRepr::Island(raw).serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Entry {
+    /// An island that can't be read becomes [`Entry::Unreadable`] instead of
+    /// failing the whole session.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(
+            match EntryRepr::<serde_json::Value>::deserialize(deserializer)? {
+                EntryRepr::Text(text) => Entry::Text(text),
+                EntryRepr::Island(raw) => match FrozenIsland::deserialize(&raw) {
+                    Ok(island) => Entry::Island(island),
+                    Err(e) => Entry::Unreadable {
+                        error: e.to_string(),
+                        raw,
+                    },
+                },
+            },
+        )
+    }
 }
 
 /// The file contents: the session, tagged with the format version.
@@ -162,6 +209,7 @@ mod tests {
                     Entry::Island(b.freeze().unwrap()),
                     Entry::Text("done".into()),
                 ],
+                interrupted: true,
             }],
         }
     }
@@ -178,7 +226,43 @@ mod tests {
         assert_eq!(block.line, "contact");
         assert!(matches!(&block.entries[0], Entry::Island(i) if i.fields().text("name") == "Ada"));
         assert!(matches!(&block.entries[1], Entry::Text(t) if t == "done"));
+        assert!(block.interrupted);
         assert!(!tmp_path(&path).exists());
+    }
+
+    #[test]
+    fn unreadable_island_is_kept_as_is() {
+        let path = temp_dir("unreadable").join("session.json");
+        let mut json = serde_json::to_value(FileRef {
+            version: VERSION,
+            session: &session(),
+        })
+        .unwrap();
+        let island = &mut json["blocks"][0]["entries"][0]["island"];
+        island["fields"]["name"] = true.into();
+        let broken = island.clone();
+        // Older files have no "interrupted".
+        json["blocks"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("interrupted");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, json.to_string()).unwrap();
+
+        let loaded = Session::load(&path).unwrap().unwrap();
+        let block = &loaded.blocks[0];
+        assert!(!block.interrupted);
+        let Entry::Unreadable { error, raw } = &block.entries[0] else {
+            panic!("expected an unreadable island");
+        };
+        assert!(error.contains("not a checkbox"), "{error}");
+        assert_eq!(raw, &broken);
+        assert!(matches!(&block.entries[1], Entry::Text(t) if t == "done"));
+
+        loaded.save(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["blocks"][0]["entries"][0]["island"], broken);
     }
 
     #[test]

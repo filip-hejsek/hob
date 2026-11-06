@@ -113,8 +113,9 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// The value of a piece of named state. Serialized as a plain string,
-/// number or list.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// number or list. JSON has no NaN or infinity: they're saved as `null`, and
+/// `null` is restored as NaN.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Value {
     /// Text, e.g. for a [`label`](widget::label).
@@ -123,6 +124,24 @@ pub enum Value {
     Number(f64),
     /// Lines, e.g. for a [`list`](widget::list).
     List(Vec<String>),
+}
+
+impl<'de> Deserialize<'de> for Value {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Text(String),
+            /// `None` for `null`, which is how non-finite numbers are saved.
+            Number(Option<f64>),
+            List(Vec<String>),
+        }
+        Ok(match Repr::deserialize(deserializer)? {
+            Repr::Text(s) => Value::Text(s),
+            Repr::Number(n) => Value::Number(n.unwrap_or(f64::NAN)),
+            Repr::List(items) => Value::List(items),
+        })
+    }
 }
 
 impl fmt::Display for Value {
