@@ -64,6 +64,26 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - Post-MVP: some global styling customization. It will be set by the host
   application, not the island, and may be iced-specific.
 
+## kettle-ui-headless
+
+Done: acts like a user (type, toggle, pick a suggestion, press a button by
+label) and renders the island as an indented text outline. Decisions:
+
+- Derived state is computed synchronously on the calling thread, so tests are
+  deterministic: after an action returns, everything derived from the fields
+  is up to date. The cost: a slow or hanging computation blocks the caller.
+- `StateHandle` updates are applied only by `poll` or `wait_until`, never
+  implicitly.
+- Buttons are addressed by label; several buttons with the same label are
+  fine if they do the same thing.
+
+Open:
+
+- Agent interface: how an agent talks to it (MCP server? JSON over stdio?),
+  and whether the text outline is the right thing to show it.
+- Show outdated values in the outline (relevant only if computations become
+  asynchronous, e.g. for agents with timeouts).
+
 ## hob-gui (shell)
 
 - Bug: the empty tab row and empty status line leave gaps.

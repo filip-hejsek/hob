@@ -1456,6 +1456,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kettle-ui-headless"
+version = "0.1.0"
+dependencies = [
+ "futures-core",
+ "kettle-ui",
+ "kettle-ui-demo",
+]
+
+[[package]]
 name = "kettle-ui-iced"
 version = "0.1.0"
 dependencies = [

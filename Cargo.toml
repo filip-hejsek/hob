@@ -23,6 +23,7 @@ dbg_macro = "warn"
 hob-gui = { path = "crates/hob-gui" }
 kettle-ui = { path = "crates/kettle-ui" }
 kettle-ui-demo = { path = "crates/kettle-ui-demo" }
+kettle-ui-headless = { path = "crates/kettle-ui-headless" }
 kettle-ui-iced = { path = "crates/kettle-ui-iced" }
 
 futures-channel = "0.3"

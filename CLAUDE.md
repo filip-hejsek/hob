@@ -9,6 +9,8 @@ keep it up to date.
 - `kettle-ui` must not depend on any GUI toolkit. Anything iced-specific
   belongs in `kettle-ui-iced`.
 - `kettle-ui-demo` uses only `kettle-ui`, not iced.
+- `kettle-ui-headless` is a backend without a GUI, for tests and agents. It
+  must not depend on iced either.
 - `hob-gui` (the shell) is plain iced; it hosts islands through
   `kettle-ui-iced`.
 - kettle-ui is deliberately small: the widget tree is fixed once built, and

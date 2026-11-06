@@ -11,7 +11,8 @@ The UI is split into two parts:
 - **hob-gui** — the shell: owns the main window and hosts islands.
 - **kettle-ui** — a deliberately small UI framework for *islands*: pieces of
   UI embedded in the shell. It is toolkit-independent; **kettle-ui-iced**
-  renders it with iced.
+  renders it with iced, and **kettle-ui-headless** drives it without a GUI,
+  for tests and (later) agents.
 
 Run it with:
 
