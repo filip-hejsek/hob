@@ -114,7 +114,21 @@ Open:
 
 ## hob-gui (shell)
 
-- Command output goes to the status line, which shows only the latest
-  message. A scrollback is planned, but needs building blocks that don't
-  exist yet.
-- Bug: the empty tab row and empty status line leave gaps.
+Works like a terminal: a scrollback with the prompt below it. Decisions:
+
+- Each command line gets a block in the scrollback, with what the command
+  printed and the islands it showed, in order. Concurrent commands each add
+  to their own block.
+- Live islands are shown inline and freeze in place once submitted or
+  cancelled. There are no tabs.
+- The scrollback sticks to the bottom while it's scrolled there.
+- A line with an unknown command is still added, with the error.
+- What commands print also goes to stdout.
+
+Open:
+
+- Command history (up/down in the prompt). For now, a mistyped line has to
+  be retyped.
+- Focus: nothing moves focus to a newly shown island, or back to the prompt
+  afterwards.
+- The scrollback grows without limit.

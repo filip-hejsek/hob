@@ -3,8 +3,9 @@
 //! Commands are registered on an [`Interpreter`] by name. Running a command
 //! line ([`Interpreter::run`]) starts the command on its own thread. The
 //! command talks to the user through a [`Context`], in the style of a terminal
-//! program: [`Context::print`] shows a message, and [`Context::show`] shows a
-//! kettle-ui island and blocks until the user submits or cancels it.
+//! program: [`Context::print`] shows a message, [`Context::print_island`] shows
+//! a frozen island (e.g. a result), and [`Context::show`] shows a kettle-ui
+//! island and blocks until the user submits or cancels it.
 //!
 //! A frontend (such as `hob-gui`) carries out these [`Request`]s.
 //!
@@ -30,7 +31,7 @@ use std::thread;
 
 use futures_channel::mpsc;
 use futures_core::Stream;
-use kettle_ui::{IslandBuilder, Outcome};
+use kettle_ui::{FrozenIsland, IslandBuilder, Outcome};
 
 /// What a command returns: any error is shown to the user.
 pub type CommandResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
@@ -150,6 +151,12 @@ impl Context {
         let _ = self.sender.unbounded_send(Request::Print(message.into()));
     }
 
+    /// Shows a frozen island, e.g. to present a result. Create it with
+    /// [`IslandBuilder::freeze`].
+    pub fn print_island(&self, island: FrozenIsland) {
+        let _ = self.sender.unbounded_send(Request::PrintIsland(island));
+    }
+
     /// Shows an island and waits until the user submits or cancels it.
     pub fn show(&self, builder: IslandBuilder) -> Result<Outcome, ShowError> {
         let (reply, receiver) = std_mpsc::channel();
@@ -194,6 +201,8 @@ impl std::error::Error for ShowError {}
 pub enum Request {
     /// Show a message to the user.
     Print(String),
+    /// Show a frozen island to the user.
+    PrintIsland(FrozenIsland),
     /// Show an island, and reply with its outcome.
     Show(Show),
 }
@@ -262,7 +271,7 @@ mod tests {
     fn printed(requests: &mut Requests) -> String {
         match next(requests) {
             Some(Request::Print(message)) => message,
-            Some(Request::Show(_)) => panic!("expected Print, got Show"),
+            Some(_) => panic!("expected Print"),
             None => panic!("expected Print, but the command finished"),
         }
     }
@@ -313,6 +322,18 @@ mod tests {
         assert_eq!(printed(&mut requests), "fail: it broke");
         let mut requests = interpreter().run("panic").unwrap();
         assert_eq!(printed(&mut requests), "panic: panicked");
+    }
+
+    #[test]
+    fn frozen_islands_can_be_printed() {
+        let mut i = Interpreter::new();
+        i.register("result", |ctx, _| {
+            ctx.print_island(IslandBuilder::new(column([])).freeze()?);
+            Ok(())
+        });
+        let mut requests = i.run("result").unwrap();
+        assert!(matches!(next(&mut requests), Some(Request::PrintIsland(_))));
+        assert!(next(&mut requests).is_none());
     }
 
     #[test]

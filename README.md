@@ -13,8 +13,8 @@ shows a piece of UI and waits for the user to submit it.
 The project is split into these parts:
 
 - **hob-core** — the command interpreter. It is toolkit-independent.
-- **hob-gui** — the shell: owns the main window, has the command prompt and
-  hosts islands.
+- **hob-gui** — the shell: owns the main window, and shows a terminal-like
+  scrollback of commands and their islands, with a command prompt.
 - **kettle-ui** — a deliberately small UI framework for *islands*: pieces of
   UI embedded in the shell. It is toolkit-independent; **kettle-ui-iced**
   renders it with iced, and **kettle-ui-headless** drives it without a GUI,
