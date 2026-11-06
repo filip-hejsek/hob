@@ -1,28 +1,38 @@
 //! A `log` backend that sends records to the shell, which shows them as
 //! notices.
 
+use std::collections::HashSet;
+use std::sync::Mutex;
+
 use futures_channel::mpsc;
 use hob_core::{Level, LogRecord};
 
 /// Sends [`log`] records to the shell. Records of our crates are logged
 /// from `level` up; records of dependencies only from warnings up, and they
-/// are ephemeral. Errors and warnings also go to stderr.
+/// are ephemeral, and logged only once. Errors and warnings also go to stderr.
 struct Logger {
     level: Level,
     sender: mpsc::UnboundedSender<LogRecord>,
+    /// Dependency records already logged: level, target and message.
+    seen: Mutex<HashSet<(Level, String, String)>>,
 }
 
 /// Installs the logger, if no other logger is installed yet. Returns the
 /// records it receives.
 pub(crate) fn install(level: Level) -> Option<mpsc::UnboundedReceiver<LogRecord>> {
     let (sender, receiver) = mpsc::unbounded();
-    log::set_boxed_logger(Box::new(Logger { level, sender })).ok()?;
+    let logger = Logger {
+        level,
+        sender,
+        seen: Mutex::default(),
+    };
+    log::set_boxed_logger(Box::new(logger)).ok()?;
     log::set_max_level(filter(level.max(Level::Warn)));
     Some(receiver)
 }
 
 /// Whether a target (module path) is in one of our crates.
-fn is_ours(target: &str) -> bool {
+pub(crate) fn is_ours(target: &str) -> bool {
     let krate = target.split("::").next().unwrap_or(target);
     ["hob", "kettle_ui"]
         .iter()
@@ -64,6 +74,11 @@ impl log::Log for Logger {
         let target = record.target();
         let mut entry = LogRecord::new(level(record.level()), target, record.args().to_string());
         if !is_ours(target) {
+            // Some dependencies repeat a warning, e.g. on every frame.
+            let key = (entry.level, entry.target.clone(), entry.message.clone());
+            if !self.seen.lock().unwrap().insert(key) {
+                return;
+            }
             entry = entry.ephemeral();
         }
         if entry.level <= Level::Warn {
@@ -88,5 +103,40 @@ mod tests {
         for theirs in ["hobby", "iced_winit::proxy", "wgpu_core", "kettle"] {
             assert!(!is_ours(theirs), "{theirs}");
         }
+    }
+
+    #[test]
+    fn repeated_dependency_records_are_dropped() {
+        let (sender, mut receiver) = mpsc::unbounded();
+        let logger = Logger {
+            level: Level::Info,
+            sender,
+            seen: Mutex::default(),
+        };
+        let log = |target, message| {
+            let args = format_args!("{message}");
+            let record = log::Record::builder()
+                .level(log::Level::Error)
+                .target(target)
+                .args(args)
+                .build();
+            log::Log::log(&logger, &record);
+        };
+        for _ in 0..2 {
+            log("wgpu_core", "lost");
+            log("hob_gui", "ours");
+        }
+        log("wgpu_core", "other");
+        let mut received = Vec::new();
+        while let Ok(record) = receiver.try_recv() {
+            received.push((record.message, record.ephemeral));
+        }
+        let expected = [
+            ("lost", true),
+            ("ours", false),
+            ("ours", false),
+            ("other", true),
+        ];
+        assert_eq!(received, expected.map(|(m, e)| (m.to_owned(), e)));
     }
 }

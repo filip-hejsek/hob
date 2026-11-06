@@ -86,7 +86,12 @@ and renders the island as an indented text outline.
   their context.
 - Our crates log from `info` up (`HOB_LOG` changes the level), dependencies
   from warnings up. Only error and warning notices are shown in the
-  scrollback; `messages` lists the rest.
+  scrollback, and of dependencies only errors: their warnings are rarely
+  something the user can act on (winit warns on every start under Xvfb).
+  `messages` lists the rest.
+- A dependency's record is logged only once: repeats (same level, target and
+  message) are dropped, also from stderr, since some dependencies warn
+  on every frame.
 - Ephemeral records are shown but not saved: debug records, records from
   dependencies, and errors saving the session.
 - A failed save is reported once until the error changes, and the report

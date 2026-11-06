@@ -58,8 +58,8 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 ## Logging
 
 - `log` records from a command's thread could go into its block.
-- Dependency warnings can be noisy (winit warns on every start under Xvfb);
-  maybe deduplicate them, or show them more quietly.
+- A dependency that logs many different messages (e.g. with a changing
+  number in them) still adds them all; they may need a limit.
 - Record times are only shown by `messages`, in local time (UTC if the
   system time zone can't be found).
 - `messages` could filter by source, or colour its output.

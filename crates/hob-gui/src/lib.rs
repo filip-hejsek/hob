@@ -9,7 +9,9 @@
 //!
 //! Log records that aren't from a command (from the shell itself, kettle-ui
 //! or dependencies, through the `log` crate) are added to the scrollback as
-//! notices; errors and warnings among them are shown. `HOB_LOG` sets the
+//! notices; errors and warnings among them are shown, except warnings from
+//! dependencies, which are rarely something the user can act on. Repeats of
+//! a dependency's record are dropped. `HOB_LOG` sets the
 //! lowest level shown (`info` by default; `debug` shows debug records).
 //! Commands can read all records with
 //! [`Context::log_records`](hob_core::Context::log_records).
@@ -522,10 +524,8 @@ impl Shell {
     fn view(&self) -> Element<'_, Message> {
         let items = self.scrollback.iter().filter_map(|item| match item {
             Item::Block(block) => Some(view_block(block, self.level)),
-            // Notices below warnings are kept, but not shown.
-            Item::Notice(record) if record.level <= Level::Warn.min(self.level) => {
-                Some(view_record(record))
-            }
+            Item::Notice(record) if shows_notice(record, self.level) => Some(view_record(record)),
+            // Kept for `messages`.
             Item::Notice(_) => None,
         });
         let scrollback = column(items).spacing(2.0 * spacing());
@@ -604,6 +604,16 @@ fn move_aside(path: &Path) -> std::io::Result<PathBuf> {
     Ok(aside)
 }
 
+/// Whether a notice is shown in the scrollback: errors, and warnings from our
+/// crates, at most down to `level`.
+fn shows_notice(record: &LogRecord, level: Level) -> bool {
+    let lowest = match logger::is_ours(&record.target) {
+        true => Level::Warn,
+        false => Level::Error,
+    };
+    record.level <= lowest.min(level)
+}
+
 /// Shows a block; log records below `level` are hidden.
 fn view_block(block: &Block, level: Level) -> Element<'_, Message> {
     let bold = Font {
@@ -653,4 +663,20 @@ fn view_record(record: &LogRecord) -> Element<'_, Message> {
         Level::Debug => text::secondary,
     };
     text(record.to_string()).style(style).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dependency_warnings_are_not_shown() {
+        let shown = |level, target| shows_notice(&LogRecord::new(level, target, "m"), Level::Info);
+        assert!(shown(Level::Warn, "hob_gui"));
+        assert!(!shown(Level::Info, "hob_gui"));
+        assert!(shown(Level::Error, "wgpu_core"));
+        assert!(!shown(Level::Warn, "iced_winit::proxy"));
+        let record = LogRecord::new(Level::Warn, "hob_gui", "m");
+        assert!(!shows_notice(&record, Level::Error));
+    }
 }
