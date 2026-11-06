@@ -21,6 +21,7 @@ dbg_macro = "warn"
 
 [workspace.dependencies]
 hob-core = { path = "crates/hob-core" }
+hob-demo = { path = "crates/hob-demo" }
 hob-gui = { path = "crates/hob-gui" }
 kettle-ui = { path = "crates/kettle-ui" }
 kettle-ui-demo = { path = "crates/kettle-ui-demo" }

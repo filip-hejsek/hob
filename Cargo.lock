@@ -1176,10 +1176,9 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "hob-core",
+ "hob-demo",
  "hob-gui",
  "iced",
- "kettle-ui",
- "kettle-ui-demo",
 ]
 
 [[package]]
@@ -1191,6 +1190,15 @@ dependencies = [
  "kettle-ui",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "hob-demo"
+version = "0.1.0"
+dependencies = [
+ "hob-core",
+ "kettle-ui",
+ "kettle-ui-demo",
 ]
 
 [[package]]

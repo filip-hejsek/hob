@@ -19,6 +19,7 @@ The project is split into these parts:
   UI embedded in the shell. It is toolkit-independent; **kettle-ui-iced**
   renders it with iced, and **kettle-ui-headless** drives it without a GUI,
   for tests and (later) agents.
+- **hob-demo** — demo commands.
 - **hob** — the application: registers the commands and starts the shell.
 
 Run it with:

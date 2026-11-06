@@ -19,6 +19,8 @@ workaround used.
 - `hob-gui` (the shell) is plain iced; it hosts islands through
   `kettle-ui-iced`. It doesn't know about specific commands; the `hob`
   crate registers them.
+- `hob-demo` holds demo commands. Like `hob-core`, it must not depend on
+  any GUI toolkit.
 - kettle-ui is deliberately small: the widget tree is fixed once built, and
   spacing is fixed and styling options are minimal (see TODO.md). Don't add
   options without a need.
