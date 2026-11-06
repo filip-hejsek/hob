@@ -5,13 +5,18 @@
 //! are run as hob commands; lines starting with `/` act on islands (see
 //! [`HELP`]). Everything the commands do is printed as it arrives, prefixed
 //! with the command's block number; islands are printed as text outlines.
+//!
+//! Output from commands can arrive while the user types. As a stopgap, the
+//! `> ` prompt is only shown once output has paused for [`PROMPT_DELAY`], and
+//! not at all if stdin isn't a terminal.
 
 use std::collections::BTreeMap;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::process::{ChildStdin, Command, ExitCode, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use hob_core::Level;
 use hob_headless::protocol::{self, BlockId, Call, ErrorObject, Incoming, IslandId, Notification};
@@ -28,6 +33,97 @@ live island, or on island N if given as #N:
   /show [#N]              print an island again
   /help                   show this
   /quit                   quit (or end the input)";
+
+/// How long output must pause before the prompt is shown.
+const PROMPT_DELAY: Duration = Duration::from_millis(50);
+
+/// Prints a line of output; see [`Output::line`].
+macro_rules! out {
+    ($($arg:tt)*) => {
+        OUTPUT.line(&format!($($arg)*))
+    };
+}
+
+static OUTPUT: Output = Output {
+    state: Mutex::new(OutputState {
+        last: None,
+        waiting: false,
+        shown: false,
+    }),
+    changed: Condvar::new(),
+};
+
+/// All output, and the prompt.
+struct Output {
+    state: Mutex<OutputState>,
+    changed: Condvar,
+}
+
+struct OutputState {
+    /// When output was last printed, or waiting started.
+    last: Option<Instant>,
+    /// Whether the user is expected to type a line.
+    waiting: bool,
+    /// Whether the prompt is shown, at the end of the last line.
+    shown: bool,
+}
+
+impl Output {
+    /// Prints a line, over the prompt if it's shown.
+    fn line(&self, text: &str) {
+        let mut state = self.state.lock().unwrap();
+        if state.shown {
+            print!("\r");
+            state.shown = false;
+        }
+        println!("{text}");
+        state.last = Some(Instant::now());
+        self.changed.notify_all();
+    }
+
+    /// Says whether the user is expected to type a line. When a line has been
+    /// typed, the prompt it followed is gone. The delay starts again, so that
+    /// output of a command that was just started comes first.
+    fn set_waiting(&self, waiting: bool) {
+        let mut state = self.state.lock().unwrap();
+        state.waiting = waiting;
+        state.shown = false;
+        state.last = Some(Instant::now());
+        self.changed.notify_all();
+    }
+
+    /// Ends the line after the prompt, if it's shown.
+    fn end(&self) {
+        let mut state = self.state.lock().unwrap();
+        if state.shown {
+            println!();
+            state.shown = false;
+        }
+    }
+
+    /// Shows the prompt while the user is expected to type a line and output
+    /// has paused for [`PROMPT_DELAY`]. Never returns.
+    fn show_prompts(&self) {
+        let mut state = self.state.lock().unwrap();
+        loop {
+            if state.waiting && !state.shown {
+                let quiet = state.last.map_or(PROMPT_DELAY, |last| last.elapsed());
+                if quiet < PROMPT_DELAY {
+                    state = self
+                        .changed
+                        .wait_timeout(state, PROMPT_DELAY - quiet)
+                        .unwrap()
+                        .0;
+                    continue;
+                }
+                print!("> ");
+                let _ = io::stdout().flush();
+                state.shown = true;
+            }
+            state = self.changed.wait(state).unwrap();
+        }
+    }
+}
 
 fn main() -> ExitCode {
     match run() {
@@ -52,7 +148,10 @@ fn run() -> Result<(), String> {
     let reader_state = state.clone();
     let reader = thread::spawn(move || read_frontend(output, &reader_state, &responses));
 
-    println!("{HELP}");
+    if io::stdin().is_terminal() {
+        thread::spawn(|| OUTPUT.show_prompts());
+    }
+    out!("{HELP}");
     let result = repl(&mut frontend, &state, &replies);
     // Ending its input makes the frontend exit.
     drop(frontend);
@@ -104,10 +203,11 @@ fn repl(
     let mut next_id = 0;
     let mut lines = io::stdin().lock().lines();
     loop {
-        print!("> ");
-        let _ = io::stdout().flush();
-        let Some(line) = lines.next() else {
-            println!();
+        OUTPUT.set_waiting(true);
+        let line = lines.next();
+        OUTPUT.set_waiting(false);
+        let Some(line) = line else {
+            OUTPUT.end();
             return Ok(());
         };
         let line = line.map_err(|e| format!("couldn't read input: {e}"))?;
@@ -115,7 +215,7 @@ fn repl(
             Ok(Input::Nothing) => continue,
             Ok(Input::Quit) => return Ok(()),
             Ok(Input::Help) => {
-                println!("{HELP}");
+                out!("{HELP}");
                 continue;
             }
             Ok(Input::Run(line)) => Call::Run { line },
@@ -126,21 +226,21 @@ fn repl(
                         Some((block, contents, live)) => {
                             print_island(*block, id, contents, *live);
                         }
-                        None => println!("no island #{id}"),
+                        None => out!("no island #{id}"),
                     },
-                    Err(e) => println!("{e}"),
+                    Err(e) => out!("{e}"),
                 }
                 continue;
             }
             Ok(Input::Act(id, action)) => match state.lock().unwrap().island(id) {
                 Ok(island) => action.call(island),
                 Err(e) => {
-                    println!("{e}");
+                    out!("{e}");
                     continue;
                 }
             },
             Err(e) => {
-                println!("{e}");
+                out!("{e}");
                 continue;
             }
         };
@@ -152,7 +252,7 @@ fn repl(
             let (id, result) = replies.recv().map_err(|_| "the frontend exited")?;
             if id == next_id {
                 if let Err(error) = result {
-                    println!("error: {}", error.message);
+                    out!("error: {}", error.message);
                 }
                 break;
             }
@@ -182,14 +282,13 @@ fn read_frontend(
 fn print_notification(notification: Notification, state: &Mutex<State>, level: Level) {
     match notification {
         Notification::Printed { block, text } => {
-            for line in text.lines() {
-                println!("[{block}] {line}");
-            }
+            let lines: Vec<String> = text.lines().map(|l| format!("[{block}] {l}")).collect();
+            out!("{}", lines.join("\n"));
         }
         Notification::Logged { block, record } => {
             if record.level <= level {
                 let block = block.map_or("-".to_owned(), |b| b.to_string());
-                println!("[{block}] {record}");
+                out!("[{block}] {record}");
             }
         }
         Notification::Island {
@@ -200,14 +299,14 @@ fn print_notification(notification: Notification, state: &Mutex<State>, level: L
         } => {
             let mut state = state.lock().unwrap();
             match state.islands.get(&island) {
-                Some(_) if !live => println!("[{block}] island #{island} closed"),
+                Some(_) if !live => out!("[{block}] island #{island} closed"),
                 Some((_, old, _)) => {
                     let old = kettle_ui_headless::outline(old);
                     let new = kettle_ui_headless::outline(&contents);
                     match changed_lines(&old, &new) {
                         Some(lines) => {
                             for line in lines {
-                                println!("[{block}] island #{island}: {}", line.trim());
+                                out!("[{block}] island #{island}: {}", line.trim());
                             }
                         }
                         None => print_island(block, island, &contents, live),
@@ -217,7 +316,7 @@ fn print_notification(notification: Notification, state: &Mutex<State>, level: L
             }
             state.islands.insert(island, (block, contents, live));
         }
-        Notification::Finished { block } => println!("[{block}] done"),
+        Notification::Finished { block } => out!("[{block}] done"),
     }
 }
 
@@ -233,10 +332,11 @@ fn changed_lines<'a>(old: &str, new: &'a str) -> Option<Vec<&'a str>> {
 
 fn print_island(block: BlockId, island: IslandId, contents: &FrozenIsland, live: bool) {
     let kind = if live { "" } else { " (frozen)" };
-    println!("[{block}] island #{island}{kind}:");
+    let mut text = format!("[{block}] island #{island}{kind}:");
     for line in kettle_ui_headless::outline(contents).lines() {
-        println!("[{block}]   {line}");
+        text += &format!("\n[{block}]   {line}");
     }
+    out!("{text}");
 }
 
 /// A line typed by the user.

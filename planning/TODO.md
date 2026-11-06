@@ -55,6 +55,10 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   whether the text outline is the right thing to show an agent.
 - No completion or history over the protocol yet, and hob-cli has no line
   editing.
+- Output in hob-cli interferes with the prompt and with what the user is
+  typing. Stopgap: the prompt is shown only after output has paused for
+  50 ms (and not at all if stdin isn't a terminal), and output overwrites
+  it. A real fix needs line editing that redraws the input line.
 - Log records are kept in memory without limit (for `messages`), like in
   the GUI.
 - hob-cli prints changed lines of an island only if no lines were added or
