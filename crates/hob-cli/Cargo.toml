@@ -16,4 +16,3 @@ hob-core.workspace = true
 hob-headless.workspace = true
 kettle-ui.workspace = true
 kettle-ui-headless.workspace = true
-serde_json.workspace = true

@@ -1221,7 +1221,6 @@ dependencies = [
  "hob-headless",
  "kettle-ui",
  "kettle-ui-headless",
- "serde_json",
 ]
 
 [[package]]

@@ -8,6 +8,7 @@
 //! Like `hob-gui`, it doesn't know about specific commands: whoever calls
 //! [`serve`] registers them.
 
+pub mod client;
 pub mod protocol;
 
 use std::collections::HashMap;

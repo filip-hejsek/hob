@@ -1,7 +1,8 @@
 //! A demo client for the headless hob frontend: an interactive command line.
 //!
 //! It starts the frontend (`hob --headless` from the same directory, or the
-//! command given as arguments) and talks to it over JSON-RPC. Lines typed
+//! command given as arguments; see [`Client::command`]) and talks to it over
+//! JSON-RPC. Lines typed
 //! are run as hob commands; lines starting with `/` act on islands (see
 //! [`HELP`]). Everything the commands do is printed as it arrives, prefixed
 //! with the command's block number; islands are printed as text outlines.
@@ -11,17 +12,17 @@
 //! not at all if stdin isn't a terminal.
 
 use std::collections::BTreeMap;
-use std::io::{self, BufRead, BufReader, IsTerminal, Write};
-use std::process::{ChildStdin, Command, ExitCode, Stdio};
+use std::io::{self, BufRead, IsTerminal, Write};
+use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use hob_core::Level;
-use hob_headless::protocol::{self, BlockId, Call, ErrorObject, Incoming, IslandId, Notification};
+use hob_headless::client::Client;
+use hob_headless::protocol::{BlockId, Call, IslandId, Notification};
 use kettle_ui::FrozenIsland;
-use serde_json::Value;
 
 const HELP: &str = "\
 Lines are run as hob commands (try help). Driver commands act on the newest
@@ -136,43 +137,35 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    let mut command = frontend_command()?;
-    let mut child = (command.stdin(Stdio::piped()).stdout(Stdio::piped()))
-        .spawn()
-        .map_err(|e| format!("couldn't start {command:?}: {e}"))?;
-    let mut frontend = child.stdin.take().expect("stdin is piped");
-    let output = child.stdout.take().expect("stdout is piped");
+    let command =
+        Client::command(std::env::args_os().skip(1)).map_err(|e| format!("can't find hob: {e}"))?;
+    let description = format!("{command:?}");
+    // Notifications and errors of calls are printed by one thread, in order.
+    let (printer, printed) = mpsc::channel();
+    let notifications = printer.clone();
+    let notify = move |n| {
+        let _ = notifications.send(Print::Notification(n));
+    };
+    let mut client =
+        Client::spawn(command, notify).map_err(|e| format!("couldn't start {description}: {e}"))?;
 
     let state = Arc::new(Mutex::new(State::default()));
-    let (responses, replies) = mpsc::channel();
-    let reader_state = state.clone();
-    let reader = thread::spawn(move || read_frontend(output, &reader_state, &responses));
+    let printer_state = state.clone();
+    thread::spawn(move || print(&printer_state, &printed));
 
     if io::stdin().is_terminal() {
         thread::spawn(|| OUTPUT.show_prompts());
     }
     out!("{HELP}");
-    let result = repl(&mut frontend, &state, &replies);
-    // Ending its input makes the frontend exit.
-    drop(frontend);
-    let _ = child.wait();
-    let _ = reader.join();
-    result
+    repl(&mut client, &state, &printer)
+    // Dropping the client makes the frontend exit.
 }
 
-/// The frontend command: from the arguments, or `hob --headless` next to
-/// this program.
-fn frontend_command() -> Result<Command, String> {
-    let mut args = std::env::args_os().skip(1);
-    if let Some(program) = args.next() {
-        let mut command = Command::new(program);
-        command.args(args);
-        return Ok(command);
-    }
-    let exe = std::env::current_exe().map_err(|e| format!("can't find hob: {e}"))?;
-    let mut command = Command::new(exe.with_file_name("hob"));
-    command.arg("--headless");
-    Ok(command)
+/// Something for the printing thread.
+enum Print {
+    Notification(Notification),
+    /// The error a call failed with.
+    Error(String),
 }
 
 /// What the client knows about islands.
@@ -195,12 +188,7 @@ impl State {
     }
 }
 
-fn repl(
-    frontend: &mut ChildStdin,
-    state: &Mutex<State>,
-    replies: &Receiver<(Value, Result<Value, ErrorObject>)>,
-) -> Result<(), String> {
-    let mut next_id = 0;
+fn repl(client: &mut Client, state: &Mutex<State>, printer: &Sender<Print>) -> Result<(), String> {
     let mut lines = io::stdin().lock().lines();
     loop {
         OUTPUT.set_waiting(true);
@@ -244,37 +232,21 @@ fn repl(
                 continue;
             }
         };
-        next_id += 1;
-        let request = protocol::request(next_id, &call);
-        writeln!(frontend, "{request}").map_err(|e| format!("the frontend is gone: {e}"))?;
-        // Notifications are printed meanwhile, by the reader thread.
-        loop {
-            let (id, result) = replies.recv().map_err(|_| "the frontend exited")?;
-            if id == next_id {
-                if let Err(error) = result {
-                    out!("error: {}", error.message);
-                }
-                break;
-            }
+        let result = client.call(&call).map_err(|e| e.to_string())?;
+        if let Err(error) = result {
+            // After the notifications the call caused.
+            let _ = printer.send(Print::Error(error.message));
         }
     }
 }
 
-/// Prints notifications from the frontend, and passes replies on.
-fn read_frontend(
-    output: impl io::Read,
-    state: &Mutex<State>,
-    replies: &Sender<(Value, Result<Value, ErrorObject>)>,
-) {
+/// Prints notifications and errors as they arrive.
+fn print(state: &Mutex<State>, printed: &Receiver<Print>) {
     let level = hob_core::logger::level_from_env();
-    for line in BufReader::new(output).lines() {
-        let Ok(line) = line else { return };
-        match protocol::parse_incoming(&line) {
-            Ok(Incoming::Response { id, result }) => {
-                let _ = replies.send((id, result));
-            }
-            Ok(Incoming::Notification(n)) => print_notification(n, state, level),
-            Err(e) => eprintln!("hob-cli: bad message from the frontend: {e}"),
+    for print in printed {
+        match print {
+            Print::Notification(n) => print_notification(n, state, level),
+            Print::Error(message) => out!("error: {message}"),
         }
     }
 }
