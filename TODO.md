@@ -59,6 +59,8 @@ building block, e.g. for the scrollback. Decisions:
 
 Open:
 
+- Infinities are restored as NaN too, which isn't ideal. They could be saved
+  as strings or tagged numbers instead.
 - Styling: iced's disabled style makes text fields low-contrast, which isn't
   ideal for reading a result. Also, should buttons of a frozen island be
   shown at all?
