@@ -51,8 +51,12 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 
 ## hob-headless and hob-cli
 
-- Agent interface: an MCP server (maybe a bridge to hob-headless), and
-  whether the text outline is the right thing to show an agent.
+- Whether the text outline is the right thing to show an agent; hob-mcp
+  hasn't been tried with a real agent yet.
+- hob-mcp has no tool for picking a suggestion (filling in the text has the
+  same effect), and doesn't use MCP notifications or resources.
+- hob-mcp reports a live island in full whenever it changed, which is a lot
+  of text for small changes (e.g. a progress bar).
 - No completion or history over the protocol yet, and hob-cli has no line
   editing.
 - Output in hob-cli interferes with the prompt and with what the user is

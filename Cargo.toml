@@ -24,6 +24,7 @@ hob-core = { path = "crates/hob-core" }
 hob-demo = { path = "crates/hob-demo" }
 hob-gui = { path = "crates/hob-gui" }
 hob-headless = { path = "crates/hob-headless" }
+hob-mcp = { path = "crates/hob-mcp" }
 kettle-ui = { path = "crates/kettle-ui" }
 kettle-ui-demo = { path = "crates/kettle-ui-demo" }
 kettle-ui-headless = { path = "crates/kettle-ui-headless" }

@@ -142,6 +142,26 @@ and renders the island as an indented text outline.
 - Output is prefixed with the block number, like `[3] hi`. After the first
   time, an island is printed only as its changed lines.
 
+## hob-mcp (MCP server)
+
+- A bridge: it starts `hob --headless` and talks to it as a client (with
+  `hob_headless::client`, shared with hob-cli), so agents get the same
+  commands as the GUI.
+- MCP is implemented by hand (initialize, ping, tools/list, tools/call):
+  that's all tools need, and the official Rust SDK would bring in tokio.
+- Tools: `run` (a command line), `fill` (any number of text fields and
+  checkboxes at once), `press` (a button), `state` (overview), `wait` (for
+  something to happen, or a command to finish). `run` and `press` wait until
+  the command finishes or shows an island, so a step usually takes one call.
+- Updates come with tool results, not as MCP notifications (which clients
+  mostly ignore): everything that happens is collected, and every result
+  starts with what happened since the last one. Repeated events are counted
+  ("changed (3 times)"), and things that happen together are reported
+  together (up to 0.5 s of settling).
+- Islands are shown as kettle-ui-headless's text outline, with the island
+  number to act on; a live island after every change, a printed one once.
+- Errors are tool results with `isError`, so the agent sees them.
+
 ## hob-gui (shell)
 
 Works like a terminal: a scrollback with the prompt below it.

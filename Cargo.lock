@@ -1272,6 +1272,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hob-mcp"
+version = "0.1.0"
+dependencies = [
+ "hob-core",
+ "hob-headless",
+ "kettle-ui",
+ "kettle-ui-headless",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "iced"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

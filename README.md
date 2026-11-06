@@ -18,6 +18,8 @@ The project is split into these parts:
 - **hob-headless** — a frontend without a window, for client programs that
   talk to it with JSON-RPC over stdin and stdout.
 - **hob-cli** — a demo client for hob-headless: an interactive command line.
+- **hob-mcp** — an MCP server that lets an agent use hob, through
+  hob-headless.
 - **kettle-ui** — a deliberately small UI framework for *islands*: pieces of
   UI embedded in the shell. It is toolkit-independent; **kettle-ui-iced**
   renders it with iced, and **kettle-ui-headless** drives it without a GUI,
@@ -45,6 +47,13 @@ To try the headless frontend, run the demo client, which starts
 
 ```sh
 cargo build && target/debug/hob-cli
+```
+
+To let an agent use hob, add `hob-mcp` as an MCP server (it also starts
+`hob --headless` from its directory), e.g. for Claude Code:
+
+```sh
+cargo build && claude mcp add hob -- "$PWD/target/debug/hob-mcp"
 ```
 
 Early prototype; expect everything to change.

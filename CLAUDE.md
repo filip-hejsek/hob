@@ -24,7 +24,8 @@ with the workaround used.
 - `hob-headless` (the frontend without a window) must not depend on any
   GUI toolkit either. Like `hob-gui`, it doesn't know about specific
   commands. Clients use its `protocol` module.
-- `hob-cli` is a demo client for `hob-headless`; no GUI toolkit.
+- `hob-cli` is a demo client for `hob-headless`, and `hob-mcp` an MCP
+  server that bridges to it; no GUI toolkit in either.
 - `hob-demo` holds demo commands. Like `hob-core`, it must not depend on
   any GUI toolkit.
 - kettle-ui is deliberately small: the widget tree is fixed once built, and
