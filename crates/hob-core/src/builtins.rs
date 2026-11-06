@@ -1,5 +1,7 @@
 //! Commands that work with any frontend. Register them with [`register`].
 //!
+//! - `help [COMMAND]`: lists all commands with their descriptions, or shows
+//!   the description of one.
 //! - `messages [LEVEL]`: lists the log records the frontend has, oldest
 //!   first, from `LEVEL` up (`info` by default, so `messages debug` lists
 //!   all).
@@ -11,7 +13,28 @@ use crate::{CommandResult, Context, Interpreter, Level, LogRecord};
 
 /// Registers all built-in commands.
 pub fn register(interpreter: &mut Interpreter) {
-    interpreter.register("messages", messages);
+    interpreter.register("help", "List the commands, or describe one", help);
+    interpreter.register(
+        "messages",
+        "List log messages, from LEVEL up (info by default)",
+        messages,
+    );
+}
+
+fn help(ctx: &mut Context, args: &[String]) -> CommandResult {
+    let line = |(name, description)| format!("{name} — {description}");
+    match args {
+        [] => {
+            let lines: Vec<String> = ctx.commands().map(line).collect();
+            ctx.print(lines.join("\n"));
+        }
+        [name] => match ctx.commands().find(|(n, _)| n == name) {
+            Some(command) => ctx.print(line(command)),
+            None => return Err(format!("no command {name:?}").into()),
+        },
+        _ => return Err("usage: help [COMMAND]".into()),
+    }
+    Ok(())
 }
 
 fn messages(ctx: &mut Context, args: &[String]) -> CommandResult {
@@ -134,6 +157,20 @@ mod tests {
         assert_eq!(messages(&run("messages debug", records())), ["d", "i", "e"]);
         assert_eq!(messages(&run("messages error", records())), ["e"]);
         assert_eq!(run("messages", vec![]), ["No messages."]);
+    }
+
+    #[test]
+    fn help_lists_commands() {
+        assert_eq!(
+            run("help", vec![]),
+            ["help — List the commands, or describe one\n\
+              messages — List log messages, from LEVEL up (info by default)"]
+        );
+        assert_eq!(
+            run("help help", vec![]),
+            ["help — List the commands, or describe one"]
+        );
+        assert_eq!(run("help nope", vec![]), [r#"error: no command "nope""#]);
     }
 
     #[test]

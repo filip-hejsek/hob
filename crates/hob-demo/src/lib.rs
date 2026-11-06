@@ -12,13 +12,21 @@ use kettle_ui_demo::Demo;
 /// Registers all demo commands.
 pub fn register(interpreter: &mut Interpreter) {
     register_islands(interpreter);
-    interpreter.register("echo", echo);
-    interpreter.register("count", count);
-    interpreter.register("fail", fail);
-    interpreter.register("panic", |_, _| panic!("the demo panicked"));
-    interpreter.register("invalid", invalid);
-    interpreter.register("pizza", pizza);
-    interpreter.register("levels", levels);
+    interpreter.register("echo", "Print the arguments", echo);
+    interpreter.register("count", "Count to N (5 by default), slowly", count);
+    interpreter.register("fail", "Fail with the arguments as the error", fail);
+    interpreter.register("panic", "Panic", |_, _| panic!("the demo panicked"));
+    interpreter.register(
+        "invalid",
+        "Show an island that refers to missing state",
+        invalid,
+    );
+    interpreter.register(
+        "pizza",
+        "Order a pizza; the arguments fill in the name",
+        pizza,
+    );
+    interpreter.register("levels", "Log a message at each level", levels);
 }
 
 /// Registers a command for each demo island. It shows the island and prints
@@ -29,7 +37,8 @@ fn register_islands(interpreter: &mut Interpreter) {
             Demo::Contact => "contact",
             Demo::FruitSearch => "fruit-search",
         };
-        interpreter.register(name, move |ctx, args| {
+        let description = format!("Show the {} demo island", demo.title().to_lowercase());
+        interpreter.register(name, description, move |ctx, args| {
             no_args(args)?;
             let title = demo.title();
             let message = match ctx.show(demo.builder())? {

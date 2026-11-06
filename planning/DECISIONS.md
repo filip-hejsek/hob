@@ -71,8 +71,13 @@ and renders the island as an indented text outline.
 - Commands run on their own thread and block in `Context::show`. They may
   become async later; blocking keeps it simple for now.
 - Command lines are split at whitespace; there's no quoting yet.
-- Commands that work with any frontend (such as `messages`) are built into
-  hob-core (`hob_core::builtins`), and registered by `hob`.
+- Commands that work with any frontend (such as `help` and `messages`) are
+  built into hob-core (`hob_core::builtins`), and registered by `hob`.
+- Every command is registered with a one-line description (required, so
+  `help` never has gaps), written as an imperative without a full stop:
+  "Print the arguments". Bare `help` lists all commands with their
+  descriptions; `help COMMAND` shows one. Commands see the registered
+  commands through `ctx.commands()`.
 
 ## Logging
 

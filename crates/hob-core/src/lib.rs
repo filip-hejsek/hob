@@ -1,6 +1,7 @@
 //! The hob command interpreter, independent of any GUI toolkit.
 //!
-//! Commands are registered on an [`Interpreter`] by name. Running a command
+//! Commands are registered on an [`Interpreter`] by name, with a one-line
+//! description. Running a command
 //! line ([`Interpreter::run`]) starts the command on its own thread. The
 //! command talks to the user through a [`Context`], in the style of a terminal
 //! program: [`Context::print`] shows a message, [`Context::print_island`] shows
@@ -21,7 +22,7 @@
 //! use hob_core::Interpreter;
 //!
 //! let mut interpreter = Interpreter::new();
-//! interpreter.register("hello", |ctx, args| {
+//! interpreter.register("hello", "Greet someone", |ctx, args| {
 //!     ctx.print(format!("Hello, {}!", args.join(" ")));
 //!     Ok(())
 //! });
@@ -55,10 +56,21 @@ pub type CommandResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
 type CommandFn = Arc<dyn Fn(&mut Context, &[String]) -> CommandResult + Send + Sync>;
 
+/// A registered command.
+#[derive(Clone)]
+struct Command {
+    description: String,
+    run: CommandFn,
+}
+
+/// The registered commands, by name. Shared with running commands, see
+/// [`Context::commands`].
+type Commands = Arc<BTreeMap<String, Command>>;
+
 /// Runs command lines by looking up registered commands.
 #[derive(Default)]
 pub struct Interpreter {
-    commands: BTreeMap<String, CommandFn>,
+    commands: Commands,
 }
 
 impl Interpreter {
@@ -68,16 +80,29 @@ impl Interpreter {
     }
 
     /// Registers a command. It gets the words after its name as arguments.
+    /// The description says in one line what it does, e.g. "Print the
+    /// arguments"; `help` lists it.
     ///
     /// # Panics
     ///
-    /// If a command with this name is already registered.
+    /// If a command with this name is already registered, or the description
+    /// is empty or has more than one line.
     pub fn register(
         &mut self,
         name: &str,
+        description: impl Into<String>,
         run: impl Fn(&mut Context, &[String]) -> CommandResult + Send + Sync + 'static,
     ) {
-        let previous = self.commands.insert(name.to_owned(), Arc::new(run));
+        let description = description.into();
+        assert!(
+            !description.trim().is_empty() && !description.contains('\n'),
+            "the description of {name:?} must be one non-empty line"
+        );
+        let command = Command {
+            description,
+            run: Arc::new(run),
+        };
+        let previous = Arc::make_mut(&mut self.commands).insert(name.to_owned(), command);
         assert!(previous.is_none(), "command {name:?} is already registered");
     }
 
@@ -127,7 +152,7 @@ impl Interpreter {
     pub fn run(&self, line: &str) -> Result<Requests, Error> {
         let mut words = line.split_whitespace().map(str::to_owned);
         let name = words.next().ok_or(Error::Empty)?;
-        let Some(command) = self.commands.get(&name).cloned() else {
+        let Some(command) = self.commands.get(&name).map(|c| c.run.clone()) else {
             return Err(Error::UnknownCommand {
                 name,
                 known: self.commands.keys().cloned().collect(),
@@ -137,6 +162,7 @@ impl Interpreter {
         let (sender, receiver) = mpsc::unbounded();
         let mut ctx = Context {
             name: name.clone(),
+            commands: self.commands.clone(),
             sender,
         };
         thread::Builder::new()
@@ -222,10 +248,17 @@ impl std::error::Error for Error {}
 pub struct Context {
     /// The command's name, as the target of its log records.
     name: String,
+    commands: Commands,
     sender: mpsc::UnboundedSender<Request>,
 }
 
 impl Context {
+    /// All registered commands, sorted by name: their names and
+    /// descriptions.
+    pub fn commands(&self) -> impl Iterator<Item = (&str, &str)> {
+        (self.commands.iter()).map(|(name, command)| (name.as_str(), command.description.as_str()))
+    }
+
     /// Shows a message to the user.
     pub fn print(&self, message: impl Into<String>) {
         // If the frontend is gone, nobody would see it anyway.
@@ -431,13 +464,13 @@ mod tests {
 
     fn interpreter() -> Interpreter {
         let mut i = Interpreter::new();
-        i.register("echo", |ctx, args| {
+        i.register("echo", "Test", |ctx, args| {
             ctx.print(args.join("|"));
             Ok(())
         });
-        i.register("fail", |_, _| Err("it broke".into()));
-        i.register("panic", |_, _| panic!("test panic"));
-        i.register("ask", |ctx, _| {
+        i.register("fail", "Test", |_, _| Err("it broke".into()));
+        i.register("panic", "Test", |_, _| panic!("test panic"));
+        i.register("ask", "Test", |ctx, _| {
             match ctx.show(IslandBuilder::new(column([]))) {
                 Ok(Outcome::Submitted(_)) => ctx.print("submitted"),
                 Ok(Outcome::Cancelled) => ctx.print("cancelled"),
@@ -480,7 +513,7 @@ mod tests {
     #[test]
     fn commands_log_with_their_name_as_target() {
         let mut i = Interpreter::new();
-        i.register("chatty", |ctx, _| {
+        i.register("chatty", "Test", |ctx, _| {
             ctx.warn("careful");
             ctx.debug("details");
             Ok(())
@@ -497,7 +530,7 @@ mod tests {
     #[test]
     fn frozen_islands_can_be_printed() {
         let mut i = Interpreter::new();
-        i.register("result", |ctx, _| {
+        i.register("result", "Test", |ctx, _| {
             ctx.print_island(IslandBuilder::new(column([])).freeze()?);
             Ok(())
         });
@@ -538,7 +571,7 @@ mod tests {
     fn completes_command_names() {
         let mut i = Interpreter::new();
         for name in ["fruit", "fruit-search", "contact", "căt", "cătalog"] {
-            i.register(name, |_, _| Ok(()));
+            i.register(name, "Test", |_, _| Ok(()));
         }
         assert_eq!(i.complete("co"), completion("contact ", &[]));
         assert_eq!(i.complete("  co"), completion("  contact ", &[]));
@@ -564,9 +597,15 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "must be one non-empty line")]
+    fn descriptions_must_be_one_line() {
+        Interpreter::new().register("x", "One\ntwo", |_, _| Ok(()));
+    }
+
+    #[test]
     #[should_panic(expected = "already registered")]
     fn registering_twice_panics() {
         let mut i = interpreter();
-        i.register("echo", |_, _| Ok(()));
+        i.register("echo", "Test", |_, _| Ok(()));
     }
 }

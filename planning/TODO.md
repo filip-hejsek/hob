@@ -54,6 +54,12 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 ## hob-core (command interpreter)
 
 - Quoting in command lines, so an argument can contain spaces.
+- Full help for a command (usage, arguments, examples): where it's written
+  (a longer text at registration? a declared argument list, which could
+  also drive argument completion?) and what `help COMMAND` shows. For now it
+  shows the one-line description.
+- The prompt's placeholder lists all commands, which no longer fits; it
+  could point to `help` instead, if hob-gui may know that it exists.
 
 ## Logging
 
