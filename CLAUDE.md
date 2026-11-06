@@ -1,8 +1,10 @@
 # CLAUDE.md
 
-See README.md for what the project is. Plans, open questions and decisions
-already made are in TODO.md: check it before proposing design changes, and
-keep it up to date.
+See README.md for what the project is. Decisions already made, with
+rejected alternatives, are in DECISIONS.md; plans and open questions are in
+TODO.md. Check both before proposing design changes, and keep them up to
+date: when something is done, remove it from TODO.md and record the
+decisions it involved in DECISIONS.md.
 
 When iced lacks something we need, add it to ICED_WISHLIST.md, with the
 workaround used.
@@ -22,7 +24,7 @@ workaround used.
 - `hob-demo` holds demo commands. Like `hob-core`, it must not depend on
   any GUI toolkit.
 - kettle-ui is deliberately small: the widget tree is fixed once built, and
-  spacing is fixed and styling options are minimal (see TODO.md). Don't add
+  spacing is fixed and styling options are minimal (see DECISIONS.md). Don't add
   options without a need.
 
 ## Checks
