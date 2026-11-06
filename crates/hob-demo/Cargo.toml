@@ -15,3 +15,7 @@ workspace = true
 hob-core.workspace = true
 kettle-ui.workspace = true
 kettle-ui-demo.workspace = true
+
+[dev-dependencies]
+futures-executor.workspace = true
+kettle-ui-headless.workspace = true

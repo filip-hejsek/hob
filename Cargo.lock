@@ -1196,9 +1196,11 @@ dependencies = [
 name = "hob-demo"
 version = "0.1.0"
 dependencies = [
+ "futures-executor",
  "hob-core",
  "kettle-ui",
  "kettle-ui-demo",
+ "kettle-ui-headless",
 ]
 
 [[package]]
