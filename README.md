@@ -15,12 +15,16 @@ The project is split into these parts:
 - **hob-core** — the command interpreter. It is toolkit-independent.
 - **hob-gui** — the shell: owns the main window, and shows a terminal-like
   scrollback of commands and their islands, with a command prompt.
+- **hob-headless** — a frontend without a window, for client programs that
+  talk to it with JSON-RPC over stdin and stdout.
+- **hob-cli** — a demo client for hob-headless: an interactive command line.
 - **kettle-ui** — a deliberately small UI framework for *islands*: pieces of
   UI embedded in the shell. It is toolkit-independent; **kettle-ui-iced**
   renders it with iced, and **kettle-ui-headless** drives it without a GUI,
   for tests and (later) agents.
 - **hob-demo** — demo commands.
-- **hob** — the application: registers the commands and starts the shell.
+- **hob** — the application: registers the commands and starts the shell
+  (or, with `--headless`, the headless frontend).
 
 Run it with:
 
@@ -33,7 +37,15 @@ the platform's state directory (e.g. `~/.local/state/hob/session.json`); set
 `HOB_SESSION` to use another file.
 
 Errors and warnings are shown in the scrollback (warnings from libraries only
-on stderr); the `messages` command lists all messages. Set `HOB_LOG=debug` to also show debug messages.
+on stderr); the `messages` command lists all messages. Set `HOB_LOG=debug` to
+also show debug messages.
+
+To try the headless frontend, run the demo client, which starts
+`hob --headless` from the same directory:
+
+```sh
+cargo build && target/debug/hob-cli
+```
 
 Early prototype; expect everything to change.
 

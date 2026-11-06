@@ -16,4 +16,5 @@ dirs.workspace = true
 hob-core.workspace = true
 hob-demo.workspace = true
 hob-gui.workspace = true
+hob-headless.workspace = true
 iced.workspace = true

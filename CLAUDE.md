@@ -21,6 +21,10 @@ with the workaround used.
 - `hob-gui` (the shell) is plain iced; it hosts islands through
   `kettle-ui-iced`. It doesn't know about specific commands; the `hob`
   crate registers them.
+- `hob-headless` (the frontend without a window) must not depend on any
+  GUI toolkit either. Like `hob-gui`, it doesn't know about specific
+  commands. Clients use its `protocol` module.
+- `hob-cli` is a demo client for `hob-headless`; no GUI toolkit.
 - `hob-demo` holds demo commands. Like `hob-core`, it must not depend on
   any GUI toolkit.
 - kettle-ui is deliberately small: the widget tree is fixed once built, and

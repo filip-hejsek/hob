@@ -46,10 +46,21 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 
 ## kettle-ui-headless
 
-- Agent interface: how an agent talks to it (MCP server? JSON over stdio?),
-  and whether the text outline is the right thing to show it.
 - Show outdated values in the outline (relevant only if computations become
   asynchronous, e.g. for agents with timeouts).
+
+## hob-headless and hob-cli
+
+- Agent interface: an MCP server (maybe a bridge to hob-headless), and
+  whether the text outline is the right thing to show an agent.
+- No completion or history over the protocol yet, and hob-cli has no line
+  editing.
+- Log records are kept in memory without limit (for `messages`), like in
+  the GUI.
+- hob-cli prints changed lines of an island only if no lines were added or
+  removed; otherwise it prints the whole island again.
+- Derived state is computed on the server thread, so a slow computation
+  holds up everything else (see kettle-ui-headless in DECISIONS.md).
 
 ## hob-core (command interpreter)
 

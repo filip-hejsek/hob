@@ -1,0 +1,19 @@
+[package]
+name = "hob-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hob-core.workspace = true
+hob-headless.workspace = true
+kettle-ui.workspace = true
+kettle-ui-headless.workspace = true
+serde_json.workspace = true

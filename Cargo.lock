@@ -1209,7 +1209,19 @@ dependencies = [
  "hob-core",
  "hob-demo",
  "hob-gui",
+ "hob-headless",
  "iced",
+]
+
+[[package]]
+name = "hob-cli"
+version = "0.1.0"
+dependencies = [
+ "hob-core",
+ "hob-headless",
+ "kettle-ui",
+ "kettle-ui-headless",
+ "serde_json",
 ]
 
 [[package]]
@@ -1245,6 +1257,18 @@ dependencies = [
  "iced",
  "kettle-ui",
  "kettle-ui-iced",
+ "serde_json",
+]
+
+[[package]]
+name = "hob-headless"
+version = "0.1.0"
+dependencies = [
+ "futures-executor",
+ "hob-core",
+ "kettle-ui",
+ "kettle-ui-headless",
+ "serde",
  "serde_json",
 ]
 

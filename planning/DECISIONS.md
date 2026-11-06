@@ -114,6 +114,34 @@ and renders the island as an indented text outline.
   gets the records from the frontend with `ctx.log_records()`. The list is
   printed as plain text, so it's a snapshot, and it's not coloured.
 
+## hob-headless (frontend without a window)
+
+- The client starts it as a child process (`hob --headless`) and talks to
+  it over stdin and stdout; its lifetime follows the client. Rejected for
+  now: a Unix socket server that clients attach to, which needs socket
+  paths, cleanup, and rules for what several clients see.
+- The protocol is JSON-RPC 2.0, one message per line: a standard format
+  that clients in other languages can use with existing libraries, and close
+  to MCP. The client calls methods (run a command line, act on an island);
+  the frontend sends notifications about what commands do. Notifications
+  caused by a call come before its reply.
+- Islands are sent structured: as frozen islands (the format of saved
+  sessions), again after every change, and frozen once submitted or
+  cancelled. Clients render them; hob-cli prints the text outline.
+- `hob` is the binary, with a `--headless` flag, so both frontends get the
+  same commands. hob-headless itself doesn't know about specific commands.
+- Updates of live islands from `StateHandle`s wake the server through a
+  waker (`Island::poll_waking`); no polling on a timer.
+- Nothing is saved; there's no session.
+
+## hob-cli (demo client)
+
+- Lines are run as hob commands; lines starting with `/` act on islands
+  (`/type`, `/check`, `/pick`, `/press`, `/show`), by default on the newest
+  live island, or on `#N`.
+- Output is prefixed with the block number, like `[3] hi`. After the first
+  time, an island is printed only as its changed lines.
+
 ## hob-gui (shell)
 
 Works like a terminal: a scrollback with the prompt below it.

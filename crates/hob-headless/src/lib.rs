@@ -1,0 +1,323 @@
+//! The headless hob frontend: runs commands for a client program, which
+//! talks to it over stdin and stdout with JSON-RPC (see [`protocol`]).
+//!
+//! Islands are handled by `kettle-ui-headless`; the client acts on them like
+//! a user would (types text, presses buttons). Log records of the `log` crate
+//! are sent to the client too. Nothing is saved.
+//!
+//! Like `hob-gui`, it doesn't know about specific commands: whoever calls
+//! [`serve`] registers them.
+
+pub mod protocol;
+
+use std::collections::HashMap;
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::sync::Arc;
+use std::sync::mpsc::{self, Sender};
+use std::task::{Wake, Waker};
+use std::thread;
+
+use futures_executor::block_on_stream;
+use hob_core::{Interpreter, LogRecord, Reply, Request, Requests};
+use kettle_ui::Outcome;
+use kettle_ui_headless::{ActionError, Island};
+use serde_json::Value;
+
+use protocol::{BlockId, Call, ErrorObject, IslandId, Notification, RunResult, code};
+
+/// Serves `interpreter` to a client: reads calls from `input`, and writes
+/// replies and notifications to `output`. Returns when `input` ends.
+///
+/// Installs the `log` backend, if no other logger is installed yet.
+pub fn serve(
+    interpreter: Interpreter,
+    input: impl Read + Send + 'static,
+    output: impl Write,
+) -> io::Result<()> {
+    let (events, receiver) = mpsc::channel();
+    let input_events = events.clone();
+    thread::Builder::new()
+        .name("hob-headless input".into())
+        .spawn(move || read_input(input, input_events))?;
+    if let Some(records) = hob_core::logger::install(hob_core::logger::level_from_env()) {
+        let events = events.clone();
+        thread::Builder::new()
+            .name("hob-headless log".into())
+            .spawn(move || forward(block_on_stream(records), events, Event::Log))?;
+    }
+    let mut server = Server {
+        interpreter,
+        output,
+        events,
+        next_id: 0,
+        islands: HashMap::new(),
+        records: Vec::new(),
+    };
+    // The server keeps a sender, so this only ends by returning.
+    for event in receiver {
+        match event {
+            Event::Input(line) => server.handle_line(&line?)?,
+            Event::InputEnd => break,
+            Event::Request(block, request) => server.handle_request(block, request)?,
+            Event::Finished(block) => server.notify(Notification::Finished { block })?,
+            Event::Log(record) => {
+                server.records.push(record.clone());
+                server.notify(Notification::Logged {
+                    block: None,
+                    record,
+                })?;
+            }
+            Event::Wake(island) => server.poll_island(island)?,
+        }
+    }
+    // Dropping the live islands makes their commands' `show` fail.
+    Ok(())
+}
+
+/// Something the server reacts to.
+enum Event {
+    Input(io::Result<String>),
+    InputEnd,
+    /// A request from the command of a block.
+    Request(BlockId, Request),
+    Finished(BlockId),
+    Log(LogRecord),
+    /// Updates may have arrived for a live island.
+    Wake(IslandId),
+}
+
+fn read_input(input: impl Read, events: Sender<Event>) {
+    for line in BufReader::new(input).lines() {
+        let failed = line.is_err();
+        if events.send(Event::Input(line)).is_err() || failed {
+            return;
+        }
+    }
+    let _ = events.send(Event::InputEnd);
+}
+
+/// Sends the items as events until there are no more, or the server is gone.
+fn forward<T>(items: impl Iterator<Item = T>, events: Sender<Event>, event: impl Fn(T) -> Event) {
+    for item in items {
+        if events.send(event(item)).is_err() {
+            return;
+        }
+    }
+}
+
+struct Server<W> {
+    interpreter: Interpreter,
+    output: W,
+    /// For threads and wakers to send events.
+    events: Sender<Event>,
+    /// For block and island ids.
+    next_id: u64,
+    islands: HashMap<IslandId, Live>,
+    /// All log records, for `Context::log_records`.
+    records: Vec<LogRecord>,
+}
+
+/// A live island.
+struct Live {
+    block: BlockId,
+    island: Island,
+    reply: Reply,
+    /// Wakes the server when updates arrive.
+    waker: Waker,
+}
+
+/// Sends [`Event::Wake`] for an island.
+struct IslandWaker {
+    island: IslandId,
+    events: Sender<Event>,
+}
+
+impl Wake for IslandWaker {
+    fn wake(self: Arc<Self>) {
+        let _ = self.events.send(Event::Wake(self.island));
+    }
+}
+
+type CallResult = Result<Value, ErrorObject>;
+
+impl<W: Write> Server<W> {
+    fn next_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
+    fn send(&mut self, line: &str) -> io::Result<()> {
+        writeln!(self.output, "{line}")?;
+        self.output.flush()
+    }
+
+    fn notify(&mut self, notification: Notification) -> io::Result<()> {
+        self.send(&protocol::notification(&notification))
+    }
+
+    fn handle_line(&mut self, line: &str) -> io::Result<()> {
+        if line.trim().is_empty() {
+            return Ok(());
+        }
+        let (id, result) = match protocol::parse_call(line) {
+            Ok((id, call)) => (id, self.call(call)?),
+            Err(bad) => (bad.id, Err(bad.error)),
+        };
+        match id {
+            Some(id) => self.send(&protocol::response(&id, &result)),
+            None => Ok(()),
+        }
+    }
+
+    fn call(&mut self, call: Call) -> io::Result<CallResult> {
+        match call {
+            Call::Run { line } => Ok(self.run(&line)),
+            Call::TypeText {
+                island,
+                field,
+                text,
+            } => self.act(island, |i| i.type_text(&field, &text).map(|()| None)),
+            Call::SetChecked {
+                island,
+                field,
+                checked,
+            } => self.act(island, |i| i.set_checked(&field, checked).map(|()| None)),
+            Call::Pick {
+                island,
+                field,
+                line,
+            } => self.act(island, |i| i.pick(&field, &line).map(|()| None)),
+            Call::Press { island, label } => self.act(island, |i| i.press(&label).map(Some)),
+        }
+    }
+
+    fn run(&mut self, line: &str) -> CallResult {
+        let requests = (self.interpreter.run(line))
+            .map_err(|e| ErrorObject::new(code::NOT_STARTED, e.to_string()))?;
+        let block = self.next_id();
+        self.pump(block, requests)
+            .map_err(|e| ErrorObject::new(code::NOT_STARTED, e.to_string()))?;
+        Ok(serde_json::to_value(RunResult { block }).expect("results serialize"))
+    }
+
+    /// Forwards a command's requests to the server, on a thread of its own.
+    fn pump(&self, block: BlockId, requests: Requests) -> io::Result<()> {
+        let events = self.events.clone();
+        thread::Builder::new()
+            .name(format!("hob-headless block {block}"))
+            .spawn(move || {
+                let finished = events.clone();
+                forward(block_on_stream(requests), events, |r| {
+                    Event::Request(block, r)
+                });
+                // The stream ended, so the command finished.
+                let _ = finished.send(Event::Finished(block));
+            })?;
+        Ok(())
+    }
+
+    /// Does an action on a live island, then sends the island to the client.
+    /// If the action has an outcome, the island is frozen and the outcome sent
+    /// to its command.
+    fn act(
+        &mut self,
+        id: IslandId,
+        action: impl FnOnce(&mut Island) -> Result<Option<Outcome>, ActionError>,
+    ) -> io::Result<CallResult> {
+        let Some(live) = self.islands.get_mut(&id) else {
+            let message = format!("no live island {id}");
+            return Ok(Err(ErrorObject::new(code::NO_LIVE_ISLAND, message)));
+        };
+        let outcome = match action(&mut live.island) {
+            Ok(outcome) => outcome,
+            Err(e) => return Ok(Err(ErrorObject::new(code::ACTION_FAILED, e.to_string()))),
+        };
+        let (block, contents) = (live.block, live.island.freeze());
+        let frozen = outcome.and_then(|outcome| Some((self.islands.remove(&id)?, outcome)));
+        self.notify(Notification::Island {
+            block,
+            island: id,
+            live: frozen.is_none(),
+            contents,
+        })?;
+        if let Some((live, outcome)) = frozen {
+            live.reply.send(outcome);
+        }
+        Ok(Ok(Value::Null))
+    }
+
+    /// Applies updates that arrived for an island, and sends it if it changed.
+    fn poll_island(&mut self, id: IslandId) -> io::Result<()> {
+        let Some(live) = self.islands.get_mut(&id) else {
+            return Ok(());
+        };
+        let waker = live.waker.clone();
+        if !live.island.poll_waking(&waker) {
+            return Ok(());
+        }
+        let notification = Notification::Island {
+            block: live.block,
+            island: id,
+            live: true,
+            contents: live.island.freeze(),
+        };
+        self.notify(notification)
+    }
+
+    fn handle_request(&mut self, block: BlockId, request: Request) -> io::Result<()> {
+        match request {
+            Request::Print(text) => self.notify(Notification::Printed { block, text }),
+            Request::Log(record) => {
+                self.records.push(record.clone());
+                let block = Some(block);
+                self.notify(Notification::Logged { block, record })
+            }
+            Request::PrintIsland(contents) => {
+                let island = self.next_id();
+                self.notify(Notification::Island {
+                    block,
+                    island,
+                    live: false,
+                    contents,
+                })
+            }
+            Request::Show(show) => {
+                let (builder, reply) = show.into_parts();
+                let mut island = match Island::new(builder) {
+                    Ok(island) => island,
+                    Err(e) => {
+                        reply.fail(e);
+                        return Ok(());
+                    }
+                };
+                let id = self.next_id();
+                let waker = Waker::from(Arc::new(IslandWaker {
+                    island: id,
+                    events: self.events.clone(),
+                }));
+                // Updates may have arrived already; this also sets the waker.
+                island.poll_waking(&waker);
+                let contents = island.freeze();
+                self.islands.insert(
+                    id,
+                    Live {
+                        block,
+                        island,
+                        reply,
+                        waker,
+                    },
+                );
+                self.notify(Notification::Island {
+                    block,
+                    island: id,
+                    live: true,
+                    contents,
+                })
+            }
+            Request::LogRecords(reply) => {
+                reply.send(self.records.clone());
+                Ok(())
+            }
+        }
+    }
+}
