@@ -21,7 +21,8 @@
 //!   exist) are reported by [`IslandBuilder::build`].
 //! - A [`FrozenIsland`] can't change: its fields and state are fixed. It's
 //!   either created frozen ([`IslandBuilder::freeze`]) or a snapshot of a live
-//!   island ([`Model::freeze`]).
+//!   island ([`Model::freeze`]). It can be serialized with serde, e.g. to save
+//!   it.
 //!
 //! ```
 //! use kettle_ui::IslandBuilder;
@@ -50,11 +51,12 @@ mod frozen;
 mod model;
 pub mod widget;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use futures_channel::mpsc;
+use serde::{Deserialize, Serialize};
 
 pub use frozen::FrozenIsland;
 pub use model::{Built, Inputs, Job, JobResult, Model, Outcome, StateUpdate, Updates};
@@ -110,8 +112,10 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// The value of a piece of named state.
-#[derive(Clone, Debug, PartialEq)]
+/// The value of a piece of named state. Serialized as a plain string,
+/// number or list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum Value {
     /// Text, e.g. for a [`label`](widget::label).
     Text(String),
@@ -156,16 +160,33 @@ impl From<Vec<String>> for Value {
 }
 
 /// The values of all form elements, by id.
-#[derive(Clone, Debug, Default)]
-pub struct Fields(HashMap<Arc<str>, Field>);
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Fields(BTreeMap<Arc<str>, Field>);
 
-#[derive(Clone, Debug, PartialEq)]
+/// Serialized as a plain string or bool.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 enum Field {
     Text(String),
     Bool(bool),
 }
 
 impl Fields {
+    /// Sets the value of an existing field of the same kind.
+    fn set(&mut self, id: &str, value: Field) -> Result<(), Error> {
+        match (self.0.get_mut(id), &value) {
+            (None, _) => Err(Error::UnknownField(id.to_owned())),
+            (Some(field @ Field::Text(_)), Field::Text(_))
+            | (Some(field @ Field::Bool(_)), Field::Bool(_)) => {
+                *field = value;
+                Ok(())
+            }
+            (Some(_), Field::Text(_)) => Err(Error::NotATextField(id.to_owned())),
+            (Some(_), Field::Bool(_)) => Err(Error::NotACheckbox(id.to_owned())),
+        }
+    }
+
     /// The contents of a text field, or `""` if there is no such field.
     pub fn text(&self, id: &str) -> &str {
         match self.0.get(id) {
@@ -340,13 +361,7 @@ impl IslandBuilder {
         collect_fields(&self.root, &mut fields)?;
         self.check_references(&self.root, &fields)?;
         for (id, value) in &self.initial {
-            match (fields.0.get_mut(id.as_str()), value) {
-                (None, _) => return Err(Error::UnknownField(id.clone())),
-                (Some(field @ Field::Text(_)), Field::Text(_))
-                | (Some(field @ Field::Bool(_)), Field::Bool(_)) => *field = value.clone(),
-                (Some(_), Field::Text(_)) => return Err(Error::NotATextField(id.clone())),
-                (Some(_), Field::Bool(_)) => return Err(Error::NotACheckbox(id.clone())),
-            }
+            fields.set(id, value.clone())?;
         }
         Ok((fields, order))
     }

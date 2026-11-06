@@ -52,6 +52,9 @@ building block, e.g. for the scrollback. Decisions:
 - A snapshot keeps the outdated marks of derived values.
 - `IslandBuilder::set_text` and `set_checked` set initial field values, for
   live islands too.
+- Serializable with serde, for saved sessions. Values and field values are
+  plain JSON (strings, numbers, lists, bools); maps are ordered, so output is
+  stable. Deserializing checks the field values against the tree.
 
 Open:
 

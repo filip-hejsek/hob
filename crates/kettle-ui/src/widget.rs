@@ -10,8 +10,12 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 /// One node of the (immutable) widget tree. Build it with the free functions
 /// in [this module](self): [`column()`], [`label`], [`text_field`], ...
+#[derive(Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Widget(Kind);
 
 impl Widget {
@@ -23,6 +27,8 @@ impl Widget {
 
 /// What a [`Widget`] is. See the function that creates each kind for its
 /// meaning.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     /// [`column()`]
     Column(Vec<Widget>),
@@ -71,7 +77,8 @@ pub enum Kind {
 }
 
 /// What a button does.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
     /// [`submit_button`]
     Submit,
@@ -80,6 +87,8 @@ pub enum Action {
 }
 
 /// Text shown by a [`label`]: either fixed, or bound to named state.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Text {
     /// Fixed text.
     Static(String),
