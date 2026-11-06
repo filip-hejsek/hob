@@ -4,7 +4,8 @@
 //! An [`Island`] acts like a user would: it types into text fields, toggles
 //! checkboxes, picks suggestions and presses buttons, all by the ids and
 //! labels a user would see. It shows the island as text ([`Island`]
-//! implements [`Display`](fmt::Display)).
+//! implements [`Display`](fmt::Display)); [`outline`] does the same for a
+//! [`FrozenIsland`].
 //!
 //! Derived state is computed on the calling thread as part of each action, so
 //! after an action returns, everything derived from the fields is up to date.
@@ -41,7 +42,10 @@ use std::time::{Duration, Instant};
 
 use futures_core::Stream;
 use kettle_ui::widget::{Action, Kind, Text, Widget};
-use kettle_ui::{Built, Error, Fields, IslandBuilder, Job, Model, Outcome, Updates, Value};
+use kettle_ui::{
+    Built, Contents, Error, Fields, FrozenIsland, IslandBuilder, Job, Model, Outcome, Updates,
+    Value,
+};
 
 /// Why an action on an [`Island`] couldn't be done.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +118,11 @@ impl Island {
     /// The island's state: field values and named state.
     pub fn model(&self) -> &Model {
         &self.model
+    }
+
+    /// A snapshot of the island that can't change (see [`Model::freeze`]).
+    pub fn freeze(&self) -> FrozenIsland {
+        self.model.freeze()
     }
 
     /// The current values of all form elements.
@@ -257,13 +266,19 @@ impl Island {
 /// [`Island::poll`] first for an up-to-date view.
 impl fmt::Display for Island {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut out = String::new();
-        render(&self.model, self.model.root(), 0, &mut out)?;
-        f.write_str(&out)
+        f.write_str(&outline(&self.model))
     }
 }
 
-fn render(model: &Model, widget: &Widget, depth: usize, out: &mut String) -> fmt::Result {
+/// Shows an island as an indented outline, like [`Island`]'s
+/// [`Display`](fmt::Display) does. Use it for a [`FrozenIsland`].
+pub fn outline(contents: &impl Contents) -> String {
+    let mut out = String::new();
+    render(contents, contents.root(), 0, &mut out).expect("writing to a String can't fail");
+    out
+}
+
+fn render(model: &impl Contents, widget: &Widget, depth: usize, out: &mut String) -> fmt::Result {
     let indent = "  ".repeat(depth);
     let fields = model.fields();
     let lines = |out: &mut String, state: &str| {
@@ -322,7 +337,7 @@ fn render(model: &Model, widget: &Widget, depth: usize, out: &mut String) -> fmt
 }
 
 /// Named state as a list; empty if it's not a list (or not computed yet).
-fn list_items<'a>(model: &'a Model, name: &str) -> &'a [String] {
+fn list_items<'a>(model: &'a impl Contents, name: &str) -> &'a [String] {
     match model.state(name) {
         Some(Value::List(items)) => items,
         _ => &[],
@@ -420,6 +435,20 @@ mod tests {
 
         // The handle is gone, so no more updates can come.
         assert!(!island.wait_until(Duration::from_secs(10), |_| false));
+    }
+
+    #[test]
+    fn frozen_island_has_the_same_outline() {
+        let mut island = Island::new(IslandBuilder::new(column([
+            text_field("t", ""),
+            checkbox("c", "C"),
+        ])))
+        .unwrap();
+        island.type_text("t", "x").unwrap();
+        let frozen = island.freeze();
+        assert_eq!(outline(&frozen), island.to_string());
+        island.set_checked("c", true).unwrap();
+        assert_ne!(outline(&frozen), island.to_string());
     }
 
     #[test]

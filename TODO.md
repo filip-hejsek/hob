@@ -39,6 +39,26 @@ Open:
   strict mode, where reading undeclared state panics on purpose but is
   currently caught like any other panic).
 
+### Frozen islands
+
+Done: a `FrozenIsland` has fixed fields and state. It's created with
+`IslandBuilder::freeze` (derived state is computed once, on the calling
+thread) or as a snapshot of a live island (`Model::freeze`). Meant as a
+building block, e.g. for the scrollback. Decisions:
+
+- Named "frozen" rather than "passive": it covers both ways of making one.
+- Backends render it with the same code as live islands, through the
+  `Contents` trait; kettle-ui-iced disables all interaction.
+- A snapshot keeps the outdated marks of derived values.
+- `IslandBuilder::set_text` and `set_checked` set initial field values, for
+  live islands too.
+
+Open:
+
+- Styling: iced's disabled style makes text fields low-contrast, which isn't
+  ideal for reading a result. Also, should buttons of a frozen island be
+  shown at all?
+
 ## Widgets
 
 The widget API is defined in kettle-ui core; kettle-ui-iced renders it.

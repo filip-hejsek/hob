@@ -15,7 +15,7 @@ use futures_channel::mpsc;
 use futures_core::Stream;
 
 use crate::widget::Widget;
-use crate::{DeriveFn, DeriveSpec, Field, Fields, Value, misuse, strict};
+use crate::{Contents, DeriveFn, DeriveSpec, Field, Fields, FrozenIsland, Value, misuse, strict};
 
 /// What [`IslandBuilder::build`](crate::IslandBuilder::build) produces.
 pub struct Built {
@@ -31,7 +31,7 @@ pub struct Built {
 /// The state of a running island: its widget tree, field values and named
 /// state.
 pub struct Model {
-    root: Widget,
+    root: Arc<Widget>,
     fields: Fields,
     /// All named state, derived or not.
     state: HashMap<String, Slot>,
@@ -132,7 +132,7 @@ impl Model {
             })
             .collect();
         let mut model = Model {
-            root,
+            root: Arc::new(root),
             fields,
             state,
             derived,
@@ -161,6 +161,19 @@ impl Model {
     /// or not computed yet. A backend may show such values differently.
     pub fn is_outdated(&self, name: &str) -> bool {
         self.derived.iter().any(|d| d.name == name && d.outdated)
+    }
+
+    /// A snapshot of the island that can't change. Outdated values stay
+    /// marked as outdated.
+    pub fn freeze(&self) -> FrozenIsland {
+        let state = (self.state.iter())
+            .filter_map(|(name, slot)| Some((name.clone(), slot.value.clone()?)))
+            .collect();
+        let outdated = (self.derived.iter())
+            .filter(|d| d.outdated)
+            .map(|d| d.name.clone())
+            .collect();
+        FrozenIsland::new(self.root.clone(), self.fields.clone(), state, outdated)
     }
 
     /// Sets the contents of a text field. Returns the jobs that recompute
@@ -283,6 +296,24 @@ impl Model {
                 .collect(),
             strict: strict(),
         }
+    }
+}
+
+impl Contents for Model {
+    fn root(&self) -> &Widget {
+        self.root()
+    }
+
+    fn fields(&self) -> &Fields {
+        self.fields()
+    }
+
+    fn state(&self, name: &str) -> Option<&Value> {
+        self.state(name)
+    }
+
+    fn is_outdated(&self, name: &str) -> bool {
+        self.is_outdated(name)
     }
 }
 
@@ -567,6 +598,24 @@ mod tests {
         let jobs = model.set_text("a", "cd".into());
         settle(&mut model, jobs);
         assert_eq!(count.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn frozen_snapshot_does_not_change() {
+        let mut b = IslandBuilder::new(column([text_field("a", ""), label(state("x"))]));
+        b.derive("x", |i| i.text("a").into());
+        let (mut model, jobs) = build(b);
+        settle(&mut model, jobs);
+        let jobs = model.set_text("a", "1".into());
+        settle(&mut model, jobs);
+
+        let frozen = model.freeze();
+        let jobs = model.set_text("a", "2".into());
+        assert!(model.freeze().is_outdated("x"));
+        settle(&mut model, jobs);
+        assert_eq!(frozen.fields().text("a"), "1");
+        assert_eq!(frozen.state("x"), Some(&"1".into()));
+        assert!(!frozen.is_outdated("x"));
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! The iced backend for kettle-ui.
 //!
 //! An [`Island`] is embedded in a host iced application, which drives it
-//! through [`Island::update`] and [`Island::view`].
+//! through [`Island::update`] and [`Island::view`]. A frozen island is shown
+//! with [`view_frozen`].
 //!
 //! ```
 //! use kettle_ui::IslandBuilder;
@@ -28,7 +29,10 @@ use std::sync::Arc;
 use iced::widget::{button, checkbox, column, progress_bar, row, text, text_input};
 use iced::{Element, Task, task};
 use kettle_ui::widget::{Action, Kind, Text, Widget};
-use kettle_ui::{Built, Error, IslandBuilder, Job, JobResult, Model, Outcome, StateUpdate, Value};
+use kettle_ui::{
+    Built, Contents, Error, FrozenIsland, IslandBuilder, Job, JobResult, Model, Outcome,
+    StateUpdate, Value,
+};
 
 /// The gap between neighbouring widgets in a [`column`](kettle_ui::widget::column)
 /// or [`row`](kettle_ui::widget::row), in logical pixels. Hosts should use it too, so
@@ -104,66 +108,84 @@ impl Island {
     /// The island's UI. It doesn't scroll or add padding around itself; that's
     /// up to the host.
     pub fn view(&self) -> Element<'_, Message> {
-        self.render(self.model.root())
+        render(&self.model, self.model.root(), true)
     }
 
-    fn render<'a>(&'a self, widget: &'a Widget) -> Element<'a, Message> {
-        let fields = self.model.fields();
-        match widget.kind() {
-            Kind::Column(children) => column(children.iter().map(|c| self.render(c)))
-                .spacing(spacing())
-                .into(),
-            Kind::Row(children) => row(children.iter().map(|c| self.render(c)))
-                .spacing(spacing())
-                .into(),
-            Kind::Label(Text::Static(s)) => text(s).into(),
-            Kind::Label(Text::State(name)) => text(
-                self.model
-                    .state(name)
-                    .map(Value::to_string)
-                    .unwrap_or_default(),
-            )
+    /// A snapshot of the island that can't change (see [`Model::freeze`]).
+    pub fn freeze(&self) -> FrozenIsland {
+        self.model.freeze()
+    }
+}
+
+/// Shows a frozen island: like [`Island::view`], but with all interaction
+/// disabled. It sends no messages, so it fits any message type.
+pub fn view_frozen<'a, M: 'a>(island: &'a FrozenIsland) -> Element<'a, M> {
+    render(island, island.root(), false).map(|_| unreachable!("frozen islands send no messages"))
+}
+
+/// Renders `widget` from `contents`. Without `interactive`, no widget sends
+/// messages, so they all look disabled.
+fn render<'a>(
+    contents: &'a impl Contents,
+    widget: &'a Widget,
+    interactive: bool,
+) -> Element<'a, Message> {
+    let fields = contents.fields();
+    let send = |msg: Msg| interactive.then_some(Message(msg));
+    match widget.kind() {
+        Kind::Column(children) => column(children.iter().map(|c| render(contents, c, interactive)))
+            .spacing(spacing())
             .into(),
-            Kind::TextField { id, placeholder } => text_input(placeholder, fields.text(id))
-                .on_input(|s| Message(Msg::TextChanged(id.clone(), s)))
-                .into(),
-            Kind::Checkbox { id, label } => checkbox(fields.checked(id))
-                .label(label)
-                .on_toggle(|b| Message(Msg::Toggled(id.clone(), b)))
-                .into(),
-            Kind::Progress { state } => {
-                let value = match self.model.state(state) {
-                    Some(Value::Number(n)) => n.clamp(0.0, 1.0) as f32,
-                    _ => 0.0,
-                };
-                progress_bar(0.0..=1.0, value).into()
-            }
-            Kind::List { state } => column(self.list(state).iter().map(|s| text(s).into()))
-                .spacing(2)
-                .into(),
-            Kind::Suggestions { state, field } => column(self.list(state).iter().map(|s| {
-                button(text(s))
-                    .style(button::text)
-                    .padding([2, 0])
-                    .on_press(Message(Msg::TextChanged(field.clone(), s.clone())))
-                    .into()
+        Kind::Row(children) => row(children.iter().map(|c| render(contents, c, interactive)))
+            .spacing(spacing())
+            .into(),
+        Kind::Label(Text::Static(s)) => text(s).into(),
+        Kind::Label(Text::State(name)) => text(
+            contents
+                .state(name)
+                .map(Value::to_string)
+                .unwrap_or_default(),
+        )
+        .into(),
+        Kind::TextField { id, placeholder } => text_input(placeholder, fields.text(id))
+            .on_input_maybe(interactive.then_some(|s| Message(Msg::TextChanged(id.clone(), s))))
+            .into(),
+        Kind::Checkbox { id, label } => checkbox(fields.checked(id))
+            .label(label)
+            .on_toggle_maybe(interactive.then_some(|b| Message(Msg::Toggled(id.clone(), b))))
+            .into(),
+        Kind::Progress { state } => {
+            let value = match contents.state(state) {
+                Some(Value::Number(n)) => n.clamp(0.0, 1.0) as f32,
+                _ => 0.0,
+            };
+            progress_bar(0.0..=1.0, value).into()
+        }
+        Kind::List { state } => column(list(contents, state).iter().map(|s| text(s).into()))
+            .spacing(2)
+            .into(),
+        Kind::Suggestions { state, field } => column(list(contents, state).iter().map(|s| {
+            button(text(s))
+                .style(button::text)
+                .padding([2, 0])
+                .on_press_maybe(send(Msg::TextChanged(field.clone(), s.clone())))
+                .into()
+        }))
+        .into(),
+        Kind::Button { label, action } => button(text(label))
+            .on_press_maybe(send(match action {
+                Action::Submit => Msg::Submit,
+                Action::Cancel => Msg::Cancel,
             }))
             .into(),
-            Kind::Button { label, action } => button(text(label))
-                .on_press(Message(match action {
-                    Action::Submit => Msg::Submit,
-                    Action::Cancel => Msg::Cancel,
-                }))
-                .into(),
-        }
     }
+}
 
-    /// Named state as a list; empty if it's not a list (or not computed yet).
-    fn list(&self, name: &str) -> &[String] {
-        match self.model.state(name) {
-            Some(Value::List(items)) => items,
-            _ => &[],
-        }
+/// Named state as a list; empty if it's not a list (or not computed yet).
+fn list<'a>(contents: &'a impl Contents, name: &str) -> &'a [String] {
+    match contents.state(name) {
+        Some(Value::List(items)) => items,
+        _ => &[],
     }
 }
 

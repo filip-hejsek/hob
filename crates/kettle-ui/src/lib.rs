@@ -19,6 +19,9 @@
 //!   from other named state ([`IslandBuilder::derive_with_state`]).
 //! - Mistakes in the tree (such as referencing named state that doesn't
 //!   exist) are reported by [`IslandBuilder::build`].
+//! - A [`FrozenIsland`] can't change: its fields and state are fixed. It's
+//!   either created frozen ([`IslandBuilder::freeze`]) or a snapshot of a live
+//!   island ([`Model::freeze`]).
 //!
 //! ```
 //! use kettle_ui::IslandBuilder;
@@ -43,6 +46,7 @@
 //! `KETTLE_UI_STRICT` environment variable overrides this: `1` turns it on,
 //! `0` turns it off.
 
+mod frozen;
 mod model;
 pub mod widget;
 
@@ -52,6 +56,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use futures_channel::mpsc;
 
+pub use frozen::FrozenIsland;
 pub use model::{Built, Inputs, Job, JobResult, Model, Outcome, StateUpdate, Updates};
 
 use widget::{Kind, Text, Widget};
@@ -73,8 +78,12 @@ pub enum Error {
     ConflictingState(String),
     /// A widget references a form element that doesn't exist.
     UnknownField(String),
-    /// [`suggestions`](widget::suggestions) targets a form element that isn't a text field.
+    /// [`suggestions`](widget::suggestions) or [`IslandBuilder::set_text`]
+    /// targets a form element that isn't a text field.
     NotATextField(String),
+    /// [`IslandBuilder::set_checked`] targets a form element that isn't a
+    /// checkbox.
+    NotACheckbox(String),
 }
 
 impl fmt::Display for Error {
@@ -94,6 +103,7 @@ impl fmt::Display for Error {
             }
             Error::UnknownField(id) => write!(f, "no form element with id {id:?}"),
             Error::NotATextField(id) => write!(f, "form element {id:?} is not a text field"),
+            Error::NotACheckbox(id) => write!(f, "form element {id:?} is not a checkbox"),
         }
     }
 }
@@ -170,6 +180,20 @@ impl Fields {
     }
 }
 
+/// What an island shows: its widget tree, field values and named state.
+/// Implemented by live ([`Model`]) and frozen ([`FrozenIsland`]) islands, so
+/// backends can show both the same way.
+pub trait Contents {
+    /// The widget tree.
+    fn root(&self) -> &Widget;
+    /// The values of all form elements.
+    fn fields(&self) -> &Fields;
+    /// The value of named state; `None` if it isn't computed.
+    fn state(&self, name: &str) -> Option<&Value>;
+    /// Whether named state may be outdated (see [`Model::is_outdated`]).
+    fn is_outdated(&self, name: &str) -> bool;
+}
+
 type DeriveFn = Arc<dyn Fn(&Inputs<'_>) -> Value + Send + Sync>;
 
 /// Derived state, as configured on the builder.
@@ -185,6 +209,8 @@ struct DeriveSpec {
 pub struct IslandBuilder {
     root: Widget,
     state: HashMap<String, Value>,
+    /// Initial field values, by id.
+    initial: Vec<(String, Field)>,
     derived: Vec<DeriveSpec>,
     /// Names that have an initial value, shared with every [`StateHandle`].
     settable: Arc<RwLock<HashSet<String>>>,
@@ -199,6 +225,7 @@ impl IslandBuilder {
         IslandBuilder {
             root,
             state: HashMap::new(),
+            initial: Vec::new(),
             derived: Vec::new(),
             settable: Arc::default(),
             sender,
@@ -210,6 +237,17 @@ impl IslandBuilder {
     pub fn set_state(&mut self, name: &str, value: impl Into<Value>) {
         self.state.insert(name.to_owned(), value.into());
         self.settable.write().unwrap().insert(name.to_owned());
+    }
+
+    /// Sets the initial contents of a text field (empty by default).
+    pub fn set_text(&mut self, id: &str, value: &str) {
+        self.initial
+            .push((id.to_owned(), Field::Text(value.to_owned())));
+    }
+
+    /// Sets whether a checkbox is initially checked (unchecked by default).
+    pub fn set_checked(&mut self, id: &str, checked: bool) {
+        self.initial.push((id.to_owned(), Field::Bool(checked)));
     }
 
     /// Makes named state a function of the current field values.
@@ -269,8 +307,23 @@ impl IslandBuilder {
         })
     }
 
+    /// Builds the island, computes its derived state on this thread, and
+    /// freezes it (see [`Model::freeze`]). For showing an island that can't
+    /// change, e.g. the result of a command.
+    pub fn freeze(self) -> Result<FrozenIsland, Error> {
+        let Built {
+            mut model,
+            mut jobs,
+            ..
+        } = self.build()?;
+        while let Some(job) = jobs.pop() {
+            jobs.extend(model.finish(job.run()));
+        }
+        Ok(model.freeze())
+    }
+
     /// Checks that everything the tree and derived state reference exists.
-    /// Returns the initial (empty) field values, and the order in which to
+    /// Returns the initial field values, and the order in which to
     /// compute derived state (as indices into `self.derived`).
     fn check(&self) -> Result<(Fields, Vec<usize>), Error> {
         for (i, spec) in self.derived.iter().enumerate() {
@@ -286,6 +339,15 @@ impl IslandBuilder {
         let mut fields = Fields::default();
         collect_fields(&self.root, &mut fields)?;
         self.check_references(&self.root, &fields)?;
+        for (id, value) in &self.initial {
+            match (fields.0.get_mut(id.as_str()), value) {
+                (None, _) => return Err(Error::UnknownField(id.clone())),
+                (Some(field @ Field::Text(_)), Field::Text(_))
+                | (Some(field @ Field::Bool(_)), Field::Bool(_)) => *field = value.clone(),
+                (Some(_), Field::Text(_)) => return Err(Error::NotATextField(id.clone())),
+                (Some(_), Field::Bool(_)) => return Err(Error::NotACheckbox(id.clone())),
+            }
+        }
         Ok((fields, order))
     }
 
@@ -534,6 +596,39 @@ mod tests {
         ui.derive_with_state("b", &["a"], |_| "".into());
         ui.derive("a", |_| "".into());
         assert_eq!(ui.check().unwrap().1, [2, 1, 0]);
+    }
+
+    #[test]
+    fn initial_field_values_are_checked() {
+        let mut ui = IslandBuilder::new(column([text_field("t", ""), checkbox("c", "")]));
+        ui.set_text("t", "x");
+        ui.set_checked("c", true);
+        let (fields, _) = ui.check().unwrap();
+        assert_eq!(fields.text("t"), "x");
+        assert!(fields.checked("c"));
+
+        let mut ui = IslandBuilder::new(checkbox("c", ""));
+        ui.set_text("c", "x");
+        assert!(matches!(check(&ui), Err(Error::NotATextField(n)) if n == "c"));
+
+        let mut ui = IslandBuilder::new(text_field("t", ""));
+        ui.set_checked("t", true);
+        assert!(matches!(check(&ui), Err(Error::NotACheckbox(n)) if n == "t"));
+
+        let mut ui = IslandBuilder::new(column([]));
+        ui.set_text("nope", "x");
+        assert!(matches!(check(&ui), Err(Error::UnknownField(n)) if n == "nope"));
+    }
+
+    #[test]
+    fn freezing_a_builder_computes_derived_state() {
+        let mut ui = IslandBuilder::new(column([text_field("name", ""), label(state("hi"))]));
+        ui.set_text("name", "Ada");
+        ui.derive("hi", |i| format!("Hi, {}!", i.text("name")).into());
+        let frozen = ui.freeze().unwrap();
+        assert_eq!(frozen.fields().text("name"), "Ada");
+        assert_eq!(frozen.state("hi"), Some(&"Hi, Ada!".into()));
+        assert!(!frozen.is_outdated("hi"));
     }
 
     #[test]
