@@ -7,7 +7,9 @@
 //! a frozen island (e.g. a result), and [`Context::show`] shows a kettle-ui
 //! island and blocks until the user submits or cancels it.
 //!
-//! A frontend (such as `hob-gui`) carries out these [`Request`]s.
+//! A frontend (such as `hob-gui`) carries out these [`Request`]s. For its
+//! prompt, there's a [`History`] of entered lines and
+//! [completion](Interpreter::complete).
 //!
 //! ```
 //! use hob_core::Interpreter;
@@ -21,6 +23,8 @@
 //! let requests = interpreter.run("hello world").unwrap();
 //! ```
 
+mod history;
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
@@ -32,6 +36,8 @@ use std::thread;
 use futures_channel::mpsc;
 use futures_core::Stream;
 use kettle_ui::{FrozenIsland, IslandBuilder, Outcome};
+
+pub use history::History;
 
 /// What a command returns: any error is shown to the user.
 pub type CommandResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
@@ -69,6 +75,38 @@ impl Interpreter {
         self.commands.keys().map(String::as_str)
     }
 
+    /// Completes the command name at the end of `line`, like a shell does on
+    /// Tab: as far as it's unambiguous, with a space after a complete name.
+    /// Arguments aren't completed yet.
+    pub fn complete(&self, line: &str) -> Completion {
+        let start = line.len() - line.trim_start().len();
+        let (before, word) = line.split_at(start);
+        let unchanged = Completion {
+            line: line.to_owned(),
+            candidates: Vec::new(),
+        };
+        if word.contains(char::is_whitespace) {
+            return unchanged;
+        }
+        let matches: Vec<&str> = self.commands().filter(|c| c.starts_with(word)).collect();
+        match matches.as_slice() {
+            [] => unchanged,
+            [only] => Completion {
+                line: format!("{before}{only} "),
+                candidates: Vec::new(),
+            },
+            [first, rest @ ..] => {
+                let len = rest
+                    .iter()
+                    .fold(first.len(), |len, m| common_prefix_len(&first[..len], m));
+                Completion {
+                    line: format!("{before}{}", &first[..len]),
+                    candidates: matches.iter().map(|&m| m.to_owned()).collect(),
+                }
+            }
+        }
+    }
+
     /// Starts running a command line on a new thread. The line is split into
     /// words at whitespace; the first is the command name.
     ///
@@ -101,6 +139,22 @@ impl Interpreter {
             .map_err(Error::Spawn)?;
         Ok(Requests(receiver))
     }
+}
+
+/// What [`Interpreter::complete`] made of a line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Completion {
+    /// The line, completed as far as it's unambiguous.
+    pub line: String,
+    /// The possible completions, if there are several; otherwise empty.
+    pub candidates: Vec<String>,
+}
+
+/// The length in bytes of the longest common prefix of `a` and `b`.
+fn common_prefix_len(a: &str, b: &str) -> usize {
+    a.char_indices()
+        .find(|&(i, c)| !b[i..].starts_with(c))
+        .map_or(a.len(), |(i, _)| i)
 }
 
 /// Why [`Interpreter::run`] couldn't start a command.
@@ -355,6 +409,42 @@ mod tests {
         };
         drop(show);
         assert_eq!(printed(&mut requests), "the island was closed");
+    }
+
+    fn completion(line: &str, candidates: &[&str]) -> Completion {
+        Completion {
+            line: line.to_owned(),
+            candidates: candidates.iter().map(|&c| c.to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn completes_command_names() {
+        let mut i = Interpreter::new();
+        for name in ["fruit", "fruit-search", "contact", "căt", "cătalog"] {
+            i.register(name, |_, _| Ok(()));
+        }
+        assert_eq!(i.complete("co"), completion("contact ", &[]));
+        assert_eq!(i.complete("  co"), completion("  contact ", &[]));
+        assert_eq!(
+            i.complete("fr"),
+            completion("fruit", &["fruit", "fruit-search"])
+        );
+        assert_eq!(
+            i.complete("c"),
+            completion("c", &["contact", "căt", "cătalog"])
+        );
+        assert_eq!(i.complete("că"), completion("căt", &["căt", "cătalog"]));
+        assert_eq!(i.complete("x"), completion("x", &[]));
+        // Arguments aren't completed.
+        assert_eq!(i.complete("contact co"), completion("contact co", &[]));
+        assert_eq!(i.complete("contact "), completion("contact ", &[]));
+    }
+
+    #[test]
+    fn completing_nothing_lists_all_commands() {
+        let c = interpreter().complete("");
+        assert_eq!(c, completion("", &["ask", "echo", "fail", "panic"]));
     }
 
     #[test]

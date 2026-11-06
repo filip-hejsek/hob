@@ -6,14 +6,18 @@
 //! scrollback: its command line, then what it prints and the islands it
 //! shows, in order. A live island freezes in place once the user submits or
 //! cancels it.
+//!
+//! The prompt works like a shell's: Up and Down browse the history, and Tab
+//! completes command names.
 
 use std::fmt;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-use hob_core::{Interpreter, Reply, Request};
+use hob_core::{History, Interpreter, Reply, Request};
+use iced::keyboard::{self, key};
 use iced::widget::{Id, column, container, operation, rule, scrollable, text, text_input};
-use iced::{Element, Font, Length, Task, font, padding};
+use iced::{Element, Event, Font, Length, Subscription, Task, event, font, padding};
 use kettle_ui::FrozenIsland;
 use kettle_ui_iced::{Island, spacing, view_frozen};
 
@@ -26,6 +30,7 @@ pub fn run(interpreter: Interpreter) -> iced::Result {
         Shell::update,
         Shell::view,
     )
+    .subscription(Shell::subscription)
     .title("hob")
     .window_size((640.0, 560.0))
     .run()
@@ -38,6 +43,9 @@ struct Shell {
     /// Lists the commands, as a hint.
     placeholder: String,
     prompt: String,
+    history: History,
+    /// Completions offered after Tab, shown above the prompt.
+    candidates: Vec<String>,
     /// The scrollback: one block per command line, oldest first.
     blocks: Vec<Block>,
     /// For block and island ids.
@@ -69,9 +77,21 @@ enum Entry {
 enum Message {
     PromptChanged(String),
     PromptSubmitted,
+    /// A key for the prompt was pressed, maybe while it isn't focused.
+    PromptKey(PromptKey),
+    /// A key for the prompt was pressed while it was focused.
+    PromptKeyFocused(PromptKey),
     /// A request from the command of a block.
     Request(BlockId, Pending<Request>),
     Island(IslandId, kettle_ui_iced::Message),
+}
+
+/// A key the prompt handles that iced's text input doesn't.
+#[derive(Clone, Copy, Debug)]
+enum PromptKey {
+    Up,
+    Down,
+    Tab,
 }
 
 /// Makes a value that isn't `Clone` or `Debug` fit in a [`Message`]; it can
@@ -107,6 +127,8 @@ impl Shell {
             placeholder: format!("Command ({})", commands.join(", ")),
             interpreter,
             prompt: String::new(),
+            history: History::new(),
+            candidates: Vec::new(),
             blocks: Vec::new(),
             next_id: 0,
         };
@@ -122,9 +144,21 @@ impl Shell {
         match message {
             Message::PromptChanged(prompt) => {
                 self.prompt = prompt;
+                self.history.stop_browsing();
+                self.candidates.clear();
                 Task::none()
             }
             Message::PromptSubmitted => self.run_prompt(),
+            Message::PromptKey(key) => {
+                operation::is_focused(Id::new(PROMPT)).then(move |focused| {
+                    if focused {
+                        Task::done(Message::PromptKeyFocused(key))
+                    } else {
+                        Task::none()
+                    }
+                })
+            }
+            Message::PromptKeyFocused(key) => self.prompt_key(key),
             Message::Request(block, request) => match request.take() {
                 Some(request) => self.handle(block, request),
                 None => Task::none(),
@@ -138,6 +172,8 @@ impl Shell {
             return Task::none();
         }
         let line = mem::take(&mut self.prompt);
+        self.history.push(&line);
+        self.candidates.clear();
         let id = self.next_id();
         let mut block = Block {
             id,
@@ -153,6 +189,44 @@ impl Shell {
         };
         self.blocks.push(block);
         task
+    }
+
+    fn prompt_key(&mut self, key: PromptKey) -> Task<Message> {
+        let line = match key {
+            PromptKey::Up => self.history.back(&self.prompt).map(str::to_owned),
+            PromptKey::Down => self.history.forward().map(str::to_owned),
+            PromptKey::Tab => {
+                let completion = self.interpreter.complete(&self.prompt);
+                self.candidates = completion.candidates;
+                self.history.stop_browsing();
+                Some(completion.line)
+            }
+        };
+        match line {
+            Some(line) => {
+                self.prompt = line;
+                operation::move_cursor_to_end(Id::new(PROMPT))
+            }
+            None => Task::none(),
+        }
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        event::listen_with(|event, _status, _window| {
+            let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event else {
+                return None;
+            };
+            if !modifiers.is_empty() {
+                return None;
+            }
+            let key = match key {
+                keyboard::Key::Named(key::Named::ArrowUp) => PromptKey::Up,
+                keyboard::Key::Named(key::Named::ArrowDown) => PromptKey::Down,
+                keyboard::Key::Named(key::Named::Tab) => PromptKey::Tab,
+                _ => return None,
+            };
+            Some(Message::PromptKey(key))
+        })
     }
 
     fn handle(&mut self, block: BlockId, request: Request) -> Task<Message> {
@@ -227,7 +301,16 @@ impl Shell {
                 .height(Length::Fill)
                 .into(),
             rule::horizontal(1).into(),
-            container(prompt).padding(spacing()).into(),
+            container(
+                // The prompt stays the first child, so it keeps its state
+                // (focus) when the candidates appear.
+                column([prompt.into()].into_iter().chain(
+                    (!self.candidates.is_empty()).then(|| text(self.candidates.join("   ")).into()),
+                ))
+                .spacing(spacing()),
+            )
+            .padding(spacing())
+            .into(),
         ])
         .into()
     }

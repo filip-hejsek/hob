@@ -124,11 +124,17 @@ Works like a terminal: a scrollback with the prompt below it. Decisions:
 - The scrollback sticks to the bottom while it's scrolled there.
 - A line with an unknown command is still added, with the error.
 - What commands print also goes to stdout.
+- The prompt has history (Up/Down; the line being typed is kept as a draft)
+  and Tab completion of command names: unambiguous part completed, the
+  candidates listed below the prompt if there are several. Both live in
+  hob-core.
 
 Open:
 
-- Command history (up/down in the prompt). For now, a mistyped line has to
-  be retyped.
 - Focus: nothing moves focus to a newly shown island, or back to the prompt
   afterwards.
 - The scrollback grows without limit.
+- History isn't saved across sessions.
+- Completion works only at the end of the line (iced doesn't tell the app
+  where the cursor is), and doesn't complete arguments: commands would need
+  a way to say what they accept.
