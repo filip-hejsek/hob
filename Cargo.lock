@@ -1207,10 +1207,12 @@ dependencies = [
 name = "hob-gui"
 version = "0.1.0"
 dependencies = [
+ "futures-channel",
  "hob-core",
  "iced",
  "kettle-ui",
  "kettle-ui-iced",
+ "log",
  "serde_json",
 ]
 
@@ -1499,6 +1501,7 @@ version = "0.1.0"
 dependencies = [
  "futures-channel",
  "futures-core",
+ "log",
  "serde",
  "serde_json",
 ]

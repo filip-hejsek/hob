@@ -8,17 +8,32 @@ use std::path::{Path, PathBuf};
 use kettle_ui::FrozenIsland;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::LogRecord;
+
 /// The version of the session file format. Bump it on incompatible changes.
-const VERSION: u32 = 1;
+/// Version 1 had no log records, and `blocks` instead of `scrollback`.
+const VERSION: u32 = 2;
 
 /// A frontend's state worth keeping across restarts: the prompt history and
-/// the scrollback. Saved as JSON.
+/// the scrollback. Saved as JSON, without ephemeral log records.
 #[derive(Default, Serialize, Deserialize)]
 pub struct Session {
     /// Entered command lines, oldest first.
     pub history: Vec<String>,
     /// The scrollback, oldest first.
-    pub blocks: Vec<Block>,
+    #[serde(serialize_with = "skip_ephemeral")]
+    pub scrollback: Vec<Item>,
+}
+
+/// Something in the scrollback.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Item {
+    /// A command line and its output.
+    Block(Block),
+    /// A log record that isn't from a command, e.g. an error of the
+    /// frontend itself.
+    Notice(LogRecord),
 }
 
 /// A command line and its output.
@@ -27,6 +42,7 @@ pub struct Block {
     /// The command line as entered.
     pub line: String,
     /// What the command showed, in order.
+    #[serde(serialize_with = "skip_ephemeral")]
     pub entries: Vec<Entry>,
     /// Whether the command was still running when the session was saved, so
     /// it was interrupted when the frontend exited.
@@ -38,6 +54,8 @@ pub struct Block {
 pub enum Entry {
     /// A printed message.
     Text(String),
+    /// A log record, e.g. from [`Context::error`](crate::Context::error).
+    Log(LogRecord),
     /// An island, frozen (live islands are saved as they were).
     Island(FrozenIsland),
     /// A saved island that couldn't be read, e.g. one saved by a newer
@@ -53,19 +71,49 @@ pub enum Entry {
 /// How an [`Entry`] is saved.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum EntryRepr<I> {
-    Text(String),
+enum EntryRepr<T, L, I> {
+    Text(T),
+    Log(L),
     Island(I),
 }
+
+/// An [`EntryRepr`] that borrows from the entry, for saving.
+type EntryRef<'a, I> = EntryRepr<&'a str, &'a LogRecord, I>;
 
 impl Serialize for Entry {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            Entry::Text(text) => EntryRepr::<()>::Text(text.clone()).serialize(serializer),
-            Entry::Island(island) => EntryRepr::Island(island).serialize(serializer),
-            Entry::Unreadable { raw, .. } => EntryRepr::Island(raw).serialize(serializer),
+            Entry::Text(text) => EntryRef::<()>::Text(text).serialize(serializer),
+            Entry::Log(record) => EntryRef::<()>::Log(record).serialize(serializer),
+            Entry::Island(island) => EntryRef::Island(island).serialize(serializer),
+            Entry::Unreadable { raw, .. } => EntryRef::Island(raw).serialize(serializer),
         }
     }
+}
+
+/// Things that may be left out when saving.
+trait Ephemeral {
+    fn is_ephemeral(&self) -> bool;
+}
+
+impl Ephemeral for Item {
+    fn is_ephemeral(&self) -> bool {
+        matches!(self, Item::Notice(record) if record.ephemeral)
+    }
+}
+
+impl Ephemeral for Entry {
+    fn is_ephemeral(&self) -> bool {
+        matches!(self, Entry::Log(record) if record.ephemeral)
+    }
+}
+
+/// Serializes the items that aren't ephemeral.
+fn skip_ephemeral<S: Serializer, T: Serialize + Ephemeral>(
+    items: &[T],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(items.iter().filter(|item| !item.is_ephemeral()))
 }
 
 impl<'de> Deserialize<'de> for Entry {
@@ -73,8 +121,9 @@ impl<'de> Deserialize<'de> for Entry {
     /// failing the whole session.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(
-            match EntryRepr::<serde_json::Value>::deserialize(deserializer)? {
+            match EntryRepr::<String, LogRecord, serde_json::Value>::deserialize(deserializer)? {
                 EntryRepr::Text(text) => Entry::Text(text),
+                EntryRepr::Log(record) => Entry::Log(record),
                 EntryRepr::Island(raw) => match FrozenIsland::deserialize(&raw) {
                     Ok(island) => Entry::Island(island),
                     Err(e) => Entry::Unreadable {
@@ -106,6 +155,13 @@ struct File {
     session: Session,
 }
 
+/// A version 1 file.
+#[derive(Deserialize)]
+struct FileV1 {
+    history: Vec<String>,
+    blocks: Vec<Block>,
+}
+
 impl Session {
     /// Reads a saved session. Returns `None` if there is no file.
     pub fn load(path: &Path) -> Result<Option<Session>, SessionError> {
@@ -117,10 +173,21 @@ impl Session {
         // Check the version first, so a newer format isn't misreported as
         // a broken file.
         let Header { version } = serde_json::from_str(&json).map_err(SessionError::Format)?;
-        if version != VERSION {
-            return Err(SessionError::Version(version));
-        }
-        let File { session } = serde_json::from_str(&json).map_err(SessionError::Format)?;
+        let session = match version {
+            1 => {
+                let FileV1 { history, blocks } =
+                    serde_json::from_str(&json).map_err(SessionError::Format)?;
+                Session {
+                    history,
+                    scrollback: blocks.into_iter().map(Item::Block).collect(),
+                }
+            }
+            VERSION => {
+                let File { session } = serde_json::from_str(&json).map_err(SessionError::Format)?;
+                session
+            }
+            _ => return Err(SessionError::Version(version)),
+        };
         Ok(Some(session))
     }
 
@@ -176,7 +243,7 @@ impl fmt::Display for SessionError {
             SessionError::Format(e) => write!(f, "invalid session file: {e}"),
             SessionError::Version(v) => write!(
                 f,
-                "session file has format version {v}, but only {VERSION} is supported"
+                "session file has format version {v}, but only up to {VERSION} is supported"
             ),
         }
     }
@@ -190,6 +257,15 @@ mod tests {
     use kettle_ui::widget::*;
 
     use super::*;
+    use crate::Level;
+
+    /// The only block of a session's scrollback.
+    fn only_block(session: &Session) -> &Block {
+        let [Item::Block(block)] = &session.scrollback[..] else {
+            panic!("expected one block");
+        };
+        block
+    }
 
     /// A fresh directory for one test.
     fn temp_dir(name: &str) -> PathBuf {
@@ -203,14 +279,14 @@ mod tests {
         b.set_text("name", "Ada");
         Session {
             history: vec!["contact".into()],
-            blocks: vec![Block {
+            scrollback: vec![Item::Block(Block {
                 line: "contact".into(),
                 entries: vec![
                     Entry::Island(b.freeze().unwrap()),
                     Entry::Text("done".into()),
                 ],
                 interrupted: true,
-            }],
+            })],
         }
     }
 
@@ -220,9 +296,7 @@ mod tests {
         session().save(&path).unwrap();
         let loaded = Session::load(&path).unwrap().unwrap();
         assert_eq!(loaded.history, ["contact"]);
-        let [block] = &loaded.blocks[..] else {
-            panic!("expected one block");
-        };
+        let block = only_block(&loaded);
         assert_eq!(block.line, "contact");
         assert!(matches!(&block.entries[0], Entry::Island(i) if i.fields().text("name") == "Ada"));
         assert!(matches!(&block.entries[1], Entry::Text(t) if t == "done"));
@@ -238,11 +312,11 @@ mod tests {
             session: &session(),
         })
         .unwrap();
-        let island = &mut json["blocks"][0]["entries"][0]["island"];
+        let island = &mut json["scrollback"][0]["block"]["entries"][0]["island"];
         island["fields"]["name"] = true.into();
         let broken = island.clone();
         // Older files have no "interrupted".
-        json["blocks"][0]
+        json["scrollback"][0]["block"]
             .as_object_mut()
             .unwrap()
             .remove("interrupted");
@@ -250,7 +324,7 @@ mod tests {
         fs::write(&path, json.to_string()).unwrap();
 
         let loaded = Session::load(&path).unwrap().unwrap();
-        let block = &loaded.blocks[0];
+        let block = only_block(&loaded);
         assert!(!block.interrupted);
         let Entry::Unreadable { error, raw } = &block.entries[0] else {
             panic!("expected an unreadable island");
@@ -262,7 +336,51 @@ mod tests {
         loaded.save(&path).unwrap();
         let saved: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(saved["blocks"][0]["entries"][0]["island"], broken);
+        assert_eq!(
+            saved["scrollback"][0]["block"]["entries"][0]["island"],
+            broken
+        );
+    }
+
+    #[test]
+    fn ephemeral_records_are_not_saved() {
+        let path = temp_dir("ephemeral").join("session.json");
+        let mut s = session();
+        let Item::Block(block) = &mut s.scrollback[0] else {
+            unreachable!()
+        };
+        block.entries = vec![
+            Entry::Log(LogRecord::new(Level::Error, "contact", "kept")),
+            Entry::Log(LogRecord::new(Level::Debug, "contact", "dropped")),
+        ];
+        s.scrollback.extend([
+            Item::Notice(LogRecord::new(Level::Warn, "hob_gui", "kept too")),
+            Item::Notice(LogRecord::new(Level::Error, "hob_gui", "dropped").ephemeral()),
+        ]);
+        s.save(&path).unwrap();
+
+        let loaded = Session::load(&path).unwrap().unwrap();
+        let [Item::Block(block), Item::Notice(notice)] = &loaded.scrollback[..] else {
+            panic!("expected a block and a notice");
+        };
+        let [Entry::Log(record)] = &block.entries[..] else {
+            panic!("expected one log record");
+        };
+        assert_eq!((record.level, &*record.message), (Level::Error, "kept"));
+        assert_eq!(notice.message, "kept too");
+    }
+
+    #[test]
+    fn version_1_is_converted() {
+        let path = temp_dir("v1").join("session.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let v1 = r#"{"version": 1, "history": ["echo hi"],
+            "blocks": [{"line": "echo hi", "entries": [{"text": "hi"}]}]}"#;
+        fs::write(&path, v1).unwrap();
+        let loaded = Session::load(&path).unwrap().unwrap();
+        assert_eq!(loaded.history, ["echo hi"]);
+        let block = only_block(&loaded);
+        assert!(matches!(&block.entries[..], [Entry::Text(t)] if t == "hi"));
     }
 
     #[test]

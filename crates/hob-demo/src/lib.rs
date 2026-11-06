@@ -18,6 +18,7 @@ pub fn register(interpreter: &mut Interpreter) {
     interpreter.register("panic", |_, _| panic!("the demo panicked"));
     interpreter.register("invalid", invalid);
     interpreter.register("pizza", pizza);
+    interpreter.register("levels", levels);
 }
 
 /// Registers a command for each demo island. It shows the island and prints
@@ -78,6 +79,16 @@ fn fail(ctx: &mut Context, args: &[String]) -> CommandResult {
         [] => Err("something went wrong".into()),
         _ => Err(args.join(" ").into()),
     }
+}
+
+/// Logs a message at each level.
+fn levels(ctx: &mut Context, args: &[String]) -> CommandResult {
+    no_args(args)?;
+    ctx.error("an error");
+    ctx.warn("a warning");
+    ctx.info("some information");
+    ctx.debug("a debug message (hidden unless HOB_LOG=debug)");
+    Ok(())
 }
 
 /// Shows an island that refers to state that doesn't exist.

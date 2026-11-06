@@ -42,7 +42,8 @@
 //!
 //! Some mistakes can only be caught while the UI runs, such as a
 //! [`StateHandle`] setting state that has no initial value. In strict mode
-//! they panic; otherwise they print a warning to stderr and are ignored.
+//! they panic; otherwise they're logged as warnings (with the `log` crate)
+//! and ignored.
 //! Strict mode is on in debug builds and off in release builds. The
 //! `KETTLE_UI_STRICT` environment variable overrides this: `1` turns it on,
 //! `0` turns it off.
@@ -508,14 +509,14 @@ impl StateHandle {
 }
 
 /// Reports a mistake that is only caught at run time: panics in [strict
-/// mode](crate#strict-mode), otherwise prints a warning saying what happens
+/// mode](crate#strict-mode), otherwise logs a warning saying what happens
 /// instead (`fallback`).
 #[track_caller]
 fn misuse(strict: bool, message: String, fallback: &str) {
     if strict {
         panic!("{message}");
     }
-    eprintln!("kettle-ui: warning: {message}; {fallback}");
+    log::warn!("{message}; {fallback}");
 }
 
 /// Whether [strict mode](crate#strict-mode) is on.
@@ -525,7 +526,7 @@ fn strict() -> bool {
         Ok("1") => true,
         Ok("0") => false,
         Ok(other) => {
-            eprintln!("kettle-ui: warning: ignoring KETTLE_UI_STRICT={other:?} (expected 0 or 1)");
+            log::warn!("ignoring KETTLE_UI_STRICT={other:?} (expected 0 or 1)");
             cfg!(debug_assertions)
         }
         Err(_) => cfg!(debug_assertions),

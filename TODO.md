@@ -118,6 +118,37 @@ Open:
   argument can't contain spaces.
 - A command error or panic is printed as `<command>: <error>`.
 
+## Logging
+
+Done. Decisions:
+
+- Commands log with `ctx.error/warn/info/debug`; the records go into the
+  command's block. A command's returned error or panic (with its message)
+  is logged as an error.
+- Everything else uses the `log` crate (nearly all dependencies do; winit's
+  `tracing` events reach it too). hob-gui's backend turns records into
+  notices in the scrollback, outside any block. Errors and warnings also go
+  to stderr. Not `tracing`: spans aren't needed, since commands log through
+  their context.
+- Our crates log from `info` up (`HOB_LOG` changes the level), dependencies
+  from warnings up. Only error and warning notices are shown; info notices
+  are kept for later.
+- Ephemeral records are shown but not saved: debug records, records from
+  dependencies, and errors saving the session.
+- A failed save is reported once until the error changes, and the report
+  doesn't cause another save. When saving works again, that's noted.
+- Records reach the shell through a channel, so logging during a save
+  doesn't touch the session being saved.
+
+Open:
+
+- A `log` command to show all records, including hidden info notices.
+- `log` records from a command's thread could go into its block.
+- Dependency warnings can be noisy (winit warns on every start under Xvfb);
+  maybe deduplicate them, or show them more quietly.
+- kettle-ui's warnings are lost when no logger is installed (e.g. in tests).
+- Record times are saved but not shown.
+
 ## hob-gui (shell)
 
 Works like a terminal: a scrollback with the prompt below it. Decisions:
@@ -152,7 +183,6 @@ Open:
   is rewritten in full on every change.
 - Edits in a live island are only saved on close (or with the next
   scrollback change), so a crash loses them.
-- Errors loading or saving the session only go to stderr.
 - Completion works only at the end of the line (iced doesn't tell the app
   where the cursor is; see ICED_WISHLIST.md), and doesn't complete
   arguments: commands would need a way to say what they accept.

@@ -5,7 +5,9 @@
 //! command talks to the user through a [`Context`], in the style of a terminal
 //! program: [`Context::print`] shows a message, [`Context::print_island`] shows
 //! a frozen island (e.g. a result), and [`Context::show`] shows a kettle-ui
-//! island and blocks until the user submits or cancels it.
+//! island and blocks until the user submits or cancels it. [`Context::error`],
+//! [`warn`](Context::warn), [`info`](Context::info) and
+//! [`debug`](Context::debug) log messages ([`LogRecord`]s).
 //!
 //! A frontend (such as `hob-gui`) carries out these [`Request`]s. For its
 //! prompt, there's a [`History`] of entered lines and
@@ -25,6 +27,7 @@
 //! ```
 
 mod history;
+mod log;
 mod session;
 
 use std::collections::BTreeMap;
@@ -40,7 +43,8 @@ use futures_core::Stream;
 use kettle_ui::{FrozenIsland, IslandBuilder, Outcome};
 
 pub use history::History;
-pub use session::{Block, Entry, Session, SessionError};
+pub use log::{Level, LogRecord};
+pub use session::{Block, Entry, Item, Session, SessionError};
 
 /// What a command returns: any error is shown to the user.
 pub type CommandResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
@@ -115,7 +119,7 @@ impl Interpreter {
     ///
     /// Returns the command's requests, which the frontend must carry out. The
     /// stream ends when the command finishes. If the command fails or panics,
-    /// its last request is a [`Request::Print`] of the error.
+    /// its last request is a [`Request::Log`] of the error.
     pub fn run(&self, line: &str) -> Result<Requests, Error> {
         let mut words = line.split_whitespace().map(str::to_owned);
         let name = words.next().ok_or(Error::Empty)?;
@@ -127,7 +131,10 @@ impl Interpreter {
         };
         let args: Vec<String> = words.collect();
         let (sender, receiver) = mpsc::unbounded();
-        let mut ctx = Context { sender };
+        let mut ctx = Context {
+            name: name.clone(),
+            sender,
+        };
         thread::Builder::new()
             .name(format!("hob command {name}"))
             .spawn(move || {
@@ -135,12 +142,23 @@ impl Interpreter {
                 {
                     Ok(Ok(())) => return,
                     Ok(Err(e)) => e.to_string(),
-                    Err(_) => "panicked".to_owned(),
+                    Err(panic) => match panic_message(&*panic) {
+                        Some(message) => format!("panicked: {message}"),
+                        None => "panicked".to_owned(),
+                    },
                 };
-                ctx.print(format!("{name}: {error}"));
+                ctx.error(error);
             })
             .map_err(Error::Spawn)?;
         Ok(Requests(receiver))
+    }
+}
+
+/// The message of a panic, if it has one (`panic!` with a message does).
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> Option<&str> {
+    match panic.downcast_ref::<&str>() {
+        Some(message) => Some(message),
+        None => panic.downcast_ref::<String>().map(String::as_str),
     }
 }
 
@@ -198,6 +216,8 @@ impl std::error::Error for Error {}
 /// How a command talks to the user. Its methods block the command's thread,
 /// not the frontend.
 pub struct Context {
+    /// The command's name, as the target of its log records.
+    name: String,
     sender: mpsc::UnboundedSender<Request>,
 }
 
@@ -206,6 +226,33 @@ impl Context {
     pub fn print(&self, message: impl Into<String>) {
         // If the frontend is gone, nobody would see it anyway.
         let _ = self.sender.unbounded_send(Request::Print(message.into()));
+    }
+
+    /// Logs an error: something failed. Returning an error from the command
+    /// logs it too.
+    pub fn error(&self, message: impl Into<String>) {
+        self.log(Level::Error, message);
+    }
+
+    /// Logs a warning: something may be wrong.
+    pub fn warn(&self, message: impl Into<String>) {
+        self.log(Level::Warn, message);
+    }
+
+    /// Logs something useful to know.
+    pub fn info(&self, message: impl Into<String>) {
+        self.log(Level::Info, message);
+    }
+
+    /// Logs something only useful for debugging. It isn't saved with the
+    /// session, and frontends may hide it.
+    pub fn debug(&self, message: impl Into<String>) {
+        self.log(Level::Debug, message);
+    }
+
+    fn log(&self, level: Level, message: impl Into<String>) {
+        let record = LogRecord::new(level, &self.name, message);
+        let _ = self.sender.unbounded_send(Request::Log(record));
     }
 
     /// Shows a frozen island, e.g. to present a result. Create it with
@@ -258,6 +305,8 @@ impl std::error::Error for ShowError {}
 pub enum Request {
     /// Show a message to the user.
     Print(String),
+    /// Show a log record to the user (and save it, unless it's ephemeral).
+    Log(LogRecord),
     /// Show a frozen island to the user.
     PrintIsland(FrozenIsland),
     /// Show an island, and reply with its outcome.
@@ -325,6 +374,15 @@ mod tests {
         }
     }
 
+    /// Waits for a log record; returns it as `level: message`.
+    fn logged(requests: &mut Requests) -> String {
+        match next(requests) {
+            Some(Request::Log(record)) => record.to_string(),
+            Some(_) => panic!("expected Log"),
+            None => panic!("expected Log, but the command finished"),
+        }
+    }
+
     fn printed(requests: &mut Requests) -> String {
         match next(requests) {
             Some(Request::Print(message)) => message,
@@ -374,11 +432,28 @@ mod tests {
     }
 
     #[test]
-    fn errors_and_panics_are_printed() {
+    fn errors_and_panics_are_logged() {
         let mut requests = interpreter().run("fail").unwrap();
-        assert_eq!(printed(&mut requests), "fail: it broke");
+        assert_eq!(logged(&mut requests), "error: it broke");
         let mut requests = interpreter().run("panic").unwrap();
-        assert_eq!(printed(&mut requests), "panic: panicked");
+        assert_eq!(logged(&mut requests), "error: panicked: test panic");
+    }
+
+    #[test]
+    fn commands_log_with_their_name_as_target() {
+        let mut i = Interpreter::new();
+        i.register("chatty", |ctx, _| {
+            ctx.warn("careful");
+            ctx.debug("details");
+            Ok(())
+        });
+        let mut requests = i.run("chatty").unwrap();
+        let Some(Request::Log(warning)) = next(&mut requests) else {
+            panic!("expected Log");
+        };
+        assert_eq!((warning.level, &*warning.target), (Level::Warn, "chatty"));
+        assert!(!warning.ephemeral);
+        assert_eq!(logged(&mut requests), "debug: details");
     }
 
     #[test]

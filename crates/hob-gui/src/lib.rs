@@ -3,9 +3,14 @@
 //!
 //! The shell itself is plain iced. It works like a terminal: a scrollback,
 //! with a command prompt below it. Each command gets a block in the
-//! scrollback: its command line, then what it prints and the islands it
+//! scrollback: its command line, then what it prints, logs and the islands it
 //! shows, in order. A live island freezes in place once the user submits or
 //! cancels it.
+//!
+//! Log records that aren't from a command (from the shell itself, kettle-ui
+//! or dependencies, through the `log` crate) are added to the scrollback as
+//! notices; errors and warnings among them are shown. `HOB_LOG` sets the
+//! lowest level shown (`info` by default; `debug` shows debug records).
 //!
 //! The prompt works like a shell's: Up and Down browse the history, and Tab
 //! completes command names.
@@ -14,25 +19,36 @@
 //! and on exit, and restored on the next start. Commands still running on
 //! exit are marked as interrupted.
 
+mod logger;
+
 use std::fmt;
 use std::mem;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use hob_core::{History, Interpreter, Reply, Request, Session, SessionError};
+use hob_core::{History, Interpreter, Level, LogRecord, Reply, Request, Session, SessionError};
 use iced::keyboard::{self, key};
 use iced::widget::{Id, column, container, operation, rule, scrollable, text, text_input};
 use iced::{Element, Event, Font, Length, Subscription, Task, event, font, padding, window};
 use kettle_ui::FrozenIsland;
 use kettle_ui_iced::{Island, spacing, view_frozen};
 
+/// The target of the shell's own log records.
+const TARGET: &str = "hob_gui";
+
 /// Opens the main window, running commands with `interpreter`, and blocks
 /// until it closes. If `session` is given, the session is restored from that
 /// file, and saved to it.
 pub fn run(interpreter: Interpreter, session: Option<PathBuf>) -> iced::Result {
+    let level = log_level();
+    // The boot function is `Fn`, but it's only called once.
+    let records = Mutex::new(logger::install(level));
     let interpreter = Arc::new(interpreter);
     iced::application(
-        move || Shell::new(interpreter.clone(), session.clone()),
+        move || {
+            let records = records.lock().unwrap().take();
+            Shell::new(interpreter.clone(), session.clone(), level, records)
+        },
         Shell::update,
         Shell::view,
     )
@@ -44,6 +60,17 @@ pub fn run(interpreter: Interpreter, session: Option<PathBuf>) -> iced::Result {
     .run()
 }
 
+/// The lowest level shown, from `HOB_LOG`.
+fn log_level() -> Level {
+    match std::env::var("HOB_LOG") {
+        Ok(level) => level.parse().unwrap_or_else(|e| {
+            eprintln!("hob: ignoring HOB_LOG: {e}");
+            Level::Info
+        }),
+        Err(_) => Level::Info,
+    }
+}
+
 const PROMPT: &str = "prompt";
 
 struct Shell {
@@ -52,18 +79,29 @@ struct Shell {
     placeholder: String,
     /// Where the session is saved, if anywhere.
     session: Option<PathBuf>,
+    /// The last error saving the session, so it's reported only once.
+    save_error: Option<String>,
+    /// The lowest level of log records shown.
+    level: Level,
     prompt: String,
     history: History,
     /// Completions offered after Tab, shown below the prompt.
     candidates: Vec<String>,
-    /// The scrollback: one block per command line, oldest first.
-    blocks: Vec<Block>,
+    /// The scrollback, oldest first.
+    scrollback: Vec<Item>,
     /// For block and island ids.
     next_id: u64,
 }
 
 type BlockId = u64;
 type IslandId = u64;
+
+/// Something in the scrollback.
+enum Item {
+    Block(Block),
+    /// A log record that isn't from a command.
+    Notice(LogRecord),
+}
 
 /// A command line and its output.
 struct Block {
@@ -79,6 +117,7 @@ struct Block {
 /// Something a command showed.
 enum Entry {
     Text(String),
+    Log(LogRecord),
     Live {
         id: IslandId,
         island: Island,
@@ -105,6 +144,8 @@ enum Message {
     Island(IslandId, kettle_ui_iced::Message),
     /// The command of a block finished.
     Finished(BlockId),
+    /// A record from the `log` crate.
+    Log(LogRecord),
     CloseRequested,
 }
 
@@ -143,72 +184,103 @@ impl<T> fmt::Debug for Pending<T> {
 }
 
 impl Shell {
-    fn new(interpreter: Arc<Interpreter>, session: Option<PathBuf>) -> (Self, Task<Message>) {
+    fn new(
+        interpreter: Arc<Interpreter>,
+        session: Option<PathBuf>,
+        level: Level,
+        records: Option<futures_channel::mpsc::UnboundedReceiver<LogRecord>>,
+    ) -> (Self, Task<Message>) {
         let commands: Vec<_> = interpreter.commands().collect();
-        let restored = session
-            .as_deref()
-            .and_then(load_session)
-            .unwrap_or_default();
         let mut shell = Shell {
             placeholder: format!("Command ({})", commands.join(", ")),
             interpreter,
             session,
+            save_error: None,
+            level,
             prompt: String::new(),
-            history: History::from(restored.history),
+            history: History::new(),
             candidates: Vec::new(),
-            blocks: Vec::new(),
+            scrollback: Vec::new(),
             next_id: 0,
         };
-        for block in restored.blocks {
-            let id = shell.next_id();
-            let entries = (block.entries.into_iter())
-                .map(|entry| match entry {
-                    hob_core::Entry::Text(text) => Entry::Text(text),
-                    hob_core::Entry::Island(island) => Entry::Frozen(island),
-                    hob_core::Entry::Unreadable { error, raw } => Entry::Unreadable { error, raw },
-                })
-                .collect();
-            shell.blocks.push(Block {
-                id,
-                line: block.line,
-                entries,
-                running: false,
-                interrupted: block.interrupted,
-            });
+        shell.restore();
+        let mut tasks = vec![operation::focus(Id::new(PROMPT))];
+        if let Some(records) = records {
+            tasks.push(Task::run(records, Message::Log));
         }
-        (shell, operation::focus(Id::new(PROMPT)))
+        (shell, Task::batch(tasks))
+    }
+
+    /// Restores the saved session, if there is one. Errors are reported; a
+    /// file with bad contents is moved aside, so it isn't overwritten.
+    fn restore(&mut self) {
+        let Some(path) = self.session.clone() else {
+            return;
+        };
+        let restored = match Session::load(&path) {
+            Ok(Some(session)) => session,
+            Ok(None) => return,
+            Err(e) => {
+                let mut message =
+                    format!("Couldn't restore the session from {}: {e}", path.display());
+                // The file was read, but its contents are no good.
+                if !matches!(e, SessionError::Io(_)) {
+                    match move_aside(&path) {
+                        Ok(aside) => message += &format!("; moved it to {}", aside.display()),
+                        Err(e) => message += &format!("; couldn't move it aside: {e}"),
+                    }
+                }
+                eprintln!("hob: {message}");
+                self.scrollback
+                    .push(Item::Notice(LogRecord::new(Level::Error, TARGET, message)));
+                return;
+            }
+        };
+        self.history = History::from(restored.history);
+        for item in restored.scrollback {
+            let item = match item {
+                hob_core::Item::Block(block) => Item::Block(Block {
+                    id: self.next_id(),
+                    line: block.line,
+                    entries: block.entries.into_iter().map(Entry::restore).collect(),
+                    running: false,
+                    interrupted: block.interrupted,
+                }),
+                hob_core::Item::Notice(record) => Item::Notice(record),
+            };
+            self.scrollback.push(item);
+        }
     }
 
     /// Saves the history and scrollback, with live islands frozen as they are
-    /// now. Errors are reported on stderr.
-    fn save(&self) {
+    /// now, and without ephemeral log records.
+    ///
+    /// An error is shown once, as an ephemeral notice: it can't be saved,
+    /// and saving it mustn't cause another save.
+    fn save(&mut self) {
         let Some(path) = &self.session else {
             return;
         };
-        let blocks = (self.blocks.iter())
-            .map(|block| hob_core::Block {
-                line: block.line.clone(),
-                entries: (block.entries.iter())
-                    .map(|entry| match entry {
-                        Entry::Text(text) => hob_core::Entry::Text(text.clone()),
-                        Entry::Live { island, .. } => hob_core::Entry::Island(island.freeze()),
-                        Entry::Frozen(island) => hob_core::Entry::Island(island.clone()),
-                        Entry::Unreadable { error, raw } => hob_core::Entry::Unreadable {
-                            error: error.clone(),
-                            raw: raw.clone(),
-                        },
-                    })
-                    .collect(),
-                interrupted: block.running || block.interrupted,
-            })
-            .collect();
         let session = Session {
             history: self.history.lines().to_vec(),
-            blocks,
+            scrollback: self.scrollback.iter().map(Item::to_saved).collect(),
         };
-        if let Err(e) = session.save(path) {
-            eprintln!("hob: couldn't save the session to {}: {e}", path.display());
-        }
+        let notice = match session.save(path) {
+            Ok(()) => match self.save_error.take() {
+                Some(_) => LogRecord::new(Level::Info, TARGET, "Saving the session works again."),
+                None => return,
+            },
+            Err(e) => {
+                let message = format!("Couldn't save the session to {}: {e}", path.display());
+                if self.save_error.as_ref() == Some(&message) {
+                    return;
+                }
+                eprintln!("hob: {message}");
+                self.save_error = Some(message.clone());
+                LogRecord::new(Level::Error, TARGET, message).ephemeral()
+            }
+        };
+        self.scrollback.push(Item::Notice(notice));
     }
 
     fn next_id(&mut self) -> u64 {
@@ -241,18 +313,29 @@ impl Shell {
             Message::PromptKeyFocused(key) => self.prompt_key(key),
             Message::Request(block, request) => match request.take() {
                 Some(request) => {
+                    let ephemeral = matches!(&request, Request::Log(r) if r.ephemeral);
                     let task = self.handle(block, request);
-                    self.save();
+                    if !ephemeral {
+                        self.save();
+                    }
                     task
                 }
                 None => Task::none(),
             },
             Message::Island(id, message) => self.update_island(id, message),
             Message::Finished(id) => {
-                if let Some(block) = self.blocks.iter_mut().find(|b| b.id == id) {
+                if let Some(block) = self.block_mut(id) {
                     block.running = false;
                 }
                 self.save();
+                Task::none()
+            }
+            Message::Log(record) => {
+                let ephemeral = record.ephemeral;
+                self.scrollback.push(Item::Notice(record));
+                if !ephemeral {
+                    self.save();
+                }
                 Task::none()
             }
             Message::CloseRequested => {
@@ -260,6 +343,13 @@ impl Shell {
                 iced::exit()
             }
         }
+    }
+
+    fn block_mut(&mut self, id: BlockId) -> Option<&mut Block> {
+        self.scrollback.iter_mut().find_map(|item| match item {
+            Item::Block(block) if block.id == id => Some(block),
+            _ => None,
+        })
     }
 
     fn run_prompt(&mut self) -> Task<Message> {
@@ -285,11 +375,12 @@ impl Shell {
                     .chain(Task::done(Message::Finished(id)))
             }
             Err(e) => {
-                block.entries.push(Entry::Text(e.to_string()));
+                let record = LogRecord::new(Level::Error, TARGET, e.to_string());
+                block.entries.push(Entry::Log(record));
                 Task::none()
             }
         };
-        self.blocks.push(block);
+        self.scrollback.push(Item::Block(block));
         task
     }
 
@@ -335,7 +426,7 @@ impl Shell {
 
     fn handle(&mut self, block: BlockId, request: Request) -> Task<Message> {
         let island_id = self.next_id();
-        let Some(block) = self.blocks.iter_mut().find(|b| b.id == block) else {
+        let Some(block) = self.block_mut(block) else {
             return Task::none();
         };
         let entry = match request {
@@ -343,6 +434,12 @@ impl Shell {
                 // Also on stdout, e.g. for scripts.
                 println!("{message}");
                 Entry::Text(message)
+            }
+            Request::Log(record) => {
+                if record.level <= Level::Warn {
+                    eprintln!("hob: {}: {record}", record.target);
+                }
+                Entry::Log(record)
             }
             Request::PrintIsland(island) => Entry::Frozen(island),
             Request::Show(show) => {
@@ -368,10 +465,11 @@ impl Shell {
     }
 
     fn update_island(&mut self, id: IslandId, message: kettle_ui_iced::Message) -> Task<Message> {
-        let entry = self
-            .blocks
-            .iter_mut()
-            .flat_map(|b| &mut b.entries)
+        let entry = (self.scrollback.iter_mut())
+            .flat_map(|item| match item {
+                Item::Block(block) => &mut block.entries[..],
+                Item::Notice(_) => &mut [],
+            })
             .find(|e| matches!(e, Entry::Live { id: i, .. } if *i == id));
         // Messages can still arrive for an island that was just frozen.
         let Some(entry) = entry else {
@@ -392,7 +490,15 @@ impl Shell {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let scrollback = column(self.blocks.iter().map(view_block)).spacing(2.0 * spacing());
+        let items = self.scrollback.iter().filter_map(|item| match item {
+            Item::Block(block) => Some(view_block(block, self.level)),
+            // Notices below warnings are kept, but not shown.
+            Item::Notice(record) if record.level <= Level::Warn.min(self.level) => {
+                Some(view_record(record))
+            }
+            Item::Notice(_) => None,
+        });
+        let scrollback = column(items).spacing(2.0 * spacing());
 
         let prompt = text_input(&self.placeholder, &self.prompt)
             .id(Id::new(PROMPT))
@@ -421,8 +527,46 @@ impl Shell {
     }
 }
 
+impl Item {
+    /// The item as saved; live islands are frozen as they are now.
+    fn to_saved(&self) -> hob_core::Item {
+        match self {
+            Item::Block(block) => hob_core::Item::Block(hob_core::Block {
+                line: block.line.clone(),
+                entries: block.entries.iter().map(Entry::to_saved).collect(),
+                interrupted: block.running || block.interrupted,
+            }),
+            Item::Notice(record) => hob_core::Item::Notice(record.clone()),
+        }
+    }
+}
+
+impl Entry {
+    fn restore(entry: hob_core::Entry) -> Self {
+        match entry {
+            hob_core::Entry::Text(text) => Entry::Text(text),
+            hob_core::Entry::Log(record) => Entry::Log(record),
+            hob_core::Entry::Island(island) => Entry::Frozen(island),
+            hob_core::Entry::Unreadable { error, raw } => Entry::Unreadable { error, raw },
+        }
+    }
+
+    fn to_saved(&self) -> hob_core::Entry {
+        match self {
+            Entry::Text(text) => hob_core::Entry::Text(text.clone()),
+            Entry::Log(record) => hob_core::Entry::Log(record.clone()),
+            Entry::Live { island, .. } => hob_core::Entry::Island(island.freeze()),
+            Entry::Frozen(island) => hob_core::Entry::Island(island.clone()),
+            Entry::Unreadable { error, raw } => hob_core::Entry::Unreadable {
+                error: error.clone(),
+                raw: raw.clone(),
+            },
+        }
+    }
+}
+
 /// Moves a file to `<path>.bad`, and returns the new path.
-fn move_aside(path: &std::path::Path) -> std::io::Result<PathBuf> {
+fn move_aside(path: &Path) -> std::io::Result<PathBuf> {
     let mut aside = path.as_os_str().to_owned();
     aside.push(".bad");
     let aside = PathBuf::from(aside);
@@ -430,7 +574,8 @@ fn move_aside(path: &std::path::Path) -> std::io::Result<PathBuf> {
     Ok(aside)
 }
 
-fn view_block(block: &Block) -> Element<'_, Message> {
+/// Shows a block; log records below `level` are hidden.
+fn view_block(block: &Block, level: Level) -> Element<'_, Message> {
     let bold = Font {
         weight: font::Weight::Bold,
         ..Font::DEFAULT
@@ -440,10 +585,13 @@ fn view_block(block: &Block) -> Element<'_, Message> {
             .style(text::secondary)
             .into()
     });
-    let entries = column(block.entries.iter().map(view_entry).chain(note)).spacing(spacing());
+    let entries = (block.entries.iter())
+        .filter(|entry| !matches!(entry, Entry::Log(r) if r.level > level))
+        .map(view_entry)
+        .chain(note);
     column([
         text(format!("> {}", block.line)).font(bold).into(),
-        container(entries)
+        container(column(entries).spacing(spacing()))
             .padding(padding::left(2.0 * spacing()))
             .into(),
     ])
@@ -454,6 +602,7 @@ fn view_block(block: &Block) -> Element<'_, Message> {
 fn view_entry(entry: &Entry) -> Element<'_, Message> {
     match entry {
         Entry::Text(message) => text(message).into(),
+        Entry::Log(record) => view_record(record),
         Entry::Live { id, island, .. } => {
             let id = *id;
             island.view().map(move |m| Message::Island(id, m))
@@ -465,22 +614,13 @@ fn view_entry(entry: &Entry) -> Element<'_, Message> {
     }
 }
 
-/// Loads the saved session, if there is one. Errors are reported on stderr; a
-/// file with bad contents is moved aside, so it isn't overwritten.
-fn load_session(path: &std::path::Path) -> Option<Session> {
-    match Session::load(path) {
-        Ok(session) => session,
-        Err(e) => {
-            let mut message = format!("Couldn't restore the session from {}: {e}", path.display());
-            // The file was read, but its contents are no good.
-            if !matches!(e, SessionError::Io(_)) {
-                match move_aside(&path) {
-                    Ok(aside) => message += &format!("; moved it to {}", aside.display()),
-                    Err(e) => message += &format!("; couldn't move it aside: {e}"),
-                }
-            }
-            eprintln!("hob: {message}");
-            None
-        }
-    }
+/// Shows a log record as `level: message`, coloured by level.
+fn view_record(record: &LogRecord) -> Element<'_, Message> {
+    let style = match record.level {
+        Level::Error => text::danger,
+        Level::Warn => text::warning,
+        Level::Info => text::default,
+        Level::Debug => text::secondary,
+    };
+    text(record.to_string()).style(style).into()
 }

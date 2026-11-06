@@ -16,6 +16,7 @@ fn rest(requests: BlockingStream<Requests>) -> Vec<String> {
     requests
         .map(|request| match request {
             Request::Print(message) => message,
+            Request::Log(record) => record.to_string(),
             Request::PrintIsland(island) => outline(&island),
             Request::Show(_) => panic!("unexpected Show"),
         })
@@ -42,15 +43,28 @@ fn echo() {
 #[test]
 fn count() {
     assert_eq!(rest(run("count 3")), ["1", "2", "3"]);
-    assert_eq!(rest(run("count x")), [r#"count: not a number: "x""#]);
-    assert_eq!(rest(run("count 1 2")), ["count: usage: count [N]"]);
+    assert_eq!(rest(run("count x")), [r#"error: not a number: "x""#]);
+    assert_eq!(rest(run("count 1 2")), ["error: usage: count [N]"]);
 }
 
 #[test]
 fn errors() {
-    assert_eq!(rest(run("fail oh no")), ["About to fail…", "fail: oh no"]);
-    assert_eq!(rest(run("panic")), ["panic: panicked"]);
-    assert_eq!(rest(run("contact x")), ["contact: takes no arguments"]);
+    assert_eq!(rest(run("fail oh no")), ["About to fail…", "error: oh no"]);
+    assert_eq!(rest(run("panic")), ["error: panicked: the demo panicked"]);
+    assert_eq!(rest(run("contact x")), ["error: takes no arguments"]);
+}
+
+#[test]
+fn levels() {
+    assert_eq!(
+        rest(run("levels")),
+        [
+            "error: an error",
+            "warning: a warning",
+            "info: some information",
+            "debug: a debug message (hidden unless HOB_LOG=debug)"
+        ]
+    );
 }
 
 #[test]
@@ -60,7 +74,7 @@ fn invalid() {
     let printed = rest(requests);
     assert_eq!(printed.len(), 1);
     assert!(
-        printed[0].starts_with("invalid: invalid island: "),
+        printed[0].starts_with("error: invalid island: "),
         "{printed:?}"
     );
 }
