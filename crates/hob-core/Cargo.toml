@@ -16,5 +16,6 @@ futures-channel.workspace = true
 futures-core.workspace = true
 jiff.workspace = true
 kettle-ui.workspace = true
+log = { workspace = true, features = ["std"] }
 serde.workspace = true
 serde_json.workspace = true

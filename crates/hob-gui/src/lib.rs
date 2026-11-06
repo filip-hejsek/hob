@@ -23,8 +23,6 @@
 //! and on exit, and restored on the next start. Commands still running on
 //! exit are marked as interrupted.
 
-mod logger;
-
 use std::fmt;
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -50,9 +48,9 @@ pub fn run(
     placeholder: impl Into<String>,
 ) -> iced::Result {
     let placeholder = placeholder.into();
-    let level = log_level();
+    let level = hob_core::logger::level_from_env();
     // The boot function is `Fn`, but it's only called once.
-    let records = Mutex::new(logger::install(level));
+    let records = Mutex::new(hob_core::logger::install(level));
     let interpreter = Arc::new(interpreter);
     iced::application(
         move || {
@@ -74,17 +72,6 @@ pub fn run(
     .title("hob")
     .window_size((640.0, 560.0))
     .run()
-}
-
-/// The lowest level shown, from `HOB_LOG`.
-fn log_level() -> Level {
-    match std::env::var("HOB_LOG") {
-        Ok(level) => level.parse().unwrap_or_else(|e| {
-            eprintln!("hob: ignoring HOB_LOG: {e}");
-            Level::Info
-        }),
-        Err(_) => Level::Info,
-    }
 }
 
 const PROMPT: &str = "prompt";
@@ -619,7 +606,7 @@ fn move_aside(path: &Path) -> std::io::Result<PathBuf> {
 /// Whether a notice is shown in the scrollback: errors, and warnings from our
 /// crates, at most down to `level`.
 fn shows_notice(record: &LogRecord, level: Level) -> bool {
-    let lowest = match logger::is_ours(&record.target) {
+    let lowest = match hob_core::logger::is_ours(&record.target) {
         true => Level::Warn,
         false => Level::Error,
     };

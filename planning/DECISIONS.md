@@ -87,9 +87,9 @@ and renders the island as an indented text outline.
   command's block. A command's returned error or panic (with its message)
   is logged as an error.
 - Everything else uses the `log` crate (nearly all dependencies do; winit's
-  `tracing` events reach it too). hob-gui's backend turns records into
-  notices in the scrollback, outside any block. Errors and warnings also go
-  to stderr. Not `tracing`: spans aren't needed, since commands log through
+  `tracing` events reach it too). A backend in hob-core (`hob_core::logger`)
+  hands the records to the frontend; hob-gui turns them into notices in the
+  scrollback, outside any block. Errors and warnings also go to stderr. Not `tracing`: spans aren't needed, since commands log through
   their context.
 - Our crates log from `info` up (`HOB_LOG` changes the level), dependencies
   from warnings up. Only error and warning notices are shown in the

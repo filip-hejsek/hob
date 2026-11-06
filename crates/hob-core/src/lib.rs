@@ -32,7 +32,8 @@
 
 pub mod builtins;
 mod history;
-mod log;
+pub mod logger;
+mod record;
 mod session;
 
 use std::collections::BTreeMap;
@@ -48,7 +49,7 @@ use futures_core::Stream;
 use kettle_ui::{FrozenIsland, IslandBuilder, Outcome};
 
 pub use history::History;
-pub use log::{Level, LogRecord};
+pub use record::{Level, LogRecord};
 pub use session::{Block, Entry, Item, Session, SessionError};
 
 /// What a command returns: any error is shown to the user.

@@ -1,13 +1,14 @@
-//! A `log` backend that sends records to the shell, which shows them as
-//! notices.
+//! A [`log`] backend for frontends: it sends the records of the `log` crate
+//! (from kettle-ui, the frontend itself, and dependencies) to the frontend,
+//! as [`LogRecord`]s.
 
 use std::collections::HashSet;
 use std::sync::Mutex;
 
+use crate::{Level, LogRecord};
 use futures_channel::mpsc;
-use hob_core::{Level, LogRecord};
 
-/// Sends [`log`] records to the shell. Records of our crates are logged
+/// Sends [`log`] records to the frontend. Records of our crates are logged
 /// from `level` up; records of dependencies only from warnings up, and they
 /// are ephemeral, and logged only once. Errors and warnings also go to stderr.
 struct Logger {
@@ -19,7 +20,7 @@ struct Logger {
 
 /// Installs the logger, if no other logger is installed yet. Returns the
 /// records it receives.
-pub(crate) fn install(level: Level) -> Option<mpsc::UnboundedReceiver<LogRecord>> {
+pub fn install(level: Level) -> Option<mpsc::UnboundedReceiver<LogRecord>> {
     let (sender, receiver) = mpsc::unbounded();
     let logger = Logger {
         level,
@@ -31,12 +32,25 @@ pub(crate) fn install(level: Level) -> Option<mpsc::UnboundedReceiver<LogRecord>
     Some(receiver)
 }
 
-/// Whether a target (module path) is in one of our crates.
-pub(crate) fn is_ours(target: &str) -> bool {
+/// Whether a target (module path) is in one of our crates (hob and
+/// kettle-ui ones).
+pub fn is_ours(target: &str) -> bool {
     let krate = target.split("::").next().unwrap_or(target);
     ["hob", "kettle_ui"]
         .iter()
         .any(|ours| krate == *ours || krate.strip_prefix(ours).is_some_and(|r| r.starts_with('_')))
+}
+
+/// The lowest level logged for our crates, from the `HOB_LOG` environment
+/// variable; `info` if it isn't set or is invalid.
+pub fn level_from_env() -> Level {
+    match std::env::var("HOB_LOG") {
+        Ok(level) => level.parse().unwrap_or_else(|e| {
+            eprintln!("hob: ignoring HOB_LOG: {e}");
+            Level::Info
+        }),
+        Err(_) => Level::Info,
+    }
 }
 
 fn level(level: log::Level) -> Level {
