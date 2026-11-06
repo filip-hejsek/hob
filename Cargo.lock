@@ -1153,17 +1153,28 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 name = "hob"
 version = "0.1.0"
 dependencies = [
+ "hob-core",
  "hob-gui",
  "iced",
+ "kettle-ui",
+ "kettle-ui-demo",
+]
+
+[[package]]
+name = "hob-core"
+version = "0.1.0"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "kettle-ui",
 ]
 
 [[package]]
 name = "hob-gui"
 version = "0.1.0"
 dependencies = [
+ "hob-core",
  "iced",
- "kettle-ui",
- "kettle-ui-demo",
  "kettle-ui-iced",
 ]
 

@@ -20,6 +20,7 @@ unsafe_code = "deny"
 dbg_macro = "warn"
 
 [workspace.dependencies]
+hob-core = { path = "crates/hob-core" }
 hob-gui = { path = "crates/hob-gui" }
 kettle-ui = { path = "crates/kettle-ui" }
 kettle-ui-demo = { path = "crates/kettle-ui-demo" }

@@ -84,6 +84,17 @@ Open:
 - Show outdated values in the outline (relevant only if computations become
   asynchronous, e.g. for agents with timeouts).
 
+## hob-core (command interpreter)
+
+- Commands run on their own thread and block in `Context::show`. They may
+  become async later; blocking keeps it simple for now.
+- Command lines are split at whitespace; there's no quoting yet, so an
+  argument can't contain spaces.
+- A command error or panic is printed as `<command>: <error>`.
+
 ## hob-gui (shell)
 
+- Command output goes to the status line, which shows only the latest
+  message. A scrollback is planned, but needs building blocks that don't
+  exist yet.
 - Bug: the empty tab row and empty status line leave gaps.

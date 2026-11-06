@@ -6,13 +6,20 @@ Programming simple interactions in a terminal is easy: print a question, read
 a response. One goal of this project is to make simple GUI interactions just as
 easy.
 
-The UI is split into two parts:
+The user runs commands from a prompt. A command talks to the user like a
+terminal program does: it prints messages, and instead of reading a line, it
+shows a piece of UI and waits for the user to submit it.
 
-- **hob-gui** — the shell: owns the main window and hosts islands.
+The project is split into these parts:
+
+- **hob-core** — the command interpreter. It is toolkit-independent.
+- **hob-gui** — the shell: owns the main window, has the command prompt and
+  hosts islands.
 - **kettle-ui** — a deliberately small UI framework for *islands*: pieces of
   UI embedded in the shell. It is toolkit-independent; **kettle-ui-iced**
   renders it with iced, and **kettle-ui-headless** drives it without a GUI,
   for tests and (later) agents.
+- **hob** — the application: registers the commands and starts the shell.
 
 Run it with:
 

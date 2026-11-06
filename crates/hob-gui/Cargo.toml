@@ -12,7 +12,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+hob-core.workspace = true
 iced.workspace = true
-kettle-ui.workspace = true
-kettle-ui-demo.workspace = true
 kettle-ui-iced.workspace = true
