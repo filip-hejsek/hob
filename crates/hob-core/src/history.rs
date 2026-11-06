@@ -17,6 +17,11 @@ impl History {
         Self::default()
     }
 
+    /// The entered lines, oldest first.
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
     /// Adds an entered line, and stops browsing. Blank lines and repeats of
     /// the previous line are skipped.
     pub fn push(&mut self, line: &str) {
@@ -59,6 +64,16 @@ impl History {
         } else {
             self.position = None;
             Some(&self.draft)
+        }
+    }
+}
+
+impl From<Vec<String>> for History {
+    /// A history of these lines, oldest first, e.g. from a saved session.
+    fn from(lines: Vec<String>) -> Self {
+        History {
+            lines,
+            ..Self::default()
         }
     }
 }

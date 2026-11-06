@@ -127,6 +127,11 @@ Works like a terminal: a scrollback with the prompt below it. Decisions:
 - The scrollback sticks to the bottom while it's scrolled there.
 - A line with an unknown command is still added, with the error.
 - What commands print also goes to stdout.
+- The session (history and scrollback) is saved as versioned JSON after every
+  change to the scrollback and on window close, and restored on start. Live
+  islands are saved frozen, as they are at that moment. The file is in the
+  platform state directory (`HOB_SESSION` overrides it); writes are atomic,
+  and a file that can't be read is moved aside to `*.bad`.
 - The prompt has history (Up/Down; the line being typed is kept as a draft)
   and Tab completion of command names: unambiguous part completed, the
   candidates listed below the prompt if there are several. Both live in
@@ -136,8 +141,14 @@ Open:
 
 - Focus: nothing moves focus to a newly shown island, or back to the prompt
   afterwards.
-- The scrollback grows without limit.
-- History isn't saved across sessions.
+- The scrollback grows without limit, and so does the session file, which
+  is rewritten in full on every change.
+- Edits in a live island are only saved on close (or with the next
+  scrollback change), so a crash loses them.
+- Restored islands of commands that were still running look the same as
+  finished ones; maybe mark them as interrupted.
+- Errors loading or saving the session only go to stderr.
+- A NaN number can't be saved (JSON has no NaN), which makes saving fail.
 - Completion works only at the end of the line (iced doesn't tell the app
   where the cursor is; see ICED_WISHLIST.md), and doesn't complete
   arguments: commands would need a way to say what they accept.

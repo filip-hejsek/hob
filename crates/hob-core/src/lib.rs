@@ -9,7 +9,8 @@
 //!
 //! A frontend (such as `hob-gui`) carries out these [`Request`]s. For its
 //! prompt, there's a [`History`] of entered lines and
-//! [completion](Interpreter::complete).
+//! [completion](Interpreter::complete), and a [`Session`] to save and
+//! restore across restarts.
 //!
 //! ```
 //! use hob_core::Interpreter;
@@ -24,6 +25,7 @@
 //! ```
 
 mod history;
+mod session;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -38,6 +40,7 @@ use futures_core::Stream;
 use kettle_ui::{FrozenIsland, IslandBuilder, Outcome};
 
 pub use history::History;
+pub use session::{Block, Entry, Session, SessionError};
 
 /// What a command returns: any error is shown to the user.
 pub type CommandResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;

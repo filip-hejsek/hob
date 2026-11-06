@@ -27,6 +27,10 @@ Run it with:
 cargo run
 ```
 
+The history and scrollback are restored on the next start. They're saved in
+the platform's state directory (e.g. `~/.local/state/hob/session.json`); set
+`HOB_SESSION` to use another file.
+
 Early prototype; expect everything to change.
 
 ## License

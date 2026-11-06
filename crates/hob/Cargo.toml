@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+dirs.workspace = true
 hob-core.workspace = true
 hob-gui.workspace = true
 iced.workspace = true

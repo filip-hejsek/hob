@@ -9,28 +9,35 @@
 //!
 //! The prompt works like a shell's: Up and Down browse the history, and Tab
 //! completes command names.
+//!
+//! The history and scrollback are saved as a [`Session`] after every change
+//! and on exit, and restored on the next start.
 
 use std::fmt;
 use std::mem;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use hob_core::{History, Interpreter, Reply, Request};
+use hob_core::{History, Interpreter, Reply, Request, Session};
 use iced::keyboard::{self, key};
 use iced::widget::{Id, column, container, operation, rule, scrollable, text, text_input};
-use iced::{Element, Event, Font, Length, Subscription, Task, event, font, padding};
+use iced::{Element, Event, Font, Length, Subscription, Task, event, font, padding, window};
 use kettle_ui::FrozenIsland;
 use kettle_ui_iced::{Island, spacing, view_frozen};
 
 /// Opens the main window, running commands with `interpreter`, and blocks
-/// until it closes.
-pub fn run(interpreter: Interpreter) -> iced::Result {
+/// until it closes. If `session` is given, the session is restored from that
+/// file, and saved to it.
+pub fn run(interpreter: Interpreter, session: Option<PathBuf>) -> iced::Result {
     let interpreter = Arc::new(interpreter);
     iced::application(
-        move || Shell::new(interpreter.clone()),
+        move || Shell::new(interpreter.clone(), session.clone()),
         Shell::update,
         Shell::view,
     )
     .subscription(Shell::subscription)
+    // Save the session before exiting.
+    .exit_on_close_request(false)
     .title("hob")
     .window_size((640.0, 560.0))
     .run()
@@ -42,9 +49,11 @@ struct Shell {
     interpreter: Arc<Interpreter>,
     /// Lists the commands, as a hint.
     placeholder: String,
+    /// Where the session is saved, if anywhere.
+    session: Option<PathBuf>,
     prompt: String,
     history: History,
-    /// Completions offered after Tab, shown above the prompt.
+    /// Completions offered after Tab, shown below the prompt.
     candidates: Vec<String>,
     /// The scrollback: one block per command line, oldest first.
     blocks: Vec<Block>,
@@ -84,6 +93,7 @@ enum Message {
     /// A request from the command of a block.
     Request(BlockId, Pending<Request>),
     Island(IslandId, kettle_ui_iced::Message),
+    CloseRequested,
 }
 
 /// A key the prompt handles that iced's text input doesn't.
@@ -121,18 +131,64 @@ impl<T> fmt::Debug for Pending<T> {
 }
 
 impl Shell {
-    fn new(interpreter: Arc<Interpreter>) -> (Self, Task<Message>) {
+    fn new(interpreter: Arc<Interpreter>, session: Option<PathBuf>) -> (Self, Task<Message>) {
         let commands: Vec<_> = interpreter.commands().collect();
-        let shell = Shell {
+        let restored = session
+            .as_deref()
+            .and_then(load_session)
+            .unwrap_or_default();
+        let mut shell = Shell {
             placeholder: format!("Command ({})", commands.join(", ")),
             interpreter,
+            session,
             prompt: String::new(),
-            history: History::new(),
+            history: History::from(restored.history),
             candidates: Vec::new(),
             blocks: Vec::new(),
             next_id: 0,
         };
+        for block in restored.blocks {
+            let id = shell.next_id();
+            let entries = (block.entries.into_iter())
+                .map(|entry| match entry {
+                    hob_core::Entry::Text(text) => Entry::Text(text),
+                    hob_core::Entry::Island(island) => Entry::Frozen(island),
+                })
+                .collect();
+            shell.blocks.push(Block {
+                id,
+                line: block.line,
+                entries,
+            });
+        }
         (shell, operation::focus(Id::new(PROMPT)))
+    }
+
+    /// Saves the history and scrollback, with live islands frozen as they are
+    /// now. Errors are reported on stderr.
+    fn save(&self) {
+        let Some(path) = &self.session else {
+            return;
+        };
+        let blocks = (self.blocks.iter())
+            .map(|block| hob_core::Block {
+                line: block.line.clone(),
+                entries: (block.entries.iter())
+                    .map(|entry| match entry {
+                        Entry::Text(text) => hob_core::Entry::Text(text.clone()),
+                        Entry::Live { island, .. } => hob_core::Entry::Island(island.freeze()),
+                        Entry::Frozen(island) => hob_core::Entry::Island(island.clone()),
+                    })
+                    .collect(),
+            })
+            .collect();
+        let session = Session {
+            history: self.history.lines().to_vec(),
+            blocks,
+        };
+        if let Err(e) = session.save(path) {
+            eprintln!("hob: couldn't save the session to {}: {e}", path.display());
+        }
     }
 
     fn next_id(&mut self) -> u64 {
@@ -148,7 +204,11 @@ impl Shell {
                 self.candidates.clear();
                 Task::none()
             }
-            Message::PromptSubmitted => self.run_prompt(),
+            Message::PromptSubmitted => {
+                let task = self.run_prompt();
+                self.save();
+                task
+            }
             Message::PromptKey(key) => {
                 operation::is_focused(Id::new(PROMPT)).then(move |focused| {
                     if focused {
@@ -160,10 +220,18 @@ impl Shell {
             }
             Message::PromptKeyFocused(key) => self.prompt_key(key),
             Message::Request(block, request) => match request.take() {
-                Some(request) => self.handle(block, request),
+                Some(request) => {
+                    let task = self.handle(block, request);
+                    self.save();
+                    task
+                }
                 None => Task::none(),
             },
             Message::Island(id, message) => self.update_island(id, message),
+            Message::CloseRequested => {
+                self.save();
+                iced::exit()
+            }
         }
     }
 
@@ -212,7 +280,8 @@ impl Shell {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(|event, _status, _window| {
+        let close = window::close_requests().map(|_| Message::CloseRequested);
+        let keys = event::listen_with(|event, _status, _window| {
             let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event else {
                 return None;
             };
@@ -226,7 +295,8 @@ impl Shell {
                 _ => return None,
             };
             Some(Message::PromptKey(key))
-        })
+        });
+        Subscription::batch([close, keys])
     }
 
     fn handle(&mut self, block: BlockId, request: Request) -> Task<Message> {
@@ -282,6 +352,7 @@ impl Shell {
             if let Entry::Live { reply, .. } = mem::replace(entry, frozen) {
                 reply.send(outcome);
             }
+            self.save();
         }
         task.map(move |m| Message::Island(id, m))
     }
@@ -340,5 +411,27 @@ fn view_entry(entry: &Entry) -> Element<'_, Message> {
             island.view().map(move |m| Message::Island(id, m))
         }
         Entry::Frozen(island) => view_frozen(island),
+    }
+}
+
+/// Loads the saved session, if there is one. A file that can't be read is
+/// reported on stderr and moved aside, so it isn't overwritten.
+fn load_session(path: &std::path::Path) -> Option<Session> {
+    match Session::load(path) {
+        Ok(session) => session,
+        Err(e) => {
+            let mut aside = path.as_os_str().to_owned();
+            aside.push(".bad");
+            let aside = PathBuf::from(aside);
+            let moved = match std::fs::rename(path, &aside) {
+                Ok(()) => format!("moved it to {}", aside.display()),
+                Err(e) => format!("couldn't move it aside: {e}"),
+            };
+            eprintln!(
+                "hob: couldn't restore the session from {}: {e}; {moved}",
+                path.display()
+            );
+            None
+        }
     }
 }

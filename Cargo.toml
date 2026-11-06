@@ -27,6 +27,7 @@ kettle-ui-demo = { path = "crates/kettle-ui-demo" }
 kettle-ui-headless = { path = "crates/kettle-ui-headless" }
 kettle-ui-iced = { path = "crates/kettle-ui-iced" }
 
+dirs = "7"
 futures-channel = "0.3"
 futures-core = "0.3"
 iced = "0.14"
