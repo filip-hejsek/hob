@@ -4,6 +4,9 @@ See README.md for what the project is. Plans, open questions and decisions
 already made are in TODO.md: check it before proposing design changes, and
 keep it up to date.
 
+When iced lacks something we need, add it to ICED_WISHLIST.md, with the
+workaround used.
+
 ## Architecture rules
 
 - `kettle-ui` must not depend on any GUI toolkit. Anything iced-specific

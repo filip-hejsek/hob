@@ -136,5 +136,5 @@ Open:
 - The scrollback grows without limit.
 - History isn't saved across sessions.
 - Completion works only at the end of the line (iced doesn't tell the app
-  where the cursor is), and doesn't complete arguments: commands would need
-  a way to say what they accept.
+  where the cursor is; see ICED_WISHLIST.md), and doesn't complete
+  arguments: commands would need a way to say what they accept.
