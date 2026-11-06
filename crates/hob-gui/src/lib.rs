@@ -19,7 +19,7 @@ use std::mem;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use hob_core::{History, Interpreter, Reply, Request, Session};
+use hob_core::{History, Interpreter, Reply, Request, Session, SessionError};
 use iced::keyboard::{self, key};
 use iced::widget::{Id, column, container, operation, rule, scrollable, text, text_input};
 use iced::{Element, Event, Font, Length, Subscription, Task, event, font, padding, window};
@@ -421,6 +421,15 @@ impl Shell {
     }
 }
 
+/// Moves a file to `<path>.bad`, and returns the new path.
+fn move_aside(path: &std::path::Path) -> std::io::Result<PathBuf> {
+    let mut aside = path.as_os_str().to_owned();
+    aside.push(".bad");
+    let aside = PathBuf::from(aside);
+    std::fs::rename(path, &aside)?;
+    Ok(aside)
+}
+
 fn view_block(block: &Block) -> Element<'_, Message> {
     let bold = Font {
         weight: font::Weight::Bold,
@@ -456,23 +465,21 @@ fn view_entry(entry: &Entry) -> Element<'_, Message> {
     }
 }
 
-/// Loads the saved session, if there is one. A file that can't be read is
-/// reported on stderr and moved aside, so it isn't overwritten.
+/// Loads the saved session, if there is one. Errors are reported on stderr; a
+/// file with bad contents is moved aside, so it isn't overwritten.
 fn load_session(path: &std::path::Path) -> Option<Session> {
     match Session::load(path) {
         Ok(session) => session,
         Err(e) => {
-            let mut aside = path.as_os_str().to_owned();
-            aside.push(".bad");
-            let aside = PathBuf::from(aside);
-            let moved = match std::fs::rename(path, &aside) {
-                Ok(()) => format!("moved it to {}", aside.display()),
-                Err(e) => format!("couldn't move it aside: {e}"),
-            };
-            eprintln!(
-                "hob: couldn't restore the session from {}: {e}; {moved}",
-                path.display()
-            );
+            let mut message = format!("Couldn't restore the session from {}: {e}", path.display());
+            // The file was read, but its contents are no good.
+            if !matches!(e, SessionError::Io(_)) {
+                match move_aside(&path) {
+                    Ok(aside) => message += &format!("; moved it to {}", aside.display()),
+                    Err(e) => message += &format!("; couldn't move it aside: {e}"),
+                }
+            }
+            eprintln!("hob: {message}");
             None
         }
     }
