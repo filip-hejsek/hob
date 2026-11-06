@@ -40,3 +40,6 @@ Don't use language or std features newer than that.
   item needs at least a one-line doc (`missing_docs` is on).
 - Commits: short imperative subject line; add a body only when the why
   isn't obvious.
+- Commit finished work without asking, once the checks pass; a commit can
+  be amended if more changes are needed. Don't push, unless you are in
+  a cloud session.
