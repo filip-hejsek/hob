@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use kettle_ui::widget::*;
-use kettle_ui::{Fields, IslandBuilder};
+use kettle_ui::{Fields, IslandBuilder, Value};
 
 const FRUITS: &[&str] = &[
     "apple",
@@ -93,6 +93,7 @@ fn fruit_search() -> IslandBuilder {
         label("Favourite fruit"),
         text_field("fruit", "Start typing…"),
         suggestions("matches", "fruit"),
+        label(state("no_matches")),
         row([submit_button("Choose"), cancel_button("Cancel")]),
     ]));
 
@@ -110,6 +111,14 @@ fn fruit_search() -> IslandBuilder {
             .map(|fruit| fruit.to_string())
             .collect::<Vec<_>>()
             .into()
+    });
+
+    // Waits for "matches" to be up to date, so it never disagrees with it.
+    builder.derive_with_state("no_matches", &["matches"], |i| match i.state("matches") {
+        Some(Value::List(m)) if m.is_empty() && !i.text("fruit").is_empty() => {
+            "No matching fruit".into()
+        }
+        _ => "".into(),
     });
 
     // Pretend the fruit list is loaded in the background.

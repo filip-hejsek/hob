@@ -7,30 +7,37 @@ come later.
 
 ### Dependency tracking for derived state
 
-Right now every derived value is recomputed after *any* field change, and
-each change starts a new computation even if one is still running (results
-of outdated ones are discarded). The plan:
+Done. Decisions:
 
-- **Track dependencies automatically.** Record every field a computation
-  reads, and recompute only when one of them changes. No boilerplate, and
-  precise even with conditional reads: if a checkbox decides whether a field
-  is read, that field is only a dependency while it matters.
-- **At most one computation in flight per derived value.** Computations run
-  asynchronously on a background thread, so fields can change while one is
-  running. Don't start another one then. Instead, each computation records
-  the values it read (a version ID or the value itself); when it finishes,
-  compare them with the current values and rerun if any differ.
-  - Open question: show the outdated result while the rerun is in progress?
-    For search-as-you-type, that would make results appear sooner.
-- **Dependencies on other derived values are declared upfront.** They also
-  determine the order in which derived values are computed.
-- A computation sees a *snapshot*, so the field values it reads are
-  consistent.
+- Field dependencies are tracked automatically: a computation recomputes
+  only when a field it read last time changes. Read fields are compared by
+  value, named state by version.
+- At most one computation in flight per derived value; when it finishes, it
+  reruns if anything it read has changed.
+- The outdated result is shown while the rerun is in progress (it's still
+  newer than what it replaces), so search-as-you-type results appear sooner.
+- Dependencies on named state are declared upfront
+  (`derive_with_state`) and may be derived or set state. A derived value
+  waits until the derived state it depends on is up to date.
+- A computation sees a snapshot of its inputs.
+- A panicking computation keeps the old value and is retried when its
+  inputs change.
 
 Rejected alternative: declaring field dependencies upfront, e.g.
 `derive("matches", &["fruit"], |f| ...)`. It's explicit, but it's
 boilerplate, the list can drift from what the function reads, and
 conditional reads must be over-declared.
+
+Open:
+
+- Option to highlight outdated values (being recomputed, or waiting for
+  derived state they depend on). `Model::is_outdated` already tells the
+  backend which they are.
+- What to do when a computation panics. For now, the old value stays until
+  one of the inputs read before the panic changes. Alternatives: show an
+  error in place of the value, or treat it as a bug and abort (at least in
+  strict mode, where reading undeclared state panics on purpose but is
+  currently caught like any other panic).
 
 ## Widgets
 

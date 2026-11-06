@@ -87,9 +87,9 @@ impl Island {
     /// Returns a task for the host to run, and an outcome if the user just
     /// submitted or cancelled.
     pub fn update(&mut self, Message(message): Message) -> (Task<Message>, Option<Outcome>) {
-        match message {
-            Msg::TextChanged(id, value) => return (run(self.model.set_text(&id, value)), None),
-            Msg::Toggled(id, value) => return (run(self.model.set_checked(&id, value)), None),
+        let jobs = match message {
+            Msg::TextChanged(id, value) => self.model.set_text(&id, value),
+            Msg::Toggled(id, value) => self.model.set_checked(&id, value),
             Msg::StateSet(update) => self.model.apply(update),
             Msg::Derived(result) => self.model.finish(result),
             Msg::Submit => {
@@ -97,8 +97,8 @@ impl Island {
                 return (Task::none(), Some(Outcome::Submitted(fields)));
             }
             Msg::Cancel => return (Task::none(), Some(Outcome::Cancelled)),
-        }
-        (Task::none(), None)
+        };
+        (run(jobs), None)
     }
 
     /// The island's UI. It doesn't scroll or add padding around itself; that's

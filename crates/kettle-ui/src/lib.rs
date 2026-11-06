@@ -15,7 +15,8 @@
 //! - Labels, progress bars and lists can show *named state*. Named state
 //!   either has an initial value ([`IslandBuilder::set_state`]) and can then be
 //!   updated from outside through a [`StateHandle`], or is *derived*: computed
-//!   from the current field values (e.g. search-as-you-type).
+//!   from the current field values (e.g. search-as-you-type), and possibly
+//!   from other named state ([`IslandBuilder::derive_with_state`]).
 //! - Mistakes in the tree (such as referencing named state that doesn't
 //!   exist) are reported by [`IslandBuilder::build`].
 //!
@@ -51,7 +52,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use futures_channel::mpsc;
 
-pub use model::{Built, Job, JobResult, Model, Outcome, StateUpdate, Updates};
+pub use model::{Built, Inputs, Job, JobResult, Model, Outcome, StateUpdate, Updates};
 
 use widget::{Kind, Text, Widget};
 
@@ -61,9 +62,12 @@ use widget::{Kind, Text, Widget};
 pub enum Error {
     /// Two form elements share this id.
     DuplicateField(String),
-    /// A widget references named state that has no initial value and isn't
-    /// derived.
+    /// A widget or derived state references named state that has no initial
+    /// value and isn't derived.
     UnknownState(String),
+    /// This derived state depends on itself, directly or through other
+    /// derived state.
+    DependencyCycle(String),
     /// This named state is derived more than once, or both derived and given
     /// an initial value.
     ConflictingState(String),
@@ -85,6 +89,9 @@ impl fmt::Display for Error {
                 f,
                 "named state {name:?} is derived more than once, or both derived and set"
             ),
+            Error::DependencyCycle(name) => {
+                write!(f, "derived state {name:?} depends on itself")
+            }
             Error::UnknownField(id) => write!(f, "no form element with id {id:?}"),
             Error::NotATextField(id) => write!(f, "form element {id:?} is not a text field"),
         }
@@ -142,7 +149,7 @@ impl From<Vec<String>> for Value {
 #[derive(Clone, Debug, Default)]
 pub struct Fields(HashMap<Arc<str>, Field>);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum Field {
     Text(String),
     Bool(bool),
@@ -163,14 +170,22 @@ impl Fields {
     }
 }
 
-type DeriveFn = Arc<dyn Fn(&Fields) -> Value + Send + Sync>;
+type DeriveFn = Arc<dyn Fn(&Inputs<'_>) -> Value + Send + Sync>;
+
+/// Derived state, as configured on the builder.
+struct DeriveSpec {
+    name: String,
+    /// The named state it may read.
+    deps: Vec<String>,
+    compute: DeriveFn,
+}
 
 /// Configures an island; create it with [`IslandBuilder::new`], then hand it
 /// to a backend (which calls [`IslandBuilder::build`]).
 pub struct IslandBuilder {
     root: Widget,
     state: HashMap<String, Value>,
-    derived: Vec<(String, DeriveFn)>,
+    derived: Vec<DeriveSpec>,
     /// Names that have an initial value, shared with every [`StateHandle`].
     settable: Arc<RwLock<HashSet<String>>>,
     sender: mpsc::UnboundedSender<StateUpdate>,
@@ -197,16 +212,36 @@ impl IslandBuilder {
         self.settable.write().unwrap().insert(name.to_owned());
     }
 
-    /// Makes named state a function of the current field values. It is
-    /// recomputed after every change, on a background thread, so it may be
-    /// slow (e.g. a search). Results that arrive after a newer change are
-    /// dropped.
+    /// Makes named state a function of the current field values.
+    ///
+    /// It's computed on a background thread, so it may be slow (e.g. a
+    /// search). The fields it reads are recorded, and it's recomputed only
+    /// when one of them changes. At most one computation runs at a time; if a
+    /// field it read changes meanwhile, it's rerun once it finishes (and the
+    /// outdated result is shown until then).
     pub fn derive(
         &mut self,
         name: &str,
-        compute: impl Fn(&Fields) -> Value + Send + Sync + 'static,
+        compute: impl Fn(&Inputs<'_>) -> Value + Send + Sync + 'static,
     ) {
-        self.derived.push((name.to_owned(), Arc::new(compute)));
+        self.derive_with_state(name, &[], compute);
+    }
+
+    /// Like [`derive`](IslandBuilder::derive), but the computation may also
+    /// read the named state in `state` (and no other). It's recomputed when
+    /// that changes too. If some of it is derived, it's computed first, and
+    /// this waits until it's up to date.
+    pub fn derive_with_state(
+        &mut self,
+        name: &str,
+        state: &[&str],
+        compute: impl Fn(&Inputs<'_>) -> Value + Send + Sync + 'static,
+    ) {
+        self.derived.push(DeriveSpec {
+            name: name.to_owned(),
+            deps: state.iter().map(|&s| s.to_owned()).collect(),
+            compute: Arc::new(compute),
+        });
     }
 
     /// A handle for setting named state from other threads while the island
@@ -223,8 +258,10 @@ impl IslandBuilder {
     /// work, the caller must run the returned jobs and deliver the updates
     /// (see [`Built`]).
     pub fn build(self) -> Result<Built, Error> {
-        let fields = self.check()?;
-        let (model, jobs) = Model::new(self.root, fields, self.state, self.derived);
+        let (fields, order) = self.check()?;
+        let mut derived: Vec<_> = self.derived.into_iter().map(Some).collect();
+        let derived = order.iter().map(|&i| derived[i].take().unwrap()).collect();
+        let (model, jobs) = Model::new(self.root, fields, self.state, derived);
         Ok(Built {
             model,
             jobs,
@@ -232,19 +269,68 @@ impl IslandBuilder {
         })
     }
 
-    /// Checks that everything the tree references exists. Returns the initial
-    /// (empty) field values.
-    fn check(&self) -> Result<Fields, Error> {
-        for (i, (name, _)) in self.derived.iter().enumerate() {
-            let derived_earlier = self.derived[..i].iter().any(|(n, _)| n == name);
-            if derived_earlier || self.state.contains_key(name) {
-                return Err(Error::ConflictingState(name.clone()));
+    /// Checks that everything the tree and derived state reference exists.
+    /// Returns the initial (empty) field values, and the order in which to
+    /// compute derived state (as indices into `self.derived`).
+    fn check(&self) -> Result<(Fields, Vec<usize>), Error> {
+        for (i, spec) in self.derived.iter().enumerate() {
+            let derived_earlier = self.derived[..i].iter().any(|d| d.name == spec.name);
+            if derived_earlier || self.state.contains_key(&spec.name) {
+                return Err(Error::ConflictingState(spec.name.clone()));
+            }
+            if let Some(dep) = spec.deps.iter().find(|d| !self.has_state(d)) {
+                return Err(Error::UnknownState(dep.clone()));
             }
         }
+        let order = self.dependency_order()?;
         let mut fields = Fields::default();
         collect_fields(&self.root, &mut fields)?;
         self.check_references(&self.root, &fields)?;
-        Ok(fields)
+        Ok((fields, order))
+    }
+
+    fn has_state(&self, name: &str) -> bool {
+        self.state.contains_key(name) || self.derived.iter().any(|d| d.name == name)
+    }
+
+    /// Orders derived state so that each comes after the derived state it
+    /// depends on.
+    fn dependency_order(&self) -> Result<Vec<usize>, Error> {
+        #[derive(Clone, Copy, PartialEq)]
+        enum Mark {
+            New,
+            Visiting,
+            Done,
+        }
+
+        fn visit(
+            i: usize,
+            derived: &[DeriveSpec],
+            marks: &mut [Mark],
+            order: &mut Vec<usize>,
+        ) -> Result<(), Error> {
+            match marks[i] {
+                Mark::Done => return Ok(()),
+                Mark::Visiting => return Err(Error::DependencyCycle(derived[i].name.clone())),
+                Mark::New => {}
+            }
+            marks[i] = Mark::Visiting;
+            for dep in &derived[i].deps {
+                if let Some(j) = derived.iter().position(|d| &d.name == dep) {
+                    visit(j, derived, marks, order)?;
+                }
+            }
+            marks[i] = Mark::Done;
+            order.push(i);
+            Ok(())
+        }
+
+        let mut marks = vec![Mark::New; self.derived.len()];
+        let mut order = Vec::with_capacity(self.derived.len());
+        for i in 0..self.derived.len() {
+            visit(i, &self.derived, &mut marks, &mut order)?;
+        }
+        Ok(order)
     }
 
     fn check_references(&self, widget: &Widget, fields: &Fields) -> Result<(), Error> {
@@ -267,7 +353,7 @@ impl IslandBuilder {
             }
             _ => return Ok(()),
         };
-        if self.state.contains_key(state) || self.derived.iter().any(|(n, _)| n == state) {
+        if self.has_state(state) {
             Ok(())
         } else {
             Err(Error::UnknownState(state.clone()))
@@ -420,6 +506,34 @@ mod tests {
         let mut ui = IslandBuilder::new(column([]));
         ui.handle().set_with(false, "s", "b".into());
         assert!(ui.receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn unknown_dependency_is_an_error() {
+        let mut ui = IslandBuilder::new(column([]));
+        ui.derive_with_state("x", &["nope"], |_| "".into());
+        assert!(matches!(check(&ui), Err(Error::UnknownState(n)) if n == "nope"));
+    }
+
+    #[test]
+    fn dependency_cycle_is_an_error() {
+        let mut ui = IslandBuilder::new(column([]));
+        ui.derive_with_state("x", &["y"], |_| "".into());
+        ui.derive_with_state("y", &["x"], |_| "".into());
+        assert!(matches!(check(&ui), Err(Error::DependencyCycle(_))));
+
+        let mut ui = IslandBuilder::new(column([]));
+        ui.derive_with_state("x", &["x"], |_| "".into());
+        assert!(matches!(check(&ui), Err(Error::DependencyCycle(n)) if n == "x"));
+    }
+
+    #[test]
+    fn derived_state_is_ordered_by_dependencies() {
+        let mut ui = IslandBuilder::new(column([]));
+        ui.derive_with_state("c", &["b"], |_| "".into());
+        ui.derive_with_state("b", &["a"], |_| "".into());
+        ui.derive("a", |_| "".into());
+        assert_eq!(ui.check().unwrap().1, [2, 1, 0]);
     }
 
     #[test]
