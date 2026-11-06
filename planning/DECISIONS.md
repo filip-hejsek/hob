@@ -78,6 +78,8 @@ and renders the island as an indented text outline.
   "Print the arguments". Bare `help` lists all commands with their
   descriptions; `help COMMAND` shows one. Commands see the registered
   commands through `ctx.commands()`.
+- The prompt's placeholder is a parameter of `hob_gui::run`; `hob` passes a
+  hint to use `help`, since only it knows that `help` is registered.
 
 ## Logging
 

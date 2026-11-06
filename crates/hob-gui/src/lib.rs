@@ -42,8 +42,14 @@ const TARGET: &str = "hob_gui";
 
 /// Opens the main window, running commands with `interpreter`, and blocks
 /// until it closes. If `session` is given, the session is restored from that
-/// file, and saved to it.
-pub fn run(interpreter: Interpreter, session: Option<PathBuf>) -> iced::Result {
+/// file, and saved to it. The prompt shows `placeholder` while it's empty,
+/// e.g. a hint on how to list the commands.
+pub fn run(
+    interpreter: Interpreter,
+    session: Option<PathBuf>,
+    placeholder: impl Into<String>,
+) -> iced::Result {
+    let placeholder = placeholder.into();
     let level = log_level();
     // The boot function is `Fn`, but it's only called once.
     let records = Mutex::new(logger::install(level));
@@ -51,7 +57,13 @@ pub fn run(interpreter: Interpreter, session: Option<PathBuf>) -> iced::Result {
     iced::application(
         move || {
             let records = records.lock().unwrap().take();
-            Shell::new(interpreter.clone(), session.clone(), level, records)
+            Shell::new(
+                interpreter.clone(),
+                session.clone(),
+                placeholder.clone(),
+                level,
+                records,
+            )
         },
         Shell::update,
         Shell::view,
@@ -79,7 +91,7 @@ const PROMPT: &str = "prompt";
 
 struct Shell {
     interpreter: Arc<Interpreter>,
-    /// Lists the commands, as a hint.
+    /// Shown in the empty prompt.
     placeholder: String,
     /// Where the session is saved, if anywhere.
     session: Option<PathBuf>,
@@ -191,12 +203,12 @@ impl Shell {
     fn new(
         interpreter: Arc<Interpreter>,
         session: Option<PathBuf>,
+        placeholder: String,
         level: Level,
         records: Option<futures_channel::mpsc::UnboundedReceiver<LogRecord>>,
     ) -> (Self, Task<Message>) {
-        let commands: Vec<_> = interpreter.commands().collect();
         let mut shell = Shell {
-            placeholder: format!("Command ({})", commands.join(", ")),
+            placeholder,
             interpreter,
             session,
             save_error: None,

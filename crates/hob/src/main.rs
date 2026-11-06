@@ -8,7 +8,8 @@ fn main() -> iced::Result {
     let mut interpreter = Interpreter::new();
     hob_core::builtins::register(&mut interpreter);
     hob_demo::register(&mut interpreter);
-    hob_gui::run(interpreter, session_path())
+    let placeholder = "Type a command, or help";
+    hob_gui::run(interpreter, session_path(), placeholder)
 }
 
 /// Where the session is saved: `HOB_SESSION` if set, otherwise in the
