@@ -6,24 +6,41 @@ Candidates for upstream issues or PRs.
 
 ## Reading a text input's cursor and selection
 
-**Needed for:** Tab completion at the cursor in the prompt (hob-gui).
+**Needed for:** Tab completion at the cursor in the prompt, and Ctrl+W,
+Ctrl+U and Ctrl+K (hob-gui).
 
 The app can move the cursor and select text (`operation::move_cursor_to`,
 `select_range`), but can't read where the cursor or selection is: the
 `TextInput` operation trait only exposes the text.
 
-**Workaround:** completion works only at the end of the line.
+**Workaround:** completion works only at the end of the line; the
+shortcuts wait for this.
 
 ## Key handlers on a text input
 
-**Needed for:** history (Up/Down) and completion (Tab) in the prompt.
+**Needed for:** history (Up/Down) and completion (Tab) in the prompt;
+Enter and Escape in the text fields of an island.
 
 `text_input` has `on_input` and `on_submit`, but no way to react to other
 keys pressed while it's focused.
 
-**Workaround:** a global keyboard subscription, plus an
+**Workaround:** for the prompt, a global keyboard subscription, plus an
 `operation::is_focused` round trip for each key press to check that the
-prompt is focused.
+prompt is focused. For islands, a wrapper widget that sees key events
+before the island's widgets, and finds the focused field with an operation
+on its children.
+
+## Focusable buttons and checkboxes
+
+**Needed for:** using islands from the keyboard.
+
+Only `text_input` and `text_editor` can be focused; buttons, checkboxes
+and the like can't, so focus operations skip them and they take no keys.
+
+**Workaround:** an island without text fields can be focused as a whole
+(a wrapper widget implementing `Focusable`), and its buttons have keys.
+In an island with text fields, Enter in the last field submits; checkboxes
+are mouse-only.
 
 ## An element that sends no messages
 
@@ -49,15 +66,17 @@ drawing.
 
 ## Subscriptions and more keys in `iced_test`'s `Emulator`
 
-**Needed for:** end-to-end tests of the prompt's history (Up/Down) and
-completion (Tab) in hob-gui.
+**Needed for:** end-to-end tests of the shell's key bindings in hob-gui:
+history (Up/Down), completion (Tab), PageUp/PageDown, Ctrl+L.
 
 The `Emulator` passes interactions only to the widgets, not to
 subscriptions such as `event::listen_with` or `window::close_requests`.
-Also, its `Key` has only Enter, Escape, Tab and Backspace, no arrows.
+Also, its `Key` has only Enter, Escape, Tab and Backspace (no arrows or
+PageUp/PageDown), and there are no modifiers.
 
 **Workaround:** history and completion are tested on `History` and
-`Interpreter::complete`, and checked by hand in a real window (Xvfb).
+`Interpreter::complete`, Ctrl+L by calling the shell's `update` directly,
+and all of them checked by hand in a real window (Xvfb).
 
 ## Waiting for an app to settle in `iced_test`
 
@@ -70,7 +89,8 @@ for an island; `Mode::Immediate` doesn't wait at all, so even the boot task
 "wait until idle, ignoring long-running streams".
 
 **Workaround:** a harness that retries each expectation until it holds or
-times out, and a click on the prompt before typing into it.
+times out, a click on the prompt before typing into it, and waiting until
+no actions came for 50 ms before typing after focus should have moved.
 
 ## Choosing the renderer of `iced_test`'s `Emulator`
 

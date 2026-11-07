@@ -18,7 +18,15 @@
 //! [`Context::log_records`](hob_core::Context::log_records).
 //!
 //! The prompt works like a shell's: Up and Down browse the history, and Tab
-//! completes command names.
+//! completes command names. Tab doesn't move focus. Anywhere, PageUp and
+//! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). The
+//! bindings are a table (see the `keys` module), to make them configurable
+//! later.
+//!
+//! A newly shown island gets focus, unless the user is busy elsewhere
+//! (something other than the empty prompt has focus). When an island
+//! freezes and nothing has focus, the prompt gets it back. Islands handle
+//! some keys themselves (see [`kettle_ui_iced`]).
 //!
 //! The history and scrollback are saved as a [`Session`] after every change
 //! and on exit, and restored on the next start. Commands still running on
@@ -32,7 +40,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use hob_core::{History, Interpreter, Level, LogRecord, Reply, Request, Session, SessionError};
-use iced::keyboard::{self, key};
+use iced::advanced::widget::operation::{Focusable, Outcome as OperationOutcome, Scrollable};
+use iced::advanced::widget::{Operation, operate};
+use iced::keyboard::{self, Modifiers};
+use iced::widget::scrollable::AbsoluteOffset;
 use iced::widget::{Id, column, container, operation, rule, scrollable, text, text_input};
 use iced::{
     Border, Color, Element, Event, Font, Length, Subscription, Task, Theme, event, font, padding,
@@ -40,6 +51,10 @@ use iced::{
 };
 use kettle_ui::FrozenIsland;
 use kettle_ui_iced::{Island, spacing, view_frozen};
+
+use keys::{Action, Binding};
+
+mod keys;
 
 /// The target of the shell's own log records.
 const TARGET: &str = "hob_gui";
@@ -98,6 +113,7 @@ fn application(
 }
 
 const PROMPT: &str = "prompt";
+const SCROLLBACK: &str = "scrollback";
 
 struct Shell {
     interpreter: Arc<Interpreter>,
@@ -113,6 +129,8 @@ struct Shell {
     history: History,
     /// Completions offered after Tab, shown below the prompt.
     candidates: Vec<String>,
+    /// The key bindings.
+    bindings: Vec<Binding>,
     /// The scrollback, oldest first.
     scrollback: Vec<Item>,
     /// Log records of cleared items, kept for `messages`, but not saved.
@@ -163,10 +181,13 @@ enum Entry {
 enum Message {
     PromptChanged(String),
     PromptSubmitted,
-    /// A key for the prompt was pressed, maybe while it isn't focused.
-    PromptKey(PromptKey),
-    /// A key for the prompt was pressed while it was focused.
-    PromptKeyFocused(PromptKey),
+    /// A key was pressed (the shell's bindings decide what it does).
+    Key(keyboard::Key, Modifiers),
+    /// Performs a bound action; for one that needs the prompt, it has
+    /// focus.
+    Action(Action),
+    /// Moves focus, depending on what has it now (the Id).
+    Refocus(Refocus, Option<Id>),
     /// A request from the command of a block.
     Request(BlockId, Pending<Request>),
     Island(IslandId, kettle_ui_iced::Message),
@@ -177,12 +198,14 @@ enum Message {
     CloseRequested,
 }
 
-/// A key the prompt handles that iced's text input doesn't.
+/// Where focus may go, see [`Message::Refocus`].
 #[derive(Clone, Copy, Debug)]
-enum PromptKey {
-    Up,
-    Down,
-    Tab,
+enum Refocus {
+    /// A new island, unless something other than the empty prompt has
+    /// focus.
+    Island(IslandId),
+    /// The prompt, if nothing has focus.
+    Prompt,
 }
 
 /// Makes a value that isn't `Clone` or `Debug` fit in a [`Message`]; it can
@@ -228,6 +251,7 @@ impl Shell {
             prompt: String::new(),
             history: History::new(),
             candidates: Vec::new(),
+            bindings: keys::defaults(),
             scrollback: Vec::new(),
             cleared_records: Vec::new(),
             next_id: 0,
@@ -333,16 +357,20 @@ impl Shell {
                 self.save();
                 task
             }
-            Message::PromptKey(key) => {
-                operation::is_focused(Id::new(PROMPT)).then(move |focused| {
-                    if focused {
-                        Task::done(Message::PromptKeyFocused(key))
-                    } else {
-                        Task::none()
-                    }
-                })
-            }
-            Message::PromptKeyFocused(key) => self.prompt_key(key),
+            Message::Key(key, modifiers) => match keys::lookup(&self.bindings, key, modifiers) {
+                Some(action) if action.needs_prompt() => operation::is_focused(Id::new(PROMPT))
+                    .then(move |focused| {
+                        if focused {
+                            Task::done(Message::Action(action))
+                        } else {
+                            Task::none()
+                        }
+                    }),
+                Some(action) => self.perform(action),
+                None => Task::none(),
+            },
+            Message::Action(action) => self.perform(action),
+            Message::Refocus(target, focused) => self.refocus(target, focused),
             Message::Request(block, request) => match request.take() {
                 Some(request) => {
                     let ephemeral = match &request {
@@ -420,15 +448,22 @@ impl Shell {
         task
     }
 
-    fn prompt_key(&mut self, key: PromptKey) -> Task<Message> {
-        let line = match key {
-            PromptKey::Up => self.history.back(&self.prompt).map(str::to_owned),
-            PromptKey::Down => self.history.forward().map(str::to_owned),
-            PromptKey::Tab => {
+    fn perform(&mut self, action: Action) -> Task<Message> {
+        let line = match action {
+            Action::HistoryBack => self.history.back(&self.prompt).map(str::to_owned),
+            Action::HistoryForward => self.history.forward().map(str::to_owned),
+            Action::Complete => {
                 let completion = self.interpreter.complete(&self.prompt);
                 self.candidates = completion.candidates;
                 self.history.stop_browsing();
                 Some(completion.line)
+            }
+            Action::PageUp => return scroll_page(1.0),
+            Action::PageDown => return scroll_page(-1.0),
+            Action::Clear => {
+                self.clear(None);
+                self.save();
+                return Task::none();
             }
         };
         match line {
@@ -442,20 +477,11 @@ impl Shell {
 
     fn subscription(&self) -> Subscription<Message> {
         let close = window::close_requests().map(|_| Message::CloseRequested);
-        let keys = event::listen_with(|event, _status, _window| {
-            let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event else {
-                return None;
-            };
-            if !modifiers.is_empty() {
-                return None;
+        let keys = event::listen_with(|event, _status, _window| match event {
+            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                Some(Message::Key(key, modifiers))
             }
-            let key = match key {
-                keyboard::Key::Named(key::Named::ArrowUp) => PromptKey::Up,
-                keyboard::Key::Named(key::Named::ArrowDown) => PromptKey::Down,
-                keyboard::Key::Named(key::Named::Tab) => PromptKey::Tab,
-                _ => return None,
-            };
-            Some(Message::PromptKey(key))
+            _ => None,
         });
         Subscription::batch([close, keys])
     }
@@ -467,7 +493,7 @@ impl Shell {
                 return Task::none();
             }
             Request::Clear => {
-                self.clear(block);
+                self.clear(Some(block));
                 return Task::none();
             }
             Request::Exit => {
@@ -508,7 +534,12 @@ impl Shell {
                             island,
                             reply,
                         });
-                        return task.map(move |m| Message::Island(island_id, m));
+                        let focus = focused()
+                            .map(move |id| Message::Refocus(Refocus::Island(island_id), id));
+                        return Task::batch([
+                            task.map(move |m| Message::Island(island_id, m)),
+                            focus,
+                        ]);
                     }
                     Err(e) => {
                         reply.fail(e);
@@ -530,10 +561,10 @@ impl Shell {
     /// Clears the scrollback, except for blocks of commands still running
     /// other than `caller`'s. Their log records are kept for `messages`.
     /// Private lines of cleared blocks are forgotten from the history.
-    fn clear(&mut self, caller: BlockId) {
+    fn clear(&mut self, caller: Option<BlockId>) {
         let (kept, cleared): (Vec<_>, Vec<_>) = mem::take(&mut self.scrollback)
             .into_iter()
-            .partition(|item| matches!(item, Item::Block(b) if b.running && b.id != caller));
+            .partition(|item| matches!(item, Item::Block(b) if b.running && Some(b.id) != caller));
         self.scrollback = kept;
         self.cleared_records.extend(log_records(&cleared));
         let shown: Vec<&str> = (self.scrollback.iter())
@@ -574,8 +605,41 @@ impl Shell {
                 reply.send(outcome);
             }
             self.save();
+            let focus = focused().map(|id| Message::Refocus(Refocus::Prompt, id));
+            return Task::batch([task.map(move |m| Message::Island(id, m)), focus]);
         }
         task.map(move |m| Message::Island(id, m))
+    }
+
+    /// Moves focus to `target`, depending on what has focus now.
+    fn refocus(&self, target: Refocus, focused: Option<Id>) -> Task<Message> {
+        let prompt = Id::new(PROMPT);
+        match target {
+            Refocus::Island(id) => {
+                let free = match &focused {
+                    None => true,
+                    Some(f) => *f == prompt && self.prompt.is_empty(),
+                };
+                match self.live_island(id) {
+                    Some(island) if free => island.focus(),
+                    _ => Task::none(),
+                }
+            }
+            Refocus::Prompt if focused.is_none() => operation::focus(prompt),
+            Refocus::Prompt => Task::none(),
+        }
+    }
+
+    fn live_island(&self, id: IslandId) -> Option<&Island> {
+        (self.scrollback.iter())
+            .flat_map(|item| match item {
+                Item::Block(block) => &block.entries[..],
+                Item::Notice(_) => &[],
+            })
+            .find_map(|e| match e {
+                Entry::Live { id: i, island, .. } if *i == id => Some(island),
+                _ => None,
+            })
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -604,6 +668,7 @@ impl Shell {
 
         column([
             scrollable(container(scrollback).padding(2.0 * spacing()))
+                .id(Id::new(SCROLLBACK))
                 .anchor_bottom()
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -675,6 +740,60 @@ fn log_records(items: &[Item]) -> Vec<LogRecord> {
             Item::Notice(record) => vec![record.clone()],
         })
         .collect()
+}
+
+/// Finds out which widget has focus, if any (its Id; `None` also if it has
+/// none). Unlike iced's `find_focused`, it always gives an answer.
+fn focused() -> Task<Option<Id>> {
+    struct Focused(Option<Id>);
+
+    impl Operation<Option<Id>> for Focused {
+        fn focusable(&mut self, id: Option<&Id>, _: iced::Rectangle, state: &mut dyn Focusable) {
+            if state.is_focused() {
+                self.0 = id.cloned();
+            }
+        }
+
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<Option<Id>>)) {
+            operate(self);
+        }
+
+        fn finish(&self) -> OperationOutcome<Option<Id>> {
+            OperationOutcome::Some(self.0.clone())
+        }
+    }
+
+    operate(Focused(None))
+}
+
+/// Scrolls the scrollback up by `pages` pages (down if negative).
+fn scroll_page<T: Send + 'static>(pages: f32) -> Task<T> {
+    struct ScrollPage(f32);
+
+    impl<T> Operation<T> for ScrollPage {
+        fn scrollable(
+            &mut self,
+            id: Option<&Id>,
+            bounds: iced::Rectangle,
+            content_bounds: iced::Rectangle,
+            _: iced::Vector,
+            state: &mut dyn Scrollable,
+        ) {
+            if id == Some(&Id::new(SCROLLBACK)) {
+                // A bit less than a page, so some lines stay in view. The
+                // scrollback is anchored at the bottom, so its offset grows
+                // upwards.
+                let y = self.0 * (bounds.height - 3.0 * spacing()).max(spacing());
+                state.scroll_by(AbsoluteOffset { x: 0.0, y }, bounds, content_bounds);
+            }
+        }
+
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
+            operate(self);
+        }
+    }
+
+    operate(ScrollPage(pages))
 }
 
 /// Moves a file to `<path>.bad`, and returns the new path.

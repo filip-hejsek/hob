@@ -33,6 +33,16 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - **`suggestions()`:** make it a full-featured autocomplete widget, with
   suggestions selectable by keyboard like in an IDE. (Currently it only
   supports clicking.)
+- **Keyboard:** buttons and checkboxes can't get focus (iced can only focus
+  text inputs; see ICED_WISHLIST.md), so an island with text fields can be
+  submitted by keyboard only through Enter, and a checkbox only clicked.
+  Making them focusable needs our own widgets in kettle-ui-iced. Until
+  then, islands without text fields have focus as a whole, with button
+  keys.
+- Chord keys (e.g. Ctrl+N) for buttons, which could work in islands with
+  text fields.
+- Enter in an island without text fields does nothing. Should it press
+  the only submit button, if there's one?
 
 ## kettle-ui-iced
 
@@ -89,8 +99,16 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 
 ## hob-gui (shell)
 
-- Focus: nothing moves focus to a newly shown island, or back to the prompt
-  afterwards.
+- More prompt shortcuts: Ctrl+W, Ctrl+U and Ctrl+K (delete the word before
+  the cursor, or to the start or end of the line). They need the cursor
+  position, which iced doesn't expose (see ICED_WISHLIST.md); the plan is
+  to contribute that upstream, then pin iced to a git version.
+- Ctrl+R history search. Needs a UI design: a bash-style search in the
+  prompt line, or a list of matches?
+- Widget state in the scrollback is matched by position, so when `clear`
+  or Ctrl+L removes blocks before a running one, its live island may get
+  another widget's state (focus, cursor). A `keyed_column` keyed by block
+  id would fix it.
 - Log records cleared by `clear` are kept only in memory, so `messages`
   no longer lists them after a restart.
 - The scrollback grows without limit, and so does the session file, which

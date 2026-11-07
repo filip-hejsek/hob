@@ -4,7 +4,7 @@
 //! - layout: [`column()`], [`row`], [`when`]
 //! - display: [`label`] (with [`state`]), [`progress`], [`list`]
 //! - form elements: [`text_field`], [`checkbox`], [`suggestions`]
-//! - buttons: [`submit_button`], [`cancel_button`]
+//! - buttons: [`submit_button`], [`cancel_button`] (with [`ButtonLabel`])
 //!
 //! Backends read the tree through [`Widget::kind`], and leave out the gaps
 //! around widgets that have nothing to show (see [`is_visible`]).
@@ -81,6 +81,9 @@ pub enum Kind {
     Button {
         /// Shown on the button.
         label: String,
+        /// The key that presses it, if any (see [`ButtonLabel`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<char>,
         /// What clicking it does.
         action: Action,
     },
@@ -187,20 +190,69 @@ pub fn suggestions(state: &str, field: &str) -> Widget {
     })
 }
 
+/// The label of a button, and the key that presses it.
+///
+/// A fixed label can give the key at its end: `"Yes [y]"` is the label
+/// `"Yes"` with the key `y`. Labels made at runtime aren't parsed: build
+/// them with [`ButtonLabel::new`] (and [`ButtonLabel::key`]). That's also
+/// the way to a label that ends with a bracketed letter.
+///
+/// A key is a lowercase ASCII letter. It works while the island has focus,
+/// and only in islands without text fields; no two buttons of an island can
+/// have the same key (see [`IslandBuilder::build`](crate::IslandBuilder::build)).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ButtonLabel {
+    text: String,
+    key: Option<char>,
+}
+
+impl ButtonLabel {
+    /// A label shown as it is, without a key.
+    pub fn new(text: impl Into<String>) -> Self {
+        ButtonLabel {
+            text: text.into(),
+            key: None,
+        }
+    }
+
+    /// Sets the key that presses the button.
+    pub fn key(mut self, key: char) -> Self {
+        self.key = Some(key);
+        self
+    }
+}
+
+/// Parses a key at the end, like `"Yes [y]"`.
+impl From<&'static str> for ButtonLabel {
+    fn from(label: &'static str) -> Self {
+        let parsed = label.strip_suffix(']').and_then(|rest| {
+            let (text, key) = rest.rsplit_once('[')?;
+            let mut chars = key.chars();
+            match (chars.next(), chars.next()) {
+                (Some(key), None) => Some(ButtonLabel::new(text.trim_end()).key(key)),
+                _ => None,
+            }
+        });
+        parsed.unwrap_or_else(|| ButtonLabel::new(label))
+    }
+}
+
 /// Submits the form: the island reports [`Outcome::Submitted`](crate::Outcome::Submitted) with the
 /// entered values.
-pub fn submit_button(label: &str) -> Widget {
-    Widget(Kind::Button {
-        label: label.to_owned(),
-        action: Action::Submit,
-    })
+pub fn submit_button(label: impl Into<ButtonLabel>) -> Widget {
+    button(label.into(), Action::Submit)
 }
 
 /// The island reports [`Outcome::Cancelled`](crate::Outcome::Cancelled).
-pub fn cancel_button(label: &str) -> Widget {
+pub fn cancel_button(label: impl Into<ButtonLabel>) -> Widget {
+    button(label.into(), Action::Cancel)
+}
+
+fn button(label: ButtonLabel, action: Action) -> Widget {
     Widget(Kind::Button {
-        label: label.to_owned(),
-        action: Action::Cancel,
+        label: label.text,
+        key: label.key,
+        action,
     })
 }
 
@@ -228,6 +280,23 @@ pub fn is_visible(contents: &impl Contents, widget: &Widget) -> bool {
         | Kind::Checkbox { .. }
         | Kind::Progress { .. }
         | Kind::Button { .. } => true,
+    }
+}
+
+/// Calls `f` with the key and action of each button that has a key, in tree
+/// order.
+pub(crate) fn keys(widget: &Widget, f: &mut impl FnMut(char, Action)) {
+    match widget.kind() {
+        Kind::Column(children) | Kind::Row(children) => {
+            children.iter().for_each(|c| keys(c, f));
+        }
+        Kind::When { child, .. } => keys(child, f),
+        Kind::Button {
+            key: Some(key),
+            action,
+            ..
+        } => f(*key, *action),
+        _ => {}
     }
 }
 
@@ -311,6 +380,17 @@ mod tests {
         assert!(is_visible(&c, &checkbox("c", "")));
         assert!(is_visible(&c, &progress("missing")));
         assert!(is_visible(&c, &submit_button("")));
+    }
+
+    #[test]
+    fn button_keys_are_parsed_from_fixed_labels() {
+        let parsed = |label: &'static str| ButtonLabel::from(label);
+        assert_eq!(parsed("Yes [y]"), ButtonLabel::new("Yes").key('y'));
+        assert_eq!(parsed("[n]"), ButtonLabel::new("").key('n'));
+        assert_eq!(parsed("No[N]"), ButtonLabel::new("No").key('N'));
+        for plain in ["OK", "A [bc]", "A []", "A [y] ", "]"] {
+            assert_eq!(parsed(plain), ButtonLabel::new(plain));
+        }
     }
 
     #[test]

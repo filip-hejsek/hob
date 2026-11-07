@@ -9,7 +9,7 @@ use iced::{Size, mouse};
 use iced_test::emulator::{Emulator, Event, Mode};
 use iced_test::instruction::{Expectation, Interaction, Key, Keyboard, Mouse, Target};
 use iced_test::{Instruction, program::Program};
-use kettle_ui::widget::{column, label, submit_button, text_field};
+use kettle_ui::widget::{cancel_button, column, label, row, submit_button, text_field};
 use kettle_ui::{IslandBuilder, Outcome};
 
 use super::*;
@@ -53,6 +53,74 @@ fn answering_an_island() {
     shell.expect("Hello, Ann!");
     // The frozen island is still shown.
     shell.expect("Ann");
+}
+
+#[test]
+fn a_new_island_gets_focus_and_gives_it_back() {
+    let mut shell = start(None);
+    shell.run("greet");
+    shell.expect("OK");
+    // No click: the name field has focus. Enter in the last field submits.
+    shell.settle();
+    shell.step(typewrite("Ann"));
+    shell.step(press(Key::Enter));
+    shell.expect("Hello, Ann!");
+    // The prompt has focus again.
+    shell.settle();
+    shell.step(typewrite("say back"));
+    shell.step(press(Key::Enter));
+    shell.expect("back");
+}
+
+#[test]
+fn escape_cancels_an_island() {
+    let mut shell = start(None);
+    shell.run("greet");
+    shell.expect("OK");
+    shell.settle();
+    shell.step(typewrite("Ann"));
+    shell.step(press(Key::Escape));
+    shell.expect("Not greeting.");
+}
+
+#[test]
+fn keys_press_buttons() {
+    let mut shell = start(None);
+    shell.run("ask");
+    shell.expect("No [n]");
+    shell.settle();
+    shell.step(typewrite("n"));
+    shell.expect("Answer: no");
+}
+
+#[test]
+fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
+    let (mut shell, _) = Shell::new(
+        Arc::new(interpreter()),
+        None,
+        PLACEHOLDER.into(),
+        Level::Info,
+        None,
+    );
+    for (line, running) in [("done", false), ("running", true)] {
+        let id = shell.next_id();
+        shell.scrollback.push(Item::Block(Block {
+            id,
+            line: line.into(),
+            entries: Vec::new(),
+            running,
+            interrupted: false,
+        }));
+    }
+    let ctrl_l = Message::Key(keyboard::Key::Character("l".into()), Modifiers::CTRL);
+    let _ = shell.update(ctrl_l);
+    let lines: Vec<_> = (shell.scrollback.iter())
+        .map(|item| match item {
+            Item::Block(block) => block.line.as_str(),
+            Item::Notice(_) => "notice",
+        })
+        .collect();
+    assert_eq!(lines, ["running"]);
 }
 
 #[test]
@@ -132,11 +200,21 @@ fn interpreter() -> Interpreter {
     interpreter.register("greet", "Ask for a name and greet", |ctx, _| {
         let island = IslandBuilder::new(column([
             text_field("name", "Your name"),
-            submit_button("OK"),
+            row([submit_button("OK"), cancel_button("Cancel")]),
         ]));
-        if let Outcome::Submitted(fields) = ctx.show(island)? {
-            ctx.print(format!("Hello, {}!", fields.text("name")));
+        match ctx.show(island)? {
+            Outcome::Submitted(fields) => ctx.print(format!("Hello, {}!", fields.text("name"))),
+            Outcome::Cancelled => ctx.print("Not greeting."),
         }
+        Ok(())
+    });
+    interpreter.register("ask", "Ask a yes/no question", |ctx, _| {
+        let island = IslandBuilder::new(row([submit_button("Yes [y]"), cancel_button("No [n]")]));
+        let answer = match ctx.show(island)? {
+            Outcome::Submitted(_) => "yes",
+            Outcome::Cancelled => "no",
+        };
+        ctx.print(format!("Answer: {answer}"));
         Ok(())
     });
     interpreter
@@ -240,6 +318,24 @@ impl<P: Program + 'static> Harness<P> {
         }
     }
 
+    /// Performs actions until there have been none for a while, e.g. so
+    /// that focus has moved.
+    fn settle(&mut self) {
+        let start = Instant::now();
+        let mut last = Instant::now();
+        while last.elapsed() < Duration::from_millis(50) {
+            assert!(start.elapsed() < TIMEOUT, "never settled");
+            match self.next_event() {
+                Some(Event::Action(action)) => {
+                    self.emulator.perform(&self.program, action);
+                    last = Instant::now();
+                }
+                Some(Event::Ready | Event::Failed(_)) => {}
+                None => thread::sleep(Duration::from_millis(1)),
+            }
+        }
+    }
+
     /// Performs actions for `duration`.
     fn pump(&mut self, duration: Duration) {
         let start = Instant::now();
@@ -268,6 +364,11 @@ fn click(text: &str) -> Instruction {
         button: mouse::Button::Left,
         target: Some(Target::Text(text.into())),
     }))
+}
+
+/// Pressing and releasing `key`.
+fn press(key: Key) -> Instruction {
+    Instruction::Interact(Interaction::Keyboard(Keyboard::Type(key)))
 }
 
 /// Typing `text` into the focused element.

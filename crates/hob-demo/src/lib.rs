@@ -27,6 +27,11 @@ pub fn register(interpreter: &mut Interpreter) {
         pizza,
     );
     interpreter.register("levels", "Log a message at each level", levels);
+    interpreter.register(
+        "confirm",
+        "Ask a yes/no question (the arguments), answered with y or n",
+        confirm,
+    );
 }
 
 /// Registers a command for each demo island. It shows the island and prints
@@ -101,6 +106,23 @@ fn levels(ctx: &mut Context, args: &[String]) -> CommandResult {
 }
 
 /// Shows an island that refers to state that doesn't exist.
+fn confirm(ctx: &mut Context, args: &[String]) -> CommandResult {
+    let question = match args {
+        [] => "Are you sure?".to_owned(),
+        _ => args.join(" "),
+    };
+    let island = IslandBuilder::new(column([
+        label(question),
+        row([submit_button("Yes [y]"), cancel_button("No [n]")]),
+    ]));
+    let answer = match ctx.show(island)? {
+        Outcome::Submitted(_) => "yes",
+        Outcome::Cancelled => "no",
+    };
+    ctx.print(format!("Answer: {answer}"));
+    Ok(())
+}
+
 fn invalid(ctx: &mut Context, args: &[String]) -> CommandResult {
     no_args(args)?;
     ctx.show(IslandBuilder::new(label(state("nonexistent"))))?;

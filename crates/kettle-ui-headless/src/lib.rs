@@ -192,7 +192,9 @@ impl Island {
     pub fn press(&mut self, label: &str) -> Result<Outcome, ActionError> {
         let mut actions = Vec::new();
         find(&self.model, self.model.root(), &mut |w| {
-            if let Kind::Button { label: l, action } = w.kind()
+            if let Kind::Button {
+                label: l, action, ..
+            } = w.kind()
                 && l == label
             {
                 actions.push(*action);
@@ -347,7 +349,13 @@ fn render(model: &impl Contents, widget: &Widget, depth: usize, out: &mut String
             writeln!(out, "{indent}suggestions for {field}")?;
             lines(out, state)
         }
-        Kind::Button { label, .. } => writeln!(out, "{indent}button {label:?}"),
+        Kind::Button { label, key, .. } => {
+            write!(out, "{indent}button {label:?}")?;
+            if let Some(key) = key {
+                write!(out, " [{key}]")?;
+            }
+            writeln!(out)
+        }
     }
 }
 
@@ -433,6 +441,19 @@ mod tests {
             island.press("OK"),
             Err(ActionError::AmbiguousButton(l)) if l == "OK"
         ));
+    }
+
+    #[test]
+    fn button_keys_are_in_the_outline() {
+        let island = Island::new(IslandBuilder::new(row([
+            submit_button("Yes [y]"),
+            cancel_button("No"),
+        ])))
+        .unwrap();
+        assert_eq!(
+            island.to_string(),
+            "row\n  button \"Yes\" [y]\n  button \"No\"\n"
+        );
     }
 
     #[test]

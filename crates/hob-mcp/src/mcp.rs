@@ -34,8 +34,9 @@ Islands are shown as outlines, one widget per line, e.g.:
   checkbox subscribe: [x] \"Subscribe\"
   button \"Submit\"
 Fill in text fields and checkboxes by their ids (here name and subscribe) \
-with fill, and press buttons by their labels with press. Labels and lists \
-update as you fill fields in.
+with fill, and press buttons by their labels with press. A button may show \
+its keyboard key after the label, as in `button \"Yes\" [y]`; its label is \
+still just Yes. Labels and lists update as you fill fields in.
 
 Commands keep running between tool calls. Every tool result starts with what \
 happened since the last one, and shows islands that are new or changed. Use \

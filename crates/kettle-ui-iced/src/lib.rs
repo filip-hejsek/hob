@@ -29,19 +29,28 @@
 //! The text fields of a live island have iced [`Id`]s, made when the island
 //! is created and kept for its whole life, for the host's focus operations
 //! (see [`Island::field_id`] and [`Island::has_focus`]). They are unique, so
-//! they never clash with the host's own Ids or another island's.
+//! they never clash with the host's own Ids or another island's. An island
+//! without text fields can have focus as a whole, with its own Id;
+//! [`Island::focus`] focuses an island either way.
+//!
+//! A live island handles some keys itself, while it has focus: Enter in a
+//! text field focuses the next shown one, and submits in the last one (if
+//! there's a submit button); Escape cancels (if there's a cancel button);
+//! and a button's key (see [`ButtonLabel`](kettle_ui::widget::ButtonLabel))
+//! presses it.
 //!
 //! [`render_png`] renders an island offscreen, without a window; the
 //! `kettle-render` binary does the same for an island saved as JSON.
 
 mod offscreen;
+mod scope;
 
 use std::sync::Arc;
 
 use iced::advanced::widget::operation::{Focusable, Outcome as OperationOutcome};
 use iced::advanced::widget::{Id, Operation, operate};
 use iced::widget::{
-    Container, button, checkbox, column, container, progress_bar, row, text, text_input,
+    Container, button, checkbox, column, container, operation, progress_bar, row, text, text_input,
 };
 use iced::{Element, Padding, Rectangle, Task, task};
 use kettle_ui::widget::{Action, Kind, Text, Widget, is_shown, is_visible};
@@ -68,6 +77,9 @@ pub struct Island {
     model: Model,
     /// The iced Ids of the text fields, in tree order.
     fields: Vec<(Arc<str>, Id)>,
+    /// The Id of the island as a whole, which can have focus if it has no
+    /// text fields.
+    id: Id,
     /// Stops delivering [`StateHandle`](kettle_ui::StateHandle) updates when
     /// the island is dropped.
     _updates: task::Handle,
@@ -105,6 +117,7 @@ impl Island {
         let island = Island {
             model,
             fields: fields.into_iter().map(|f| (f, Id::unique())).collect(),
+            id: Id::unique(),
             _updates: handle.abort_on_drop(),
         };
         Ok((island, Task::batch([updates, run(jobs)])))
@@ -131,7 +144,39 @@ impl Island {
     /// The island's UI. It doesn't scroll or add padding around itself; that's
     /// up to the host.
     pub fn view(&self) -> Element<'_, Message> {
-        render(&self.model, self.model.root(), true, Some(&self.fields))
+        let mut shown = Shown::default();
+        shown.collect(&self.model, self.model.root(), &self.fields);
+        let message = |action| match action {
+            Action::Submit => Message(Msg::Submit),
+            Action::Cancel => Message(Msg::Cancel),
+        };
+        scope::Scope {
+            content: render(&self.model, self.model.root(), true, Some(&self.fields)),
+            id: self.id.clone(),
+            focusable: self.fields.is_empty(),
+            fields: shown.fields,
+            keys: (shown.keys.into_iter())
+                .map(|(key, action)| (key, message(action)))
+                .collect(),
+            submit: shown.submit.then(|| message(Action::Submit)),
+            cancel: shown.cancel.then(|| message(Action::Cancel)),
+        }
+        .into()
+    }
+
+    /// Focuses the island: its first shown text field, or the island as a
+    /// whole if it has no text fields. Does nothing if all its text fields
+    /// are hidden.
+    pub fn focus<T: Send + 'static>(&self) -> Task<T> {
+        if self.fields.is_empty() {
+            return operation::focus(self.id.clone());
+        }
+        let mut shown = Shown::default();
+        shown.collect(&self.model, self.model.root(), &self.fields);
+        match shown.fields.into_iter().next() {
+            Some(id) => operation::focus(id),
+            None => Task::none(),
+        }
     }
 
     /// The iced Id of text field `field`, for focus operations. `None` if the
@@ -140,9 +185,10 @@ impl Island {
         field_id(&self.fields, field).cloned()
     }
 
-    /// Whether one of this island's text fields has focus.
+    /// Whether the island or one of its text fields has focus.
     pub fn has_focus(&self) -> Task<bool> {
-        let ids = self.fields.iter().map(|(_, id)| id.clone()).collect();
+        let fields = self.fields.iter().map(|(_, id)| id.clone());
+        let ids = fields.chain([self.id.clone()]).collect();
         operate(HasFocus {
             ids,
             focused: false,
@@ -228,12 +274,16 @@ fn render<'a>(
                 .into()
         }))
         .into(),
-        Kind::Button { label, action } => button(text(label))
-            .on_press_maybe(send(match action {
-                Action::Submit => Msg::Submit,
-                Action::Cancel => Msg::Cancel,
-            }))
-            .into(),
+        Kind::Button { label, key, action } => button(text(match key {
+            Some(key) if label.is_empty() => format!("[{key}]"),
+            Some(key) => format!("{label} [{key}]"),
+            None => label.clone(),
+        }))
+        .on_press_maybe(send(match action {
+            Action::Submit => Msg::Submit,
+            Action::Cancel => Msg::Cancel,
+        }))
+        .into(),
     }
 }
 
@@ -273,6 +323,45 @@ fn hideable(content: Element<'_, Message>, visible: bool) -> Container<'_, Messa
         .max_width(max)
         .max_height(max)
         .clip(!visible)
+}
+
+/// What a live island shows that its keys act on.
+#[derive(Default)]
+struct Shown {
+    /// The Ids of shown text fields, in tree order.
+    fields: Vec<Id>,
+    /// The keys of shown buttons.
+    keys: Vec<(char, Action)>,
+    /// Whether a submit button is shown.
+    submit: bool,
+    /// Whether a cancel button is shown.
+    cancel: bool,
+}
+
+impl Shown {
+    /// Collects what's shown of `widget`; text fields get their Ids from
+    /// `ids`.
+    fn collect(&mut self, contents: &impl Contents, widget: &Widget, ids: &FieldIds) {
+        match widget.kind() {
+            Kind::Column(children) | Kind::Row(children) => {
+                children.iter().for_each(|c| self.collect(contents, c, ids));
+            }
+            Kind::When { state, child } if is_shown(contents, state) => {
+                self.collect(contents, child, ids);
+            }
+            Kind::TextField { id, .. } => self.fields.extend(field_id(ids, id).cloned()),
+            Kind::Button { key, action, .. } => {
+                match action {
+                    Action::Submit => self.submit = true,
+                    Action::Cancel => self.cancel = true,
+                }
+                if let Some(key) = key {
+                    self.keys.push((*key, *action));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Collects the ids of the text fields in `widget`, in tree order.
@@ -340,11 +429,14 @@ mod tests {
 
     use futures_channel::mpsc;
     use iced::Size;
+    use iced::mouse;
     use iced::widget::operation;
     use iced_test::emulator::{Emulator, Event, Mode};
-    use iced_test::instruction::{Expectation, Interaction, Keyboard};
+    use iced_test::instruction::{Expectation, Interaction, Key, Keyboard, Mouse, Target};
     use iced_test::{Instruction, simulator};
-    use kettle_ui::widget::{checkbox, column, row, text_field, when};
+    use kettle_ui::widget::{
+        cancel_button, checkbox, column, row, submit_button, text_field, when,
+    };
 
     use super::*;
 
@@ -390,11 +482,12 @@ mod tests {
         assert_eq!(frozen.fields().text("b"), "x");
     }
 
-    /// An island and whether it had focus at the last check, for
-    /// [`program`].
+    /// An island, whether it had focus at the last check, and how the user
+    /// finished with it, for [`program`].
     struct State {
         island: Island,
         focused: Option<bool>,
+        outcome: Option<String>,
     }
 
     #[derive(Clone, Debug)]
@@ -406,7 +499,19 @@ mod tests {
     impl State {
         fn update(&mut self, message: Msg) -> Task<Msg> {
             match message {
-                Msg::Island(m) => self.island.update(m).0.map(Msg::Island),
+                Msg::Island(m) => {
+                    let (task, outcome) = self.island.update(m);
+                    // Only the first.
+                    if let Some(outcome) = outcome.filter(|_| self.outcome.is_none()) {
+                        self.outcome = Some(match outcome {
+                            Outcome::Submitted(fields) => {
+                                format!("submitted {:?} {:?}", fields.text("a"), fields.text("b"))
+                            }
+                            Outcome::Cancelled => "cancelled".into(),
+                        });
+                    }
+                    task.map(Msg::Island)
+                }
                 Msg::Focused(focused) => {
                     self.focused = Some(focused);
                     Task::none()
@@ -418,24 +523,36 @@ mod tests {
             iced::widget::column![
                 self.island.view().map(Msg::Island),
                 text(format!("focused: {:?}", self.focused)),
+                text(format!("outcome: {:?}", self.outcome)),
             ]
             .into()
         }
     }
 
-    /// [`island`] as an iced program, which checks on start whether the
-    /// island has focus, after focusing the field `focus`, if given.
-    fn program(focus: Option<&'static str>) -> iced::Application<impl iced::Program> {
+    /// What [`program`] focuses on start.
+    #[derive(Clone, Copy)]
+    enum Focus {
+        Nothing,
+        Field(&'static str),
+        /// With [`Island::focus`].
+        Island,
+    }
+
+    /// An island from `make` as an iced program, which checks on start
+    /// whether the island has focus, after focusing what `focus` says.
+    fn program(make: fn() -> Island, focus: Focus) -> iced::Application<impl iced::Program> {
         let boot = move || {
-            let island = island();
+            let island = make();
             let focus = match focus {
-                Some(field) => operation::focus(island.field_id(field).unwrap()),
-                None => Task::none(),
+                Focus::Nothing => Task::none(),
+                Focus::Field(field) => operation::focus(island.field_id(field).unwrap()),
+                Focus::Island => island.focus(),
             };
             let check = focus.chain(island.has_focus().map(Msg::Focused));
             let state = State {
                 island,
                 focused: None,
+                outcome: None,
             };
             (state, check)
         };
@@ -482,7 +599,10 @@ mod tests {
 
     #[test]
     fn has_focus_is_false_without_focus() {
-        check(program(None), &[expect("focused: Some(false)")]);
+        check(
+            program(island, Focus::Nothing),
+            &[expect("focused: Some(false)")],
+        );
     }
 
     #[test]
@@ -490,8 +610,100 @@ mod tests {
         let typewrite =
             Instruction::Interact(Interaction::Keyboard(Keyboard::Typewrite("typed".into())));
         check(
-            program(Some("b")),
+            program(island, Focus::Field("b")),
             &[expect("focused: Some(true)"), typewrite, expect("typed")],
+        );
+    }
+
+    fn typewrite(text: &str) -> Instruction {
+        Instruction::Interact(Interaction::Keyboard(Keyboard::Typewrite(text.into())))
+    }
+
+    fn press(key: Key) -> Instruction {
+        Instruction::Interact(Interaction::Keyboard(Keyboard::Type(key)))
+    }
+
+    /// Two text fields with a hidden one between them, and both buttons.
+    fn form() -> Island {
+        let mut builder = IslandBuilder::new(column([
+            text_field("a", "A"),
+            when("hidden", text_field("h", "H")),
+            text_field("b", "B"),
+            row([submit_button("OK"), cancel_button("Cancel")]),
+        ]));
+        builder.set_state("hidden", false);
+        Island::new(builder).unwrap().0
+    }
+
+    /// Buttons with keys, and no text fields.
+    fn question() -> Island {
+        let builder = IslandBuilder::new(row([submit_button("Yes [y]"), cancel_button("No [n]")]));
+        Island::new(builder).unwrap().0
+    }
+
+    #[test]
+    fn island_focus_goes_to_the_first_field() {
+        check(
+            program(form, Focus::Island),
+            &[expect("focused: Some(true)"), typewrite("x"), expect("x")],
+        );
+    }
+
+    #[test]
+    fn enter_goes_to_the_next_shown_field_then_submits() {
+        check(
+            program(form, Focus::Field("a")),
+            &[
+                expect("focused: Some(true)"),
+                typewrite("1"),
+                press(Key::Enter),
+                typewrite("2"),
+                press(Key::Enter),
+                expect(r#"outcome: Some("submitted \"1\" \"2\"")"#),
+            ],
+        );
+    }
+
+    #[test]
+    fn escape_cancels() {
+        check(
+            program(form, Focus::Field("b")),
+            &[
+                expect("focused: Some(true)"),
+                press(Key::Escape),
+                expect(r#"outcome: Some("cancelled")"#),
+            ],
+        );
+    }
+
+    #[test]
+    fn keys_press_buttons_of_a_focused_island() {
+        check(
+            program(question, Focus::Island),
+            &[
+                expect("focused: Some(true)"),
+                expect("No [n]"),
+                typewrite("n"),
+                expect(r#"outcome: Some("cancelled")"#),
+            ],
+        );
+    }
+
+    #[test]
+    fn keys_do_nothing_without_focus() {
+        check(
+            program(question, Focus::Nothing),
+            &[
+                expect("focused: Some(false)"),
+                typewrite("y"),
+                // Only the first outcome is kept, so this checks that "y"
+                // did nothing.
+                Instruction::Interact(Interaction::Mouse(Mouse::Click {
+                    button: mouse::Button::Left,
+                    target: Some(Target::Text("No [n]".into())),
+                })),
+                expect(r#"outcome: Some("cancelled")"#),
+            ],
         );
     }
 }

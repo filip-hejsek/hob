@@ -88,6 +88,13 @@ pub enum Error {
     /// [`IslandBuilder::set_checked`] targets a form element that isn't a
     /// checkbox.
     NotACheckbox(String),
+    /// A button's key isn't a lowercase ASCII letter.
+    InvalidKey(char),
+    /// Two buttons have the same key.
+    DuplicateKey(char),
+    /// A button has a key, but the island has text fields, which take
+    /// typed letters.
+    KeyWithTextField(char),
 }
 
 impl fmt::Display for Error {
@@ -108,6 +115,15 @@ impl fmt::Display for Error {
             Error::UnknownField(id) => write!(f, "no form element with id {id:?}"),
             Error::NotATextField(id) => write!(f, "form element {id:?} is not a text field"),
             Error::NotACheckbox(id) => write!(f, "form element {id:?} is not a checkbox"),
+            Error::InvalidKey(key) => {
+                write!(f, "button key {key:?} isn't a lowercase ASCII letter")
+            }
+            Error::DuplicateKey(key) => write!(f, "several buttons have the key {key:?}"),
+            Error::KeyWithTextField(key) => write!(
+                f,
+                "a button has the key {key:?}, but buttons in an island with text fields \
+                 can't have keys"
+            ),
         }
     }
 }
@@ -392,6 +408,7 @@ impl IslandBuilder {
         let mut fields = Fields::default();
         collect_fields(&self.root, &mut fields)?;
         self.check_references(&self.root, &fields)?;
+        check_keys(&self.root, &fields)?;
         for (id, value) in &self.initial {
             fields.set(id, value.clone())?;
         }
@@ -472,6 +489,25 @@ impl IslandBuilder {
             Err(Error::UnknownState(state.clone()))
         }
     }
+}
+
+/// Checks the keys of buttons (see [`ButtonLabel`](widget::ButtonLabel)).
+fn check_keys(root: &Widget, fields: &Fields) -> Result<(), Error> {
+    let mut keys = Vec::new();
+    widget::keys(root, &mut |key, _| keys.push(key));
+    let has_text_field = fields.0.values().any(|f| matches!(f, Field::Text(_)));
+    for (i, &key) in keys.iter().enumerate() {
+        if !key.is_ascii_lowercase() {
+            return Err(Error::InvalidKey(key));
+        }
+        if keys[..i].contains(&key) {
+            return Err(Error::DuplicateKey(key));
+        }
+        if has_text_field {
+            return Err(Error::KeyWithTextField(key));
+        }
+    }
+    Ok(())
 }
 
 fn collect_fields(widget: &Widget, fields: &mut Fields) -> Result<(), Error> {
@@ -595,6 +631,29 @@ mod tests {
     fn duplicate_field_is_an_error() {
         let ui = IslandBuilder::new(column([text_field("a", ""), checkbox("a", "")]));
         assert!(matches!(check(&ui), Err(Error::DuplicateField(n)) if n == "a"));
+    }
+
+    #[test]
+    fn button_keys_are_checked() {
+        let keys = |root| check(&IslandBuilder::new(root));
+        assert!(keys(row([submit_button("Yes [y]"), cancel_button("No [n]")])).is_ok());
+        assert!(matches!(
+            keys(row([submit_button("A [a]"), cancel_button("B [a]")])),
+            Err(Error::DuplicateKey('a'))
+        ));
+        for key in ['Y', '1', 'é'] {
+            let label = widget::ButtonLabel::new("A").key(key);
+            assert!(matches!(keys(submit_button(label)), Err(Error::InvalidKey(k)) if k == key));
+        }
+        assert!(matches!(
+            keys(column([
+                text_field("t", ""),
+                row([submit_button("OK [o]")])
+            ])),
+            Err(Error::KeyWithTextField('o'))
+        ));
+        // Without keys, buttons and text fields go together.
+        assert!(keys(column([text_field("t", ""), submit_button("OK")])).is_ok());
     }
 
     #[test]

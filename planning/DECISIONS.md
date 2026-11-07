@@ -12,6 +12,18 @@ they're worth remembering. Open questions and plans are in TODO.md.
   it). Showing and hiding doesn't change the tree's shape, and a hidden
   field keeps its value. Rejected: hiding labels by setting them to `""`
   (still works, but implicit and only for labels).
+- Buttons can have a key, a lowercase ASCII letter, shown as ` [y]` after
+  the label, like in terminal prompts. A fixed label gives it at its end
+  (`submit_button("Yes [y]")`, via `From<&'static str> for ButtonLabel`).
+  Labels made at runtime use `ButtonLabel::new(text).key('y')`, which
+  parses nothing; `String` isn't accepted, to discourage parsing runtime
+  data (it can't be forbidden). A fixed label ending in a bracketed letter
+  also needs the builder. `build` rejects keys that aren't lowercase
+  letters, duplicate keys, and keys in an island with text fields, which
+  take typed letters (chord keys like Ctrl+N could lift that later). The
+  key is a separate field of the tree (`key`, left out when absent), so
+  headless clients get it as data; the outline shows `button "Yes" [y]`.
+  Rejected: an explicit key parameter on every button function.
 
 ### Dependency tracking for derived state
 
@@ -74,6 +86,24 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   host passes in, or from a counter; a container Id per island with iced's
   `operation::scope` (a scoped `focus` doesn't unfocus widgets outside the
   island, such as the prompt).
+- A live island handles some keys itself, in a wrapper widget that sees
+  key events before the island's widgets: Enter in a text field focuses
+  the next shown one (fields hidden by `when` are skipped), and in the last
+  one submits, if there's a submit button; Escape cancels while the island
+  has focus, if there's a cancel button (otherwise the field just loses
+  focus, as in iced); a button's key presses it while the island has
+  focus. Rejected: handling these in the host through a subscription; by
+  then a text input has already handled Escape (it unfocuses), so the host
+  can't tell which island had focus.
+- An island without text fields can have focus as a whole: the wrapper is
+  focusable, with its own `Id::unique()`, and behaves like a text input
+  (focused by a click on it or by iced's focus operations, unfocused by a
+  click elsewhere), so the host's focus checks see it like any other
+  focusable widget. It's shown by a thin primary-coloured border around the
+  island. `Island::focus` focuses the first shown text field, or the island
+  as a whole.
+- Tab doesn't move focus, deliberately unlike desktop conventions: in the
+  prompt it completes, and islands move between fields with Enter.
 - The default theme. Styling options are deliberately minimal; global
   customization, if any, will be set by the host application, not the
   island.
@@ -233,6 +263,18 @@ Works like a terminal: a scrollback with the prompt below it.
   ends (by ending its input): hob-cli quits, hob-mcp only reports it, since
   an agent can't end the MCP server. The frontend treats a broken pipe on
   its output like the end of its input, so a client can just quit.
+- Key bindings are a table (the `keys` module) from a key with exact
+  modifiers to a named action, kept apart from what the actions do, so it
+  can become configurable. Letters are compared in lowercase. History and
+  completion work only while the prompt has focus; the others anywhere:
+  PageUp/PageDown scroll the scrollback by a bit less than a page, and
+  Ctrl+L clears it like `clear`, keeping the blocks of running commands.
+  Escape has no binding.
+- A newly shown island gets focus, unless something other than the empty
+  prompt has it, so an island that appears later doesn't take keys meant
+  for something else. When an island freezes and nothing has focus, the
+  prompt gets it back. Both check with an operation that always answers
+  (iced's `find_focused` gives no answer when nothing is focused).
 - The prompt has history (Up/Down; the line being typed is kept as a draft)
   and Tab completion of command names: unambiguous part completed, the
   candidates listed below the prompt if there are several. Both live in
@@ -256,7 +298,10 @@ Works like a terminal: a scrollback with the prompt below it.
   commands. The emulator runs in `Mode::Immediate`, and a small harness
   retries each expectation until it holds or 5 s pass. Rejected: `Mode::Zen`
   and `.ice` test files, which wait for all tasks to finish; a command
-  waiting for an island never finishes by itself. Keys handled through
-  subscriptions (Up/Down/Tab) can't be tested this way (see
-  ICED_WISHLIST.md); they're tested on `History` and
-  `Interpreter::complete`, and checked by hand in a real window.
+  waiting for an island never finishes by itself. Before typing after
+  focus should have moved, a test waits until no actions came for 50 ms.
+  Keys handled through subscriptions (the shell's bindings) can't be
+  tested this way (see ICED_WISHLIST.md); they're tested on `History`,
+  `Interpreter::complete` and the bindings table, Ctrl+L by calling
+  `update` directly, and all checked by hand in a real window. Keys that
+  islands handle themselves go through the emulator.
