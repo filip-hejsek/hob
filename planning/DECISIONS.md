@@ -74,9 +74,9 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   adds the font; hob-gui's default font is unchanged), so the output is the
   same on every machine. The image is as tall as the island. It uses the
   live look by default, since that's what the island looked like to the
-  user; `--frozen` gives the disabled look of the scrollback. Rejected:
-  `iced_test::Simulator`, whose snapshots give no access to pixels, have a
-  fixed size (1024×768) and 2× scale, and try wgpu first.
+  user; `--frozen` gives the disabled look of the scrollback. Not
+  `iced_test::Simulator`: it's made for tests (fixed 1024×768 size and 2×
+  scale, snapshots compared with PNG files), not for producing images.
 
 ## kettle-ui-headless
 
