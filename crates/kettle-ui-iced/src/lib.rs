@@ -189,6 +189,12 @@ impl Island {
         }
     }
 
+    /// The iced Id of the island as a whole; operations see its bounds as
+    /// those of a focusable widget with this Id.
+    pub fn id(&self) -> Id {
+        self.id.clone()
+    }
+
     /// The iced Id of field `field` (a text field or checkbox), for focus
     /// operations. `None` if the island has no field with this id.
     pub fn field_id(&self, field: &str) -> Option<Id> {

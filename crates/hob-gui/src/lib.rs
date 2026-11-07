@@ -47,8 +47,8 @@ use iced::keyboard::{self, Modifiers};
 use iced::widget::scrollable::AbsoluteOffset;
 use iced::widget::{Id, column, container, operation, rule, scrollable, text, text_input};
 use iced::{
-    Border, Color, Element, Event, Font, Length, Subscription, Task, Theme, event, font, padding,
-    window,
+    Border, Color, Element, Event, Font, Length, Rectangle, Subscription, Task, Theme, event, font,
+    padding, window,
 };
 use kettle_ui::FrozenIsland;
 use kettle_ui_iced::{Island, spacing, view_frozen};
@@ -572,7 +572,8 @@ impl Shell {
     }
 
     /// Exits, unless commands are running: then says so instead, and moves
-    /// focus to the newest island waiting for input, if any.
+    /// focus to the newest island waiting for input, if any, scrolling it
+    /// into view.
     fn exit_if_idle(&mut self) -> Task<Message> {
         let running: Vec<&Block> = self.running().collect();
         let waiting = (running.iter().rev()).find_map(|block| {
@@ -582,7 +583,10 @@ impl Shell {
             })
         });
         let (named, focus) = match (waiting, running.last()) {
-            (Some((block, island)), _) => (block, island.focus()),
+            (Some((block, island)), _) => {
+                let focus = island.focus();
+                (block, Task::batch([focus, scroll_into_view(island.id())]))
+            }
             (None, Some(block)) => (block, Task::none()),
             (None, None) => return self.exit(),
         };
@@ -818,22 +822,40 @@ fn focused() -> Task<Option<Id>> {
 
 /// Scrolls the scrollback up by `pages` pages (down if negative).
 fn scroll_page<T: Send + 'static>(pages: f32) -> Task<T> {
-    struct ScrollPage(f32);
+    scroll_by(Amount::Pages(pages))
+}
 
-    impl<T> Operation<T> for ScrollPage {
+/// How far to scroll; up if positive.
+#[derive(Clone, Copy)]
+enum Amount {
+    /// Pages, each a bit less than the scrollback's height, so some lines
+    /// stay in view.
+    Pages(f32),
+    Pixels(f32),
+}
+
+/// Scrolls the scrollback by `amount`.
+fn scroll_by<T: Send + 'static>(amount: Amount) -> Task<T> {
+    struct ScrollBy(Amount);
+
+    impl<T> Operation<T> for ScrollBy {
         fn scrollable(
             &mut self,
             id: Option<&Id>,
-            bounds: iced::Rectangle,
-            content_bounds: iced::Rectangle,
+            bounds: Rectangle,
+            content_bounds: Rectangle,
             _: iced::Vector,
             state: &mut dyn Scrollable,
         ) {
             if id == Some(&Id::new(SCROLLBACK)) {
-                // A bit less than a page, so some lines stay in view. The
-                // scrollback is anchored at the bottom, so its offset grows
-                // upwards.
-                let y = self.0 * (bounds.height - 3.0 * spacing()).max(spacing());
+                // The scrollback is anchored at the bottom, so its offset
+                // grows upwards.
+                let y = match self.0 {
+                    Amount::Pages(pages) => {
+                        pages * (bounds.height - 3.0 * spacing()).max(spacing())
+                    }
+                    Amount::Pixels(pixels) => pixels,
+                };
                 state.scroll_by(AbsoluteOffset { x: 0.0, y }, bounds, content_bounds);
             }
         }
@@ -843,7 +865,78 @@ fn scroll_page<T: Send + 'static>(pages: f32) -> Task<T> {
         }
     }
 
-    operate(ScrollPage(pages))
+    operate(ScrollBy(amount))
+}
+
+/// Scrolls the scrollback as little as needed to show the focusable widget
+/// `target` (e.g. an island), or its top if it doesn't fit.
+fn scroll_into_view<T: Send + 'static>(target: Id) -> Task<T> {
+    struct Find {
+        target: Id,
+        /// The visible part of the scrollback's content, in its coordinates.
+        view: Option<Rectangle>,
+        /// The target's top and bottom, in the content's coordinates.
+        found: Option<(f32, f32)>,
+        /// The top of the content, where the target is measured from.
+        content_top: f32,
+    }
+
+    impl Operation<f32> for Find {
+        fn scrollable(
+            &mut self,
+            id: Option<&Id>,
+            bounds: Rectangle,
+            content_bounds: Rectangle,
+            translation: iced::Vector,
+            _: &mut dyn Scrollable,
+        ) {
+            if id == Some(&Id::new(SCROLLBACK)) {
+                self.view = Some(Rectangle {
+                    y: translation.y,
+                    ..bounds
+                });
+                self.content_top = content_bounds.y;
+            }
+        }
+
+        fn focusable(&mut self, id: Option<&Id>, bounds: Rectangle, _: &mut dyn Focusable) {
+            if id == Some(&self.target) {
+                let top = bounds.y - self.content_top;
+                self.found = Some((top, top + bounds.height));
+            }
+        }
+
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<f32>)) {
+            operate(self);
+        }
+
+        fn finish(&self) -> OperationOutcome<f32> {
+            let (Some(view), Some((top, bottom))) = (self.view, self.found) else {
+                return OperationOutcome::Some(0.0);
+            };
+            // Some room around it, like between blocks.
+            let (top, bottom) = (top - 2.0 * spacing(), bottom + 2.0 * spacing());
+            let up = if top < view.y {
+                view.y - top
+            } else if bottom > view.y + view.height {
+                -(bottom - (view.y + view.height)).min(top - view.y)
+            } else {
+                0.0
+            };
+            OperationOutcome::Some(up)
+        }
+    }
+
+    operate(Find {
+        target,
+        view: None,
+        found: None,
+        content_top: 0.0,
+    })
+    .then(|up| match up {
+        0.0 => Task::none(),
+        up => scroll_by(Amount::Pixels(up)),
+    })
 }
 
 /// Moves a file to `<path>.bad`, and returns the new path.

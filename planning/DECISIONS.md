@@ -322,7 +322,10 @@ Works like a terminal: a scrollback with the prompt below it.
   running, it doesn't exit, but adds an ephemeral warning ("Not exiting:
   LINE [and N other commands] are running"), naming the newest command
   waiting for input, else the newest running one, and moves focus to that
-  command's island. Closing the window still exits without asking.
+  command's island, scrolling it into view as little as needed (its top
+  first, if it doesn't fit). The island's bounds come from an operation
+  (it's a focusable with the island's Id), then a second one scrolls.
+  Closing the window still exits without asking.
   Escape has no binding.
 - A newly shown island gets focus, unless something other than the empty
   prompt has it, so an island that appears later doesn't take keys meant
