@@ -34,6 +34,9 @@
 //! exit are marked as interrupted. A command line starting with a space is
 //! private: neither it nor its output is saved. It stays in the history
 //! while its block is in the scrollback.
+//!
+//! [`preview`] shows a saved session read-only, without an interpreter: there
+//! is no prompt, nothing runs, and the session file is never written.
 
 use std::fmt;
 use std::mem;
@@ -72,7 +75,7 @@ pub fn run(
     let level = hob_core::logger::level_from_env();
     let records = hob_core::logger::install(level);
     application(
-        Arc::new(interpreter),
+        Some(Arc::new(interpreter)),
         session,
         placeholder.into(),
         level,
@@ -81,10 +84,23 @@ pub fn run(
     .run()
 }
 
-/// The shell as an iced application, ready to run. Log records that aren't
-/// from a command are read from `records`, if given.
+/// Opens the session saved in `session` read-only, and blocks until the
+/// window closes. No commands run, and the file isn't changed, even if it
+/// can't be read.
+pub fn preview(session: PathBuf) -> iced::Result {
+    let level = hob_core::logger::level_from_env();
+    let records = hob_core::logger::install(level);
+    let title = format!("hob (preview of {})", session.display());
+    application(None, Some(session), String::new(), level, records)
+        .title(move |_: &Shell| title.clone())
+        .run()
+}
+
+/// The shell as an iced application, ready to run. Without an interpreter,
+/// it's a read-only preview of the session. Log records that aren't from a
+/// command are read from `records`, if given.
 fn application(
-    interpreter: Arc<Interpreter>,
+    interpreter: Option<Arc<Interpreter>>,
     session: Option<PathBuf>,
     placeholder: String,
     level: Level,
@@ -117,7 +133,8 @@ const PROMPT: &str = "prompt";
 const SCROLLBACK: &str = "scrollback";
 
 struct Shell {
-    interpreter: Arc<Interpreter>,
+    /// Runs commands; without one, the shell is a read-only preview.
+    interpreter: Option<Arc<Interpreter>>,
     /// Shown in the empty prompt.
     placeholder: String,
     /// Where the session is saved, if anywhere.
@@ -237,7 +254,7 @@ impl<T> fmt::Debug for Pending<T> {
 
 impl Shell {
     fn new(
-        interpreter: Arc<Interpreter>,
+        interpreter: Option<Arc<Interpreter>>,
         session: Option<PathBuf>,
         placeholder: String,
         level: Level,
@@ -258,27 +275,44 @@ impl Shell {
             next_id: 0,
         };
         shell.restore();
-        let mut tasks = vec![operation::focus(Id::new(PROMPT))];
+        let mut tasks = Vec::new();
+        if !shell.is_preview() {
+            tasks.push(operation::focus(Id::new(PROMPT)));
+        }
         if let Some(records) = records {
             tasks.push(Task::run(records, Message::Log));
         }
         (shell, Task::batch(tasks))
     }
 
+    /// Whether this is a read-only preview of a session, without an
+    /// interpreter.
+    fn is_preview(&self) -> bool {
+        self.interpreter.is_none()
+    }
+
     /// Restores the saved session, if there is one. Errors are reported; a
-    /// file with bad contents is moved aside, so it isn't overwritten.
+    /// file with bad contents is moved aside, so it isn't overwritten (but
+    /// not in a preview, which never writes it).
     fn restore(&mut self) {
         let Some(path) = self.session.clone() else {
             return;
         };
         let restored = match Session::load(&path) {
             Ok(Some(session)) => session,
+            Ok(None) if self.is_preview() => {
+                let message = format!("There's no saved session at {}.", path.display());
+                eprintln!("hob: {message}");
+                self.scrollback
+                    .push(Item::Notice(LogRecord::new(Level::Error, TARGET, message)));
+                return;
+            }
             Ok(None) => return,
             Err(e) => {
                 let mut message =
                     format!("Couldn't restore the session from {}: {e}", path.display());
                 // The file was read, but its contents are no good.
-                if !matches!(e, SessionError::Io(_)) {
+                if !matches!(e, SessionError::Io(_)) && !self.is_preview() {
                     match move_aside(&path) {
                         Ok(aside) => message += &format!("; moved it to {}", aside.display()),
                         Err(e) => message += &format!("; couldn't move it aside: {e}"),
@@ -310,11 +344,14 @@ impl Shell {
     /// now, and without ephemeral log records or private blocks.
     ///
     /// An error is shown once, as an ephemeral notice: it can't be saved,
-    /// and saving it mustn't cause another save.
+    /// and saving it mustn't cause another save. A preview saves nothing.
     fn save(&mut self) {
         let Some(path) = &self.session else {
             return;
         };
+        if self.is_preview() {
+            return;
+        }
         let session = Session {
             history: self.history.saved_lines(),
             scrollback: (self.scrollback.iter())
@@ -419,6 +456,9 @@ impl Shell {
         // Trailing spaces are invisible (completion leaves one), so they
         // shouldn't reach the command or the history.
         let line = mem::take(&mut self.prompt).trim_end().to_owned();
+        let Some(interpreter) = self.interpreter.clone() else {
+            return Task::none();
+        };
         if line.is_empty() {
             return Task::none();
         }
@@ -432,7 +472,7 @@ impl Shell {
             running: false,
             interrupted: false,
         };
-        let task = match self.interpreter.run(&block.line) {
+        let task = match interpreter.run(&block.line) {
             Ok(requests) => {
                 block.running = true;
                 // The stream ends when the command finishes.
@@ -450,11 +490,18 @@ impl Shell {
     }
 
     fn perform(&mut self, action: Action) -> Task<Message> {
+        // A preview only scrolls; nothing in it changes.
+        if self.is_preview() && !matches!(action, Action::PageUp | Action::PageDown) {
+            return Task::none();
+        }
         let line = match action {
             Action::HistoryBack => self.history.back(&self.prompt).map(str::to_owned),
             Action::HistoryForward => self.history.forward().map(str::to_owned),
             Action::Complete => {
-                let completion = self.interpreter.complete(&self.prompt);
+                let Some(interpreter) = &self.interpreter else {
+                    return Task::none();
+                };
+                let completion = interpreter.complete(&self.prompt);
                 self.candidates = completion.candidates;
                 self.history.stop_browsing();
                 Some(completion.line)
@@ -704,6 +751,24 @@ impl Shell {
             Item::Notice(_) => None,
         });
         let scrollback = column(items).spacing(2.0 * spacing());
+        let scrollback = scrollable(container(scrollback).padding(2.0 * spacing()))
+            .id(Id::new(SCROLLBACK))
+            .anchor_bottom()
+            .width(Length::Fill)
+            .height(Length::Fill);
+
+        // A preview has no prompt; it says what it is instead.
+        if let (true, Some(path)) = (self.is_preview(), &self.session) {
+            let note = format!("Read-only preview of {}", path.display());
+            return column([
+                scrollback.into(),
+                rule::horizontal(1).into(),
+                container(text(note).style(text::secondary))
+                    .padding(padding::vertical(spacing()).horizontal(2.0 * spacing()))
+                    .into(),
+            ])
+            .into();
+        }
 
         let prompt = text_input(&self.placeholder, &self.prompt)
             .id(Id::new(PROMPT))
@@ -721,12 +786,7 @@ impl Shell {
             .style(prompt_style);
 
         column([
-            scrollable(container(scrollback).padding(2.0 * spacing()))
-                .id(Id::new(SCROLLBACK))
-                .anchor_bottom()
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
+            scrollback.into(),
             rule::horizontal(1).into(),
             container(
                 // The prompt stays the first child, so it keeps its state

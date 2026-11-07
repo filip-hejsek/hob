@@ -81,7 +81,7 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - Records of what an agent did, for inspecting later (hob-headless saves
   nothing; see DECISIONS.md):
   - hob-mcp could save a session file (`hob_core::Session`), built from
-    the notifications it gets, to open in hob-gui with `HOB_SESSION`. It
+    the notifications it gets, to open with `hob --preview`. It
     would show only final states.
   - hob-mcp could write a log of the messages to and from hob (one JSON
     line each, with times). It would include the intermediate states its

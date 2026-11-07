@@ -96,7 +96,7 @@ fn keys_press_buttons() {
 #[test]
 fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
     let (mut shell, _) = Shell::new(
-        Arc::new(interpreter()),
+        Some(Arc::new(interpreter())),
         None,
         PLACEHOLDER.into(),
         Level::Info,
@@ -126,7 +126,7 @@ fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
 #[test]
 fn ctrl_d_does_not_exit_while_commands_are_running() {
     let (mut shell, _) = Shell::new(
-        Arc::new(interpreter()),
+        Some(Arc::new(interpreter())),
         None,
         PLACEHOLDER.into(),
         Level::Info,
@@ -233,6 +233,51 @@ fn private_lines_are_not_saved() {
     assert_eq!(saved.scrollback.len(), 1);
 }
 
+#[test]
+fn preview_shows_the_session_without_changing_it() {
+    let file = ScratchFile::new("preview");
+    let session = Session {
+        history: vec!["old".into()],
+        scrollback: vec![hob_core::Item::Block(hob_core::Block {
+            line: "old".into(),
+            entries: vec![hob_core::Entry::Text("Old output".into())],
+            interrupted: false,
+        })],
+    };
+    session.save(&file.0).unwrap();
+    let before = std::fs::read(&file.0).unwrap();
+
+    let program = application(None, Some(file.0.clone()), String::new(), Level::Info, None);
+    let mut shell = Harness::new(program);
+    shell.expect("> old");
+    shell.expect("Old output");
+    shell.expect(&format!("Read-only preview of {}", file.0.display()));
+    // There's no prompt to type into.
+    shell.settle();
+    shell.step(typewrite("say new"));
+    shell.step(press(Key::Enter));
+    shell.settle();
+    shell.expect_absent("> say new");
+    assert_eq!(std::fs::read(&file.0).unwrap(), before);
+
+    // Ctrl+L doesn't clear, and closing doesn't save.
+    let (mut shell, _) = Shell::new(None, Some(file.0.clone()), String::new(), Level::Info, None);
+    let ctrl_l = Message::Key(keyboard::Key::Character("l".into()), Modifiers::CTRL);
+    let _ = shell.update(ctrl_l);
+    assert_eq!(shell.scrollback.len(), 1);
+    let _ = shell.update(Message::CloseRequested);
+    assert_eq!(std::fs::read(&file.0).unwrap(), before);
+}
+
+#[test]
+fn preview_leaves_a_bad_file_alone() {
+    let file = ScratchFile::new("preview-bad");
+    std::fs::write(&file.0, "not json").unwrap();
+    let (shell, _) = Shell::new(None, Some(file.0.clone()), String::new(), Level::Info, None);
+    assert!(matches!(&shell.scrollback[..], [Item::Notice(r)] if r.level == Level::Error));
+    assert_eq!(std::fs::read(&file.0).unwrap(), b"not json");
+}
+
 /// Shown in the empty prompt.
 const PLACEHOLDER: &str = "Type a command";
 
@@ -283,7 +328,7 @@ struct Harness<P: Program + 'static> {
 /// the given session file.
 fn start(session: Option<PathBuf>) -> Harness<impl Program + 'static> {
     let program = application(
-        Arc::new(interpreter()),
+        Some(Arc::new(interpreter())),
         session,
         PLACEHOLDER.into(),
         Level::Info,

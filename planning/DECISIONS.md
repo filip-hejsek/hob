@@ -411,6 +411,11 @@ Works like a terminal: a scrollback with the prompt below it.
   rest of the session still loads.
 - Commands still running when the session was last saved are marked as
   interrupted after a restore.
+- `hob --preview [FILE]` shows a saved session read-only: the shell gets no
+  interpreter at all (it's optional in hob-gui), so no command can run.
+  There's no prompt, only a note saying what file is shown; only scrolling
+  works. The file is never written, nor moved aside if it's bad; a missing
+  file is reported as an error.
 - `clear` (a builtin; commands call `ctx.clear()`) clears the scrollback,
   including its own block, but keeps the blocks of other commands still
   running, so their live islands aren't cancelled. Log records of cleared

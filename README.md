@@ -29,7 +29,8 @@ The project is split into these parts:
 - **hob-demo** — demo commands.
 - **hob-fs** — filesystem commands: `pwd`, `cd`, `ls`, `cat`.
 - **hob** — the application: registers the commands and starts the shell
-  (or, with `--headless`, the headless frontend).
+  (or, with `--headless`, the headless frontend; with `--preview`, a
+  read-only view of a saved session).
 
 Building needs libjxl (0.8 or newer, found with pkg-config), e.g. the
 `libjxl` package on Arch or `libjxl-dev` on Debian and Ubuntu.
@@ -43,6 +44,9 @@ cargo run
 The history and scrollback are restored on the next start. They're saved in
 the platform's state directory (e.g. `~/.local/state/hob/session.json`); set
 `HOB_SESSION` to use another file.
+
+`hob --preview [FILE]` shows a saved session (by default, the current one)
+read-only: nothing runs, and the file isn't changed.
 
 Errors and warnings are shown in the scrollback (warnings from libraries only
 on stderr); the `messages` command lists all messages. Set `HOB_LOG=debug` to
