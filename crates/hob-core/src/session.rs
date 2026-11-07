@@ -115,7 +115,7 @@ fn saved_image(image: &Image) -> Image {
 }
 
 /// Things that may be left out when saving.
-trait Ephemeral {
+pub(crate) trait Ephemeral {
     fn is_ephemeral(&self) -> bool;
 }
 

@@ -43,6 +43,15 @@ impl History {
             .retain(|line| !Self::is_private(line) || keep(line));
     }
 
+    /// Forgets the oldest lines, keeping at most `max`. Stops browsing if
+    /// anything is forgotten.
+    pub fn truncate(&mut self, max: usize) {
+        if let Some(excess) = self.lines.len().checked_sub(max).filter(|&n| n > 0) {
+            self.position = None;
+            self.lines.drain(..excess);
+        }
+    }
+
     /// Adds an entered line, and stops browsing. Blank lines and repeats of
     /// the previous line are skipped.
     pub fn push(&mut self, line: &str) {
@@ -145,6 +154,18 @@ mod tests {
         assert_eq!(h.back(""), Some(" d"));
         assert_eq!(h.back(""), Some("c"));
         assert_eq!(h.back(""), Some("a"));
+        assert_eq!(h.back(""), None);
+    }
+
+    #[test]
+    fn truncate_keeps_the_newest_lines() {
+        let mut h = history(&["a", "b", "c"]);
+        h.truncate(5);
+        assert_eq!(h.saved_lines(), ["a", "b", "c"]);
+        h.truncate(2);
+        assert_eq!(h.saved_lines(), ["b", "c"]);
+        assert_eq!(h.back(""), Some("c"));
+        assert_eq!(h.back(""), Some("b"));
         assert_eq!(h.back(""), None);
     }
 

@@ -50,6 +50,7 @@ mod line;
 pub mod logger;
 mod record;
 mod session;
+mod trim;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -70,6 +71,7 @@ pub use history::History;
 pub use line::trim_line_end;
 pub use record::{Level, LogRecord};
 pub use session::{Block, Entry, Item, Session, SessionError};
+pub use trim::{Limits, Trim, strip_image};
 
 /// What a command returns: any error is shown to the user.
 pub type CommandResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;

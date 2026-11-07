@@ -34,7 +34,10 @@
 //! some keys themselves (see [`kettle_ui_iced`]).
 //!
 //! The history and scrollback are saved as a [`Session`] after every change
-//! and on exit, and restored on the next start. Commands still running on
+//! and on exit, and restored on the next start. Before saving, they're
+//! trimmed to [`Limits`] (see [`Limits::from_env`]): the oldest items of the
+//! scrollback are dropped when it gets too big, and older items lose their
+//! images' data when the images do. Commands still running on
 //! exit are marked as interrupted. A command line starting with a space is
 //! private: neither it nor its output is saved. It stays in the history
 //! while its block is in the scrollback.
@@ -47,7 +50,9 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use hob_core::{History, Interpreter, Level, LogRecord, Reply, Request, Session, SessionError};
+use hob_core::{
+    History, Interpreter, Level, Limits, LogRecord, Reply, Request, Session, SessionError, Trim,
+};
 use iced::advanced::widget::operation::{Focusable, Outcome as OperationOutcome, Scrollable};
 use iced::advanced::widget::{Operation, operate};
 use iced::keyboard::{self, Modifiers};
@@ -85,6 +90,7 @@ pub fn run(
     application(
         Some(Arc::new(interpreter)),
         session,
+        Limits::from_env(),
         placeholder.into(),
         level,
         records,
@@ -99,17 +105,20 @@ pub fn preview(session: PathBuf) -> iced::Result {
     let level = hob_core::logger::level_from_env();
     let records = hob_core::logger::install(level);
     let title = format!("hob (preview of {})", session.display());
-    application(None, Some(session), String::new(), level, records)
+    let limits = Limits::default();
+    application(None, Some(session), limits, String::new(), level, records)
         .title(move |_: &Shell| title.clone())
         .run()
 }
 
 /// The shell as an iced application, ready to run. Without an interpreter,
-/// it's a read-only preview of the session. Log records that aren't from a
-/// command are read from `records`, if given.
+/// it's a read-only preview of the session. The session is trimmed to
+/// `limits` when saved. Log records that aren't from a command are read
+/// from `records`, if given.
 fn application(
     interpreter: Option<Arc<Interpreter>>,
     session: Option<PathBuf>,
+    limits: Limits,
     placeholder: String,
     level: Level,
     records: Option<futures_channel::mpsc::UnboundedReceiver<LogRecord>>,
@@ -122,6 +131,7 @@ fn application(
             Shell::new(
                 interpreter.clone(),
                 session.clone(),
+                limits,
                 placeholder.clone(),
                 level,
                 records,
@@ -163,6 +173,9 @@ struct Shell {
     placeholder: String,
     /// Where the session is saved, if anywhere.
     session: Option<PathBuf>,
+    /// How big the saved session may get; the scrollback and history are
+    /// trimmed to fit.
+    limits: Limits,
     /// The last error saving the session, so it's reported only once.
     save_error: Option<String>,
     /// The lowest level of log records shown.
@@ -284,6 +297,7 @@ impl Shell {
     fn new(
         interpreter: Option<Arc<Interpreter>>,
         session: Option<PathBuf>,
+        limits: Limits,
         placeholder: String,
         level: Level,
         records: Option<futures_channel::mpsc::UnboundedReceiver<LogRecord>>,
@@ -292,6 +306,7 @@ impl Shell {
             placeholder,
             interpreter,
             session,
+            limits,
             save_error: None,
             level,
             prompt: String::new(),
@@ -369,25 +384,31 @@ impl Shell {
     }
 
     /// Saves the history and scrollback, with live islands frozen as they are
-    /// now, and without ephemeral log records or private blocks.
+    /// now, and without ephemeral log records or private blocks. Both are
+    /// trimmed first to keep the file within the limits (see
+    /// [`trim`](Shell::trim)).
     ///
     /// An error is shown once, as an ephemeral notice: it can't be saved,
     /// and saving it mustn't cause another save. A preview saves nothing.
     fn save(&mut self) {
-        let Some(path) = &self.session else {
+        let Some(path) = self.session.clone() else {
             return;
         };
         if self.is_preview() {
             return;
         }
+        self.history.truncate(self.limits.history);
+        let (indices, mut scrollback) = self.saved_items();
+        let trim = Trim::new(&scrollback, &self.limits);
+        if !trim.is_empty() {
+            self.trim(&indices, trim);
+            (_, scrollback) = self.saved_items();
+        }
         let session = Session {
             history: self.history.saved_lines(),
-            scrollback: (self.scrollback.iter())
-                .filter(|item| !matches!(item, Item::Block(b) if History::is_private(&b.line)))
-                .map(Item::to_saved)
-                .collect(),
+            scrollback,
         };
-        let notice = match session.save(path) {
+        let notice = match session.save(&path) {
             Ok(()) => match self.save_error.take() {
                 Some(_) => LogRecord::new(Level::Info, TARGET, "Saving the session works again."),
                 None => return,
@@ -403,6 +424,55 @@ impl Shell {
             }
         };
         self.scrollback.push(Item::Notice(notice));
+    }
+
+    /// The items of the scrollback that are saved, as saved, with their
+    /// indices in the scrollback: all but private blocks.
+    fn saved_items(&self) -> (Vec<usize>, Vec<hob_core::Item>) {
+        (self.scrollback.iter().enumerate())
+            .filter(|(_, item)| !matches!(item, Item::Block(b) if History::is_private(&b.line)))
+            .map(|(i, item)| (i, item.to_saved()))
+            .unzip()
+    }
+
+    /// Trims the scrollback as `trim` says, for the saved items at
+    /// `indices`. Items between them (private blocks) go with the saved
+    /// item before them. Blocks of commands still running aren't dropped,
+    /// since their commands still use them, nor are live islands' images.
+    ///
+    /// Dropped items are gone, unlike with `clear`: their log records
+    /// aren't kept for `messages`, since the point is to use less space.
+    fn trim(&mut self, indices: &[usize], trim: Trim) {
+        // The newest saved item is always kept, so the indices are there.
+        let images_from = indices[trim.images_from];
+        for item in &mut self.scrollback[..images_from] {
+            if let Item::Block(block) = item {
+                for entry in &mut block.entries {
+                    if let Entry::Frozen(island) = entry {
+                        *island = island.map_images(hob_core::strip_image);
+                    }
+                }
+            }
+        }
+        let keep_from = indices[trim.keep_from];
+        let mut i = 0;
+        self.scrollback.retain(|item| {
+            i += 1;
+            i > keep_from || matches!(item, Item::Block(b) if b.running)
+        });
+        self.forget_private_lines();
+    }
+
+    /// Forgets private lines from the history whose blocks are gone from the
+    /// scrollback.
+    fn forget_private_lines(&mut self) {
+        let shown: Vec<&str> = (self.scrollback.iter())
+            .filter_map(|item| match item {
+                Item::Block(block) => Some(block.line.as_str()),
+                Item::Notice(_) => None,
+            })
+            .collect();
+        self.history.retain_private(|line| shown.contains(&line));
     }
 
     fn next_id(&mut self) -> u64 {
@@ -708,13 +778,7 @@ impl Shell {
             .partition(|item| matches!(item, Item::Block(b) if b.running && Some(b.id) != caller));
         self.scrollback = kept;
         self.cleared_records.extend(log_records(&cleared));
-        let shown: Vec<&str> = (self.scrollback.iter())
-            .filter_map(|item| match item {
-                Item::Block(block) => Some(block.line.as_str()),
-                Item::Notice(_) => None,
-            })
-            .collect();
-        self.history.retain_private(|line| shown.contains(&line));
+        self.forget_private_lines();
     }
 
     /// All log records, oldest first: of cleared items, then of the

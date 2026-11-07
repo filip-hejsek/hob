@@ -53,7 +53,11 @@ desktop-file-install --dir ~/.local/share/applications data/io.github.filip_hejs
 
 The history and scrollback are restored on the next start. They're saved in
 the platform's state directory (e.g. `~/.local/state/hob/session.json`); set
-`HOB_SESSION` to use another file.
+`HOB_SESSION` to use another file. Old output is dropped once the file
+gets big: past 4 MiB of text (`HOB_SESSION_SIZE`), or 16 MiB of images
+(`HOB_SESSION_IMAGES`), after which older images show only their alt text.
+Sizes are in bytes, or with a `K`, `M` or `G` suffix; small values help
+when trying the trimming out. The history keeps 10,000 lines.
 
 `hob --preview [FILE]` shows a saved session (by default, the current one)
 read-only: nothing runs, and the file isn't changed.

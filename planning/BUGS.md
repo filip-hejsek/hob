@@ -41,7 +41,5 @@ TODO.md.
   scrollback (the shell's bindings work anywhere).
 - Log records cleared by `clear` are kept only in memory, so `messages`
   no longer lists them after a restart.
-- The scrollback grows without limit, and so does the session file, which
-  is rewritten in full on every change.
 - Edits in a live island are only saved on close (or with the next
   scrollback change), so a crash loses them.

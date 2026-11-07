@@ -550,6 +550,25 @@ Works like a terminal: a scrollback with the prompt below it.
   rest of the session still loads.
 - Commands still running when the session was last saved are marked as
   interrupted after a restore.
+- Before each save, the session is trimmed to `hob_core::Limits`, and so is
+  the shell's own scrollback and history, so memory and what's shown match
+  what a restart would restore (like a terminal's scrollback limit).
+  Limits are on the file, since it's rewritten on every change: 4 MiB of
+  scrollback without image data (measured as compact JSON, so roughly),
+  16 MiB of image data (as base64), and 10,000 history lines. Counting
+  from the newest item, the item that exceeds the size limit and all older
+  ones are dropped; the one that exceeds the image limit and all older
+  ones lose their images' data (linked images keep it: they aren't in the
+  file), so they show their alt text. The newest item is always kept
+  whole, so a single big output isn't dropped as soon as it's shown.
+  Blocks of running commands aren't dropped (their commands still use
+  them), nor are live islands' images; private blocks aren't counted, and
+  go with the next older saved item. Dropped log records aren't kept for
+  `messages`, unlike with `clear`. `HOB_SESSION_SIZE` and
+  `HOB_SESSION_IMAGES` override the sizes, e.g. small ones for trying it
+  out; tests pass `Limits` directly. Rejected: a count of blocks (outputs
+  vary too much in size), and trimming only the file (the session would
+  still be built from an unbounded scrollback on every save).
 - Command lines, printed text and log records can be selected with the
   mouse and copied with Ctrl+C. Each is a `SelectableText`: a `text_editor`
   that ignores edits, wheel scrolling and keys other than copying and

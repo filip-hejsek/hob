@@ -177,6 +177,7 @@ fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
     let (mut shell, _) = Shell::new(
         Some(Arc::new(interpreter())),
         None,
+        Limits::default(),
         PLACEHOLDER.into(),
         Level::Info,
         None,
@@ -207,6 +208,7 @@ fn ctrl_d_does_not_exit_while_commands_are_running() {
     let (mut shell, _) = Shell::new(
         Some(Arc::new(interpreter())),
         None,
+        Limits::default(),
         PLACEHOLDER.into(),
         Level::Info,
         None,
@@ -313,6 +315,90 @@ fn private_lines_are_not_saved() {
 }
 
 #[test]
+fn saving_trims_the_scrollback_and_history() {
+    let file = ScratchFile::new("trim");
+    let picture = |shade: u8| {
+        let pixels = [shade, 0, 0, 255].repeat(16);
+        kettle_ui::Image::from_rgba(4, 4, &pixels, "picture").unwrap()
+    };
+    let (a, b) = (picture(10), picture(20));
+    let limits = Limits {
+        history: 4,
+        scrollback: 5000,
+        images: b.data().unwrap().bytes().len() * 2,
+    };
+    let (mut shell, _) = Shell::new(
+        Some(Arc::new(interpreter())),
+        Some(file.0.clone()),
+        limits,
+        PLACEHOLDER.into(),
+        Level::Info,
+        None,
+    );
+    let big = Entry::Text("x".repeat(10_000));
+    let image_entry = |image: &kettle_ui::Image| {
+        let mut builder = IslandBuilder::new(kettle_ui::widget::image("x"));
+        builder.set_state("x", image.clone());
+        Entry::Frozen(builder.freeze().unwrap())
+    };
+    let blocks = [
+        ("running", true, vec![Entry::Text("x".repeat(10_000))]),
+        ("old", false, vec![big]),
+        (" secret", false, Vec::new()),
+        ("pic a", false, vec![image_entry(&a)]),
+        ("pic b", false, vec![image_entry(&b)]),
+        ("new", false, Vec::new()),
+    ];
+    for (line, running, entries) in blocks {
+        shell.history.push(line);
+        let id = shell.next_id();
+        shell.scrollback.push(Item::Block(Block {
+            id,
+            line: line.into(),
+            entries,
+            running,
+            interrupted: false,
+        }));
+    }
+    shell.save();
+
+    // Too big: "old", and the private block after it. The running block
+    // stays, since its command still uses it.
+    let lines: Vec<_> = (shell.scrollback.iter())
+        .map(|item| match item {
+            Item::Block(block) => block.line.as_str(),
+            Item::Notice(_) => "notice",
+        })
+        .collect();
+    assert_eq!(lines, ["running", "pic a", "pic b", "new"]);
+    // The history lost its oldest lines, and the private line with its
+    // block.
+    assert_eq!(shell.history.saved_lines(), ["pic a", "pic b", "new"]);
+    assert_eq!(shell.history.back(""), Some("new"));
+    assert_eq!(shell.history.back(""), Some("pic b"));
+    assert_eq!(shell.history.back(""), Some("pic a"));
+    assert_eq!(shell.history.back(""), None);
+    // Only one image fits.
+    let image_data = |item: &Item| match item {
+        Item::Block(Block { entries, .. }) => match &entries[..] {
+            [Entry::Frozen(island)] => island.images().next().unwrap().data().cloned(),
+            _ => panic!("expected an island"),
+        },
+        Item::Notice(_) => panic!("expected a block"),
+    };
+    assert_eq!(image_data(&shell.scrollback[1]), None);
+    assert_eq!(image_data(&shell.scrollback[2]).as_ref(), b.data());
+
+    let saved = Session::load(&file.0).unwrap().unwrap();
+    assert_eq!(saved.history, ["pic a", "pic b", "new"]);
+    assert_eq!(saved.scrollback.len(), 4);
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file.0).unwrap()).unwrap();
+    let table = json["images"].as_object().unwrap();
+    assert_eq!(table.keys().collect::<Vec<_>>(), [&b.key().to_string()]);
+}
+
+#[test]
 fn preview_shows_the_session_without_changing_it() {
     let file = ScratchFile::new("preview");
     let session = Session {
@@ -326,7 +412,14 @@ fn preview_shows_the_session_without_changing_it() {
     session.save(&file.0).unwrap();
     let before = std::fs::read(&file.0).unwrap();
 
-    let program = application(None, Some(file.0.clone()), String::new(), Level::Info, None);
+    let program = application(
+        None,
+        Some(file.0.clone()),
+        Limits::default(),
+        String::new(),
+        Level::Info,
+        None,
+    );
     let mut shell = Harness::new(program);
     shell.expect("> old");
     shell.expect("Old output");
@@ -340,7 +433,14 @@ fn preview_shows_the_session_without_changing_it() {
     assert_eq!(std::fs::read(&file.0).unwrap(), before);
 
     // Ctrl+L doesn't clear, and closing doesn't save.
-    let (mut shell, _) = Shell::new(None, Some(file.0.clone()), String::new(), Level::Info, None);
+    let (mut shell, _) = Shell::new(
+        None,
+        Some(file.0.clone()),
+        Limits::default(),
+        String::new(),
+        Level::Info,
+        None,
+    );
     let ctrl_l = Message::Key(keyboard::Key::Character("l".into()), Modifiers::CTRL);
     let _ = shell.update(ctrl_l);
     assert_eq!(shell.scrollback.len(), 1);
@@ -352,7 +452,14 @@ fn preview_shows_the_session_without_changing_it() {
 fn preview_leaves_a_bad_file_alone() {
     let file = ScratchFile::new("preview-bad");
     std::fs::write(&file.0, "not json").unwrap();
-    let (shell, _) = Shell::new(None, Some(file.0.clone()), String::new(), Level::Info, None);
+    let (shell, _) = Shell::new(
+        None,
+        Some(file.0.clone()),
+        Limits::default(),
+        String::new(),
+        Level::Info,
+        None,
+    );
     assert!(matches!(&shell.scrollback[..], [Item::Notice(r)] if r.level == Level::Error));
     assert_eq!(std::fs::read(&file.0).unwrap(), b"not json");
 }
@@ -406,9 +513,18 @@ struct Harness<P: Program + 'static> {
 /// Starts the shell in a [`Harness`], with [`interpreter`]'s commands and
 /// the given session file.
 fn start(session: Option<PathBuf>) -> Harness<impl Program<Message = Message> + 'static> {
+    start_with(session, Limits::default())
+}
+
+/// Like [`start`], with the session trimmed to `limits`.
+fn start_with(
+    session: Option<PathBuf>,
+    limits: Limits,
+) -> Harness<impl Program<Message = Message> + 'static> {
     let program = application(
         Some(Arc::new(interpreter())),
         session,
+        limits,
         PLACEHOLDER.into(),
         Level::Info,
         None,
