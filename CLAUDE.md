@@ -45,9 +45,11 @@ trying commands while developing them: start hob with its `start` tool
 (e.g. `["target/debug/hob", "--headless"]`; rebuild first, then start
 again after changes).
 
-It runs `.bin/hob-mcp`, a release build kept apart from work in progress and
-`cargo clean`. If it's missing or out of date, run `scripts/install-hob-mcp`,
-then ask the user to reconnect it (`/mcp reconnect hob`).
+It runs `.bin/hob-mcp` in the main checkout (through `scripts/hob-mcp`, so
+Git worktrees share it), a release build kept apart from work in progress
+and `cargo clean`. If it's missing or out of date, run
+`scripts/install-hob-mcp`, then ask the user to reconnect it
+(`/mcp reconnect hob`).
 
 Don't use it:
 

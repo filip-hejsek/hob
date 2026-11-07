@@ -2,7 +2,7 @@
   "mcpServers": {
     "hob": {
       "type": "stdio",
-      "command": ".bin/hob-mcp",
+      "command": "scripts/hob-mcp",
       "args": ["--agent-spawns"]
     }
   }

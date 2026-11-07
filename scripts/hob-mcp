@@ -1,0 +1,13 @@
+#!/bin/sh
+# Runs hob-mcp as installed by scripts/install-hob-mcp, from the main
+# checkout's .bin/, so that Git worktrees share one install. It's what
+# .mcp.json runs.
+set -eu
+dir=$(dirname "$0")
+git_dir=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir)
+bin="$(dirname "$git_dir")/.bin/hob-mcp"
+if [ ! -x "$bin" ]; then
+	echo "hob-mcp: $bin is missing; run scripts/install-hob-mcp" >&2
+	exit 1
+fi
+exec "$bin" "$@"
