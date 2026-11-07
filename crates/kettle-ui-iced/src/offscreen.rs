@@ -11,12 +11,12 @@ use kettle_ui::FrozenIsland;
 
 use crate::{Message, render, spacing};
 
-/// Renders an island offscreen to a PNG, `width` logical pixels wide and as
-/// tall as it needs, with padding around it. Without `frozen`, widgets look
-/// enabled, as in a live island. Uses tiny-skia and the bundled Fira Sans,
+/// Renders an island offscreen to a PNG in `theme`, `width` logical pixels
+/// wide and as tall as it needs, with padding around it. Without `frozen`,
+/// widgets look enabled, as in a live island. Uses tiny-skia and the bundled Fira Sans,
 /// so the output doesn't depend on the machine.
-pub fn render_png(island: &FrozenIsland, width: u32, frozen: bool) -> Vec<u8> {
-    let (size, rgba) = render_rgba(island, width, frozen);
+pub fn render_png(island: &FrozenIsland, theme: &Theme, width: u32, frozen: bool) -> Vec<u8> {
+    let (size, rgba) = render_rgba(island, theme, width, frozen);
     let mut png = Vec::new();
     let mut encoder = png::Encoder::new(&mut png, size.width, size.height);
     encoder.set_color(png::ColorType::Rgba);
@@ -30,7 +30,12 @@ pub fn render_png(island: &FrozenIsland, width: u32, frozen: bool) -> Vec<u8> {
 }
 
 /// Renders an island to RGBA pixels; see [`render_png`].
-fn render_rgba(island: &FrozenIsland, width: u32, frozen: bool) -> (Size<u32>, Vec<u8>) {
+fn render_rgba(
+    island: &FrozenIsland,
+    theme: &Theme,
+    width: u32,
+    frozen: bool,
+) -> (Size<u32>, Vec<u8>) {
     let mut element: Element<'_, Message> = container(render(island, island.root(), !frozen, None))
         .padding(spacing())
         .into();
@@ -40,7 +45,6 @@ fn render_rgba(island: &FrozenIsland, width: u32, frozen: bool) -> (Size<u32>, V
         Some("tiny-skia"),
     ))
     .expect("the tiny-skia renderer is always available");
-    let theme = Theme::Light;
 
     let mut tree = Tree::new(&element);
     let limits = Limits::new(Size::ZERO, Size::new(width as f32, f32::INFINITY));
@@ -72,7 +76,7 @@ fn render_rgba(island: &FrozenIsland, width: u32, frozen: bool) -> (Size<u32>, V
     element.as_widget().draw(
         &tree,
         &mut renderer,
-        &theme,
+        theme,
         &style,
         Layout::new(&node),
         mouse::Cursor::Unavailable,
@@ -109,7 +113,7 @@ mod tests {
     /// pixel. If the file is missing, writes it instead; delete it to
     /// regenerate it.
     fn check_snapshot(name: &str, frozen: bool) {
-        let png = render_png(&island(), 300, frozen);
+        let png = render_png(&island(), &Theme::Light, 300, frozen);
         let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests", "snapshots"]
             .iter()
             .collect::<PathBuf>()
@@ -150,11 +154,20 @@ mod tests {
     }
 
     #[test]
+    fn theme_sets_the_background() {
+        let background = |theme: &Theme| render_rgba(&island(), theme, 300, false).1[..4].to_vec();
+        assert_eq!(background(&Theme::Light), [255, 255, 255, 255]);
+        assert_ne!(background(&Theme::Dark), background(&Theme::Light));
+    }
+
+    #[test]
     fn text_area_grows_with_its_text() {
         let height = |text: &str| {
             let mut b = IslandBuilder::new(text_area("t", "Notes"));
             b.set_text("t", text);
-            render_rgba(&b.freeze().unwrap(), 300, true).0.height
+            render_rgba(&b.freeze().unwrap(), &Theme::Light, 300, true)
+                .0
+                .height
         };
         let empty = height("");
         assert!(empty > 80, "{empty}");
@@ -179,7 +192,7 @@ mod tests {
 
     #[test]
     fn image_is_shown_at_its_size() {
-        let (size, rgba) = render_rgba(&image_island(50, 40, true), 300, true);
+        let (size, rgba) = render_rgba(&image_island(50, 40, true), &Theme::Light, 300, true);
         let pad = spacing() as u32;
         assert_eq!(size.height, 40 + 2 * pad);
         assert!(is_red(&rgba, size, pad, pad));
@@ -189,7 +202,7 @@ mod tests {
 
     #[test]
     fn wide_image_is_scaled_to_fit() {
-        let (size, rgba) = render_rgba(&image_island(560, 100, true), 300, true);
+        let (size, rgba) = render_rgba(&image_island(560, 100, true), &Theme::Light, 300, true);
         let pad = spacing() as u32;
         // 280 pixels wide, so half the size.
         assert_eq!(size.height, 50 + 2 * pad);
@@ -198,7 +211,7 @@ mod tests {
 
     #[test]
     fn missing_image_shows_a_notice() {
-        let (size, rgba) = render_rgba(&image_island(50, 400, false), 300, true);
+        let (size, rgba) = render_rgba(&image_island(50, 400, false), &Theme::Light, 300, true);
         assert!(size.height < 100, "{size:?}");
         assert!(!rgba.chunks(4).any(|p| p == [255, 0, 0, 255]));
         assert!(rgba.chunks(4).any(|p| p != &rgba[..4]));
@@ -206,7 +219,7 @@ mod tests {
 
     #[test]
     fn height_fits_content() {
-        let (size, rgba) = render_rgba(&island(), 300, false);
+        let (size, rgba) = render_rgba(&island(), &Theme::Light, 300, false);
         assert_eq!(size.width, 300);
         assert!(size.height > 100 && size.height < 400, "{size:?}");
         // Not blank: some pixels differ from the first one.

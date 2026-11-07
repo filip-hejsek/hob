@@ -209,7 +209,8 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   adds the font; hob-gui's default font is unchanged), so the output is the
   same on every machine. The image is as tall as the island. It uses the
   live look by default, since that's what the island looked like to the
-  user; `--frozen` gives the disabled look of the scrollback. Not
+  user; `--frozen` gives the disabled look of the scrollback. The theme is
+  a parameter (`--theme`, light by default), since the host picks it. Not
   `iced_test::Simulator`: it's made for tests (fixed 1024×768 size and 2×
   scale, snapshots compared with PNG files), not for producing images.
 

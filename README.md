@@ -97,7 +97,8 @@ from, unless `HOB_IMAGE_PATHS=1` is set.
 
 To see an island without starting the GUI, render it to a PNG with
 `kettle-render` (`--frozen` gives the disabled look of the scrollback,
-`--width N` sets the width). It reads a frozen island as JSON: e.g. from the
+`--width N` sets the width, `--theme NAME` picks one of iced's built-in
+themes, e.g. `dark`; the default is `light`). It reads a frozen island as JSON: e.g. from the
 session file's scrollback, or from the `contents` of a hob-headless `island`
 notification. For example, to render the last island in the session
 (with its images, which the session keeps in a table of their own):
