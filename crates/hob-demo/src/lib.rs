@@ -34,7 +34,7 @@ pub fn register(interpreter: &mut Interpreter) {
     );
     interpreter.register(
         "swatch",
-        "Show a swatch of the color typed, like #ff8800",
+        "Show a field for a color, like #ff8800, and a swatch of it",
         swatch,
     );
     interpreter.register(
