@@ -82,6 +82,8 @@ pub enum Outcome {
     Submitted(Fields),
     /// The user pressed a [`cancel_button`](crate::widget::cancel_button).
     Cancelled,
+    /// The user pressed a [`button`](crate::widget::button) with this id.
+    Pressed(Arc<str>, Fields),
 }
 
 impl Model {

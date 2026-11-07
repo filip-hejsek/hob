@@ -497,6 +497,7 @@ mod tests {
             match ctx.show(IslandBuilder::new(column([]))) {
                 Ok(Outcome::Submitted(_)) => ctx.print("submitted"),
                 Ok(Outcome::Cancelled) => ctx.print("cancelled"),
+                Ok(Outcome::Pressed(id, _)) => ctx.print(format!("pressed {id}")),
                 Err(e) => ctx.print(e.to_string()),
             }
             Ok(())

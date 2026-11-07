@@ -49,6 +49,7 @@ fn register_islands(interpreter: &mut Interpreter) {
             let message = match ctx.show(demo.builder())? {
                 Outcome::Submitted(fields) => format!("{title}: {}", demo.summary(&fields)),
                 Outcome::Cancelled => format!("{title}: cancelled"),
+                Outcome::Pressed(id, _) => format!("{title}: pressed {id}"),
             };
             ctx.print(message);
             Ok(())
@@ -105,7 +106,8 @@ fn levels(ctx: &mut Context, args: &[String]) -> CommandResult {
     Ok(())
 }
 
-/// Shows an island that refers to state that doesn't exist.
+/// Asks for confirmation. "Yes" isn't a submit button, so Enter can't
+/// confirm by accident.
 fn confirm(ctx: &mut Context, args: &[String]) -> CommandResult {
     let question = match args {
         [] => "Are you sure?".to_owned(),
@@ -113,11 +115,11 @@ fn confirm(ctx: &mut Context, args: &[String]) -> CommandResult {
     };
     let island = IslandBuilder::new(column([
         label(question),
-        row([submit_button("Yes [y]"), cancel_button("No [n]")]),
+        row([button("yes", "Yes [y]"), cancel_button("No [n]")]),
     ]));
     let answer = match ctx.show(island)? {
-        Outcome::Submitted(_) => "yes",
-        Outcome::Cancelled => "no",
+        Outcome::Pressed(..) => "yes",
+        Outcome::Submitted(_) | Outcome::Cancelled => "no",
     };
     ctx.print(format!("Answer: {answer}"));
     Ok(())

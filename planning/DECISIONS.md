@@ -30,6 +30,12 @@ Known bugs are in BUGS.md.
   key is a separate field of the tree (`key`, left out when absent), so
   headless clients get it as data; the outline shows `button "Yes" [y]`.
   Rejected: an explicit key parameter on every button function.
+- Besides submit and cancel buttons there's a plain `button(id, label)`:
+  the island reports `Outcome::Pressed(id, fields)`. Enter never presses
+  it (only a submit button), so a confirmation of a dangerous action must
+  use it rather than a submit button, which Enter would press by accident
+  (the `confirm` demo does). Buttons with the same id are allowed; they do
+  the same thing. In frozen-island JSON its action is `{"press": id}`.
 
 ### Dependency tracking for derived state
 
@@ -107,7 +113,8 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   click elsewhere), so the host's focus checks see it like any other
   focusable widget. It's shown by a thin primary-coloured border around the
   island. `Island::focus` focuses the first shown field, or the island
-  as a whole. Enter submits while the island as a whole has focus.
+  as a whole. Enter submits while the island as a whole has focus (see
+  `button` for answers Enter mustn't give).
 - Checkboxes can have focus: iced's checkbox in our own wrapper widget,
   which is `Focusable` and has an Id like a text field (checkboxes count as
   fields for `Island::field_id`, `has_focus` and Enter). The island's

@@ -106,6 +106,7 @@ enum Msg {
     Derived(JobResult),
     Submit,
     Cancel,
+    Press(Arc<str>),
 }
 
 impl Island {
@@ -146,6 +147,10 @@ impl Island {
                 return (Task::none(), Some(Outcome::Submitted(fields)));
             }
             Msg::Cancel => return (Task::none(), Some(Outcome::Cancelled)),
+            Msg::Press(id) => {
+                let fields = self.model.fields().clone();
+                return (Task::none(), Some(Outcome::Pressed(id, fields)));
+            }
         };
         (run(jobs), None)
     }
@@ -155,10 +160,7 @@ impl Island {
     pub fn view(&self) -> Element<'_, Message> {
         let mut shown = Shown::default();
         shown.collect(&self.model, self.model.root(), &self.fields);
-        let message = |action| match action {
-            Action::Submit => Message(Msg::Submit),
-            Action::Cancel => Message(Msg::Cancel),
-        };
+        let message = |action| Message(action_msg(action));
         scope::Scope {
             content: render(&self.model, self.model.root(), true, Some(&self.fields)),
             id: self.id.clone(),
@@ -303,10 +305,7 @@ fn render<'a>(
             Some(key) => format!("{label} [{key}]"),
             None => label.clone(),
         }))
-        .on_press_maybe(send(match action {
-            Action::Submit => Msg::Submit,
-            Action::Cancel => Msg::Cancel,
-        }))
+        .on_press_maybe(send(action_msg(action.clone())))
         .into(),
     }
 }
@@ -392,13 +391,23 @@ impl Shown {
                 match action {
                     Action::Submit => self.submit = true,
                     Action::Cancel => self.cancel = true,
+                    Action::Press(_) => {}
                 }
                 if let Some(key) = key {
-                    self.keys.push((*key, *action));
+                    self.keys.push((*key, action.clone()));
                 }
             }
             _ => {}
         }
+    }
+}
+
+/// What pressing a button with `action` sends.
+fn action_msg(action: Action) -> Msg {
+    match action {
+        Action::Submit => Msg::Submit,
+        Action::Cancel => Msg::Cancel,
+        Action::Press(id) => Msg::Press(id),
     }
 }
 
@@ -555,6 +564,7 @@ mod tests {
                                 out
                             }
                             Outcome::Cancelled => "cancelled".into(),
+                            Outcome::Pressed(id, _) => format!("pressed {id}"),
                         });
                     }
                     task.map(Msg::Island)
@@ -900,6 +910,29 @@ mod tests {
                 r#"Message(Toggled("d", true))"#,
                 r#"Message(TextChanged("a", "x"))"#,
             ]
+        );
+    }
+
+    /// A dangerous question, with a button that's not a submit button.
+    fn dangerous() -> Island {
+        let builder = IslandBuilder::new(row([
+            kettle_ui::widget::button("del", "Delete [d]"),
+            cancel_button("Keep [k]"),
+        ]));
+        Island::new(builder).unwrap().0
+    }
+
+    #[test]
+    fn enter_does_not_press_a_plain_button() {
+        check(
+            program(dangerous, Focus::Island),
+            &[
+                expect("focused: Some(true)"),
+                press(Key::Enter),
+                expect("outcome: None"),
+                typewrite("d"),
+                expect(r#"outcome: Some("pressed del")"#),
+            ],
         );
     }
 }

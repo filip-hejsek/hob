@@ -4,7 +4,8 @@
 //! - layout: [`column()`], [`row`], [`when`]
 //! - display: [`label`] (with [`state`]), [`progress`], [`list`]
 //! - form elements: [`text_field`], [`text_area`], [`checkbox`], [`suggestions`]
-//! - buttons: [`submit_button`], [`cancel_button`] (with [`ButtonLabel`])
+//! - buttons: [`submit_button`], [`cancel_button`], [`button`] (with
+//!   [`ButtonLabel`])
 //!
 //! Backends read the tree through [`Widget::kind`], and leave out the gaps
 //! around widgets that have nothing to show (see [`is_visible`]).
@@ -84,7 +85,7 @@ pub enum Kind {
         /// The id of the text field a clicked line goes into.
         field: Arc<str>,
     },
-    /// [`submit_button`] or [`cancel_button`]
+    /// [`submit_button`], [`cancel_button`] or [`button`]
     Button {
         /// Shown on the button.
         label: String,
@@ -97,13 +98,15 @@ pub enum Kind {
 }
 
 /// What a button does.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
     /// [`submit_button`]
     Submit,
     /// [`cancel_button`]
     Cancel,
+    /// [`button`], with its id.
+    Press(Arc<str>),
 }
 
 /// Text shown by a [`label`]: either fixed, or bound to named state.
@@ -258,15 +261,24 @@ impl From<&'static str> for ButtonLabel {
 /// Submits the form: the island reports [`Outcome::Submitted`](crate::Outcome::Submitted) with the
 /// entered values.
 pub fn submit_button(label: impl Into<ButtonLabel>) -> Widget {
-    button(label.into(), Action::Submit)
+    make_button(label.into(), Action::Submit)
 }
 
 /// The island reports [`Outcome::Cancelled`](crate::Outcome::Cancelled).
 pub fn cancel_button(label: impl Into<ButtonLabel>) -> Widget {
-    button(label.into(), Action::Cancel)
+    make_button(label.into(), Action::Cancel)
 }
 
-fn button(label: ButtonLabel, action: Action) -> Widget {
+/// A button that's neither submit nor cancel: the island reports
+/// [`Outcome::Pressed`](crate::Outcome::Pressed) with `id` and the entered
+/// values. Unlike a submit button, Enter never presses it, only its key; use
+/// it for answers that must be chosen on purpose, such as confirming a
+/// dangerous action.
+pub fn button(id: &str, label: impl Into<ButtonLabel>) -> Widget {
+    make_button(label.into(), Action::Press(id.into()))
+}
+
+fn make_button(label: ButtonLabel, action: Action) -> Widget {
     Widget(Kind::Button {
         label: label.text,
         key: label.key,
@@ -304,7 +316,7 @@ pub fn is_visible(contents: &impl Contents, widget: &Widget) -> bool {
 
 /// Calls `f` with the key and action of each button that has a key, in tree
 /// order.
-pub(crate) fn keys(widget: &Widget, f: &mut impl FnMut(char, Action)) {
+pub(crate) fn keys(widget: &Widget, f: &mut impl FnMut(char, &Action)) {
     match widget.kind() {
         Kind::Column(children) | Kind::Row(children) => {
             children.iter().for_each(|c| keys(c, f));
@@ -314,7 +326,7 @@ pub(crate) fn keys(widget: &Widget, f: &mut impl FnMut(char, Action)) {
             key: Some(key),
             action,
             ..
-        } => f(*key, *action),
+        } => f(*key, action),
         _ => {}
     }
 }

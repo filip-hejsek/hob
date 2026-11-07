@@ -34,6 +34,10 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   checkboxes have our own wrapper), so button keys work only while the
   island as a whole has focus. Should Up/Down also move between text
   fields, as they do from checkboxes?
+- Revisit button keys. They're allowed in islands with checkboxes (but not
+  text fields), yet work only once focus has moved past the last checkbox,
+  so they're hard to discover there; and in a checkbox, `y`/`n` mean
+  something else than a button's `[y]`/`[n]`.
 - Chord keys (e.g. Ctrl+N) for buttons, which could work in islands with
   text fields.
 

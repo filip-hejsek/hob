@@ -196,22 +196,23 @@ impl Island {
             } = w.kind()
                 && l == label
             {
-                actions.push(*action);
+                actions.push(action.clone());
             }
             false
         });
         let action = match actions.as_slice() {
             [] => return Err(ActionError::NoButton(label.to_owned())),
             [first, rest @ ..] => {
-                if rest.iter().any(|a| !same_action(*a, *first)) {
+                if rest.iter().any(|a| a != first) {
                     return Err(ActionError::AmbiguousButton(label.to_owned()));
                 }
-                *first
+                first.clone()
             }
         };
         Ok(match action {
             Action::Submit => Outcome::Submitted(self.model.fields().clone()),
             Action::Cancel => Outcome::Cancelled,
+            Action::Press(id) => Outcome::Pressed(id, self.model.fields().clone()),
         })
     }
 
@@ -391,13 +392,6 @@ fn find<'a>(
     }
 }
 
-fn same_action(a: Action, b: Action) -> bool {
-    matches!(
-        (a, b),
-        (Action::Submit, Action::Submit) | (Action::Cancel, Action::Cancel)
-    )
-}
-
 /// Wakes a thread parked in [`Island::wait_until`].
 struct Unpark(Thread);
 
@@ -470,6 +464,21 @@ mod tests {
             island.to_string(),
             "row\n  button \"Yes\" [y]\n  button \"No\"\n"
         );
+    }
+
+    #[test]
+    fn pressing_a_button_reports_its_id_and_fields() {
+        let mut island = Island::new(IslandBuilder::new(column([
+            text_field("t", ""),
+            button("del", "Delete"),
+        ])))
+        .unwrap();
+        island.type_text("t", "x").unwrap();
+        let Ok(Outcome::Pressed(id, fields)) = island.press("Delete") else {
+            panic!("not pressed");
+        };
+        assert_eq!(&*id, "del");
+        assert_eq!(fields.text("t"), "x");
     }
 
     #[test]

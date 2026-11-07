@@ -204,7 +204,7 @@ fn interpreter() -> Interpreter {
         ]));
         match ctx.show(island)? {
             Outcome::Submitted(fields) => ctx.print(format!("Hello, {}!", fields.text("name"))),
-            Outcome::Cancelled => ctx.print("Not greeting."),
+            Outcome::Cancelled | Outcome::Pressed(..) => ctx.print("Not greeting."),
         }
         Ok(())
     });
@@ -212,7 +212,7 @@ fn interpreter() -> Interpreter {
         let island = IslandBuilder::new(row([submit_button("Yes [y]"), cancel_button("No [n]")]));
         let answer = match ctx.show(island)? {
             Outcome::Submitted(_) => "yes",
-            Outcome::Cancelled => "no",
+            Outcome::Cancelled | Outcome::Pressed(..) => "no",
         };
         ctx.print(format!("Answer: {answer}"));
         Ok(())

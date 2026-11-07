@@ -120,7 +120,7 @@ fn interpreter() -> Interpreter {
         builder.derive("greeting", |f| format!("Hi, {}!", f.text("name")).into());
         match ctx.show(builder)? {
             Outcome::Submitted(fields) => ctx.print(format!("got {}", fields.text("name"))),
-            Outcome::Cancelled => ctx.print("cancelled"),
+            Outcome::Cancelled | Outcome::Pressed(..) => ctx.print("cancelled"),
         }
         Ok(())
     });
