@@ -14,9 +14,10 @@ use crate::Message;
 
 /// Wraps the UI of a live island, and handles its keys before its widgets
 /// see them:
-/// - Enter in a text field or checkbox focuses the next field; in the last,
-///   it submits. Ctrl+Enter does the same, also in a text area (where Enter
-///   starts a new line).
+/// - Enter in a text field focuses the next field; in the last, it submits.
+///   Ctrl+Enter does the same, also in a text area (where Enter starts a new
+///   line). In a checkbox, Enter skips the checkboxes after it: it focuses
+///   the next field that isn't one, or submits if there's none.
 /// - In a checkbox: Space toggles it; `y` checks it and `n` unchecks it, and
 ///   both move on to the next field, or after the last one to the island as
 ///   a whole; Up and Down focus the previous and next field.
@@ -170,7 +171,11 @@ impl Scope<'_> {
                 if plain && matches!(kind, Some(FieldKind::TextArea)) {
                     return None;
                 }
-                match self.fields.get(field + 1) {
+                // From a checkbox, skip the checkboxes after it.
+                let next = self.fields[field + 1..]
+                    .iter()
+                    .find(|f| checkbox.is_none() || !matches!(f.kind, FieldKind::Checkbox { .. }));
+                match next {
                     Some(next) => Some(KeyAction::focus(Focus::Field(next.id.clone()))),
                     None => self.submit.clone().map(KeyAction::send),
                 }

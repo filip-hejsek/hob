@@ -39,7 +39,8 @@
 //! A live island handles some keys itself, while it has focus: Enter in a
 //! field focuses the next shown one, and submits in the last one (if
 //! there's a submit button), while in a text area it starts a new line and
-//! Ctrl+Enter does that instead. In a checkbox, Space toggles it, `y` and
+//! Ctrl+Enter does that instead. In a checkbox, Enter skips the checkboxes
+//! after it, to the next other field or else submitting. Space toggles it, `y` and
 //! `n` check and uncheck it and move on (after the last field, to the
 //! island as a whole; they never submit), and Up and Down move between
 //! fields; a border and a muted `[y/n]` after its label show it has focus. Escape cancels
@@ -879,13 +880,40 @@ mod tests {
     }
 
     #[test]
-    fn enter_goes_through_checkboxes_then_submits() {
+    fn enter_in_a_checkbox_skips_the_checkboxes_after_it() {
+        fn form() -> Island {
+            let builder = IslandBuilder::new(column([
+                checkbox("c", "C"),
+                checkbox("d", "D"),
+                text_field("a", "A"),
+                checkbox("e", "E"),
+                checkbox("f", "F"),
+                submit_button("OK"),
+            ]));
+            Island::new(builder).unwrap().0
+        }
+        check(
+            program(form, Focus::Field("c")),
+            &[
+                expect("focused: Some(true)"),
+                press(Key::Enter),
+                typewrite("1"),
+                // On to e, then Enter there submits.
+                press(Key::Enter),
+                expect("outcome: None"),
+                press(Key::Enter),
+                expect(r#"outcome: Some("submitted \"1\" \"\"")"#),
+            ],
+        );
+    }
+
+    #[test]
+    fn enter_goes_to_the_first_checkbox_then_submits() {
         check(
             program(toppings, Focus::Field("a")),
             &[
                 expect("focused: Some(true)"),
                 typewrite("1"),
-                press(Key::Enter),
                 press(Key::Enter),
                 press(Key::Enter),
                 expect(r#"outcome: Some("submitted \"1\" \"\" c")"#),

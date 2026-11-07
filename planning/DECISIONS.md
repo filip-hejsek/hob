@@ -172,8 +172,10 @@ thread) or as a snapshot of a live island (`Model::freeze`).
 - Checkboxes can have focus: iced's checkbox in our own wrapper widget,
   which is `Focusable` and has an Id like a text field (checkboxes count as
   fields for `Island::field_id`, `has_focus` and Enter). The island's
-  wrapper handles their keys: Space toggles; Enter moves on or submits,
-  as in a text field; `y` and `n` check and uncheck and move on, but never
+  wrapper handles their keys: Space toggles; Enter skips the checkboxes
+  after it: it focuses the next field that isn't a checkbox, or submits if
+  only checkboxes are left (going through a run of checkboxes one by one
+  is what Down and `y`/`n` are for); `y` and `n` check and uncheck and move on, but never
   submit: after the last field, focus goes to the island as a whole, where
   Enter submits. That's the only way an island with fields gets focus as a
   whole (a click inside it doesn't), and Up from there goes back to the
