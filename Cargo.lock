@@ -1757,8 +1757,10 @@ dependencies = [
 name = "kettle-ui-iced"
 version = "0.1.0"
 dependencies = [
+ "futures-channel",
  "futures-executor",
  "iced",
+ "iced_test",
  "kettle-ui",
  "png",
  "serde_json",

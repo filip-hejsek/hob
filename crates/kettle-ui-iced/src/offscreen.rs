@@ -31,7 +31,7 @@ pub fn render_png(island: &FrozenIsland, width: u32, frozen: bool) -> Vec<u8> {
 
 /// Renders an island to RGBA pixels; see [`render_png`].
 fn render_rgba(island: &FrozenIsland, width: u32, frozen: bool) -> (Size<u32>, Vec<u8>) {
-    let mut element: Element<'_, Message> = container(render(island, island.root(), !frozen))
+    let mut element: Element<'_, Message> = container(render(island, island.root(), !frozen, None))
         .padding(spacing())
         .into();
     let mut renderer = futures_executor::block_on(<Renderer as Headless>::new(

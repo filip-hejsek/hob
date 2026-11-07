@@ -65,6 +65,15 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   the widgets after it. Columns and rows use spacing 0, and every child is
   wrapped in a container whose padding adds the gap before it. A hidden
   `when` child is also disabled, so a focused text field stops taking input.
+- The text fields of a live island have iced Ids from `Id::unique()`, made
+  in `Island::new` and kept by the `Island` (in tree order), so they can't
+  clash with the host's Ids or another island's, and the host needn't pick
+  a namespace. The host gets them with `Island::field_id`, and
+  `Island::has_focus` tells whether one of them is focused. Frozen islands
+  have no Ids: they're disabled. Rejected: string Ids from a namespace the
+  host passes in, or from a counter; a container Id per island with iced's
+  `operation::scope` (a scoped `focus` doesn't unfocus widgets outside the
+  island, such as the prompt).
 - The default theme. Styling options are deliberately minimal; global
   customization, if any, will be set by the host application, not the
   island.

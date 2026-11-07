@@ -16,3 +16,7 @@ iced = { workspace = true, features = ["advanced", "fira-sans"] }
 kettle-ui.workspace = true
 png.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+futures-channel.workspace = true
+iced_test = "0.14"
