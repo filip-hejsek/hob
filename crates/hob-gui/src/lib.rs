@@ -56,8 +56,10 @@ use iced::{
 use kettle_ui::FrozenIsland;
 use kettle_ui_iced::{Island, spacing, view_frozen};
 
+use keyed::keyed;
 use keys::{Action, Binding};
 
+mod keyed;
 mod keys;
 
 /// The target of the shell's own log records.
@@ -744,13 +746,18 @@ impl Shell {
     }
 
     fn view(&self) -> Element<'_, Message> {
+        // Keyed, so a live island keeps its state (focus, cursor) when `clear`
+        // removes blocks before it. Notices are plain text, so they can share
+        // a key.
         let items = self.scrollback.iter().filter_map(|item| match item {
-            Item::Block(block) => Some(view_block(block, self.level)),
-            Item::Notice(record) if shows_notice(record, self.level) => Some(view_record(record)),
+            Item::Block(block) => Some((Some(block.id), view_block(block, self.level))),
+            Item::Notice(record) if shows_notice(record, self.level) => {
+                Some((None, view_record(record)))
+            }
             // Kept for `messages`.
             Item::Notice(_) => None,
         });
-        let scrollback = column(items).spacing(2.0 * spacing());
+        let scrollback = keyed(items).spacing(2.0 * spacing());
         let scrollback = scrollable(container(scrollback).padding(2.0 * spacing()))
             .id(Id::new(SCROLLBACK))
             .anchor_bottom()
@@ -1045,20 +1052,21 @@ fn prompt_style(theme: &Theme, status: text_input::Status) -> text_input::Style 
 /// Shows a block; log records below `level` are hidden.
 fn view_block(block: &Block, level: Level) -> Element<'_, Message> {
     let interrupted = block.interrupted.then(|| {
-        text("Interrupted: hob exited while this command was running.")
-            .style(text::secondary)
-            .into()
+        let note = text("Interrupted: hob exited while this command was running.");
+        (None, note.style(text::secondary).into())
     });
-    let private =
-        History::is_private(&block.line).then(|| text(PRIVATE_NOTE).style(text::secondary).into());
-    let entries = (block.entries.iter())
-        .filter(|entry| !matches!(entry, Entry::Log(r) if r.level > level))
-        .map(view_entry)
+    let private = History::is_private(&block.line)
+        .then(|| (None, text(PRIVATE_NOTE).style(text::secondary).into()));
+    // Keyed by index, so a live island keeps its state when the level
+    // hides or shows log records before it. The notes are plain text.
+    let entries = (block.entries.iter().enumerate())
+        .filter(|(_, entry)| !matches!(entry, Entry::Log(r) if r.level > level))
+        .map(|(i, entry)| (Some(i), view_entry(entry)))
         .chain(interrupted)
         .chain(private);
     column([
         text(format!("> {}", block.line)).font(BOLD).into(),
-        container(column(entries).spacing(spacing()))
+        container(keyed(entries).spacing(spacing()))
             .padding(padding::left(2.0 * spacing()))
             .into(),
     ])

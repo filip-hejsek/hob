@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 futures-channel.workspace = true
 hob-core.workspace = true
-iced.workspace = true
+iced = { workspace = true, features = ["advanced"] }
 kettle-ui.workspace = true
 kettle-ui-iced.workspace = true
 serde_json.workspace = true

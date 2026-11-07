@@ -73,6 +73,25 @@ fn a_new_island_gets_focus_and_gives_it_back() {
 }
 
 #[test]
+fn clearing_keeps_the_focus_of_a_live_island() {
+    let mut shell = start(None);
+    shell.run("say before");
+    shell.expect("before");
+    shell.run("greet");
+    shell.expect("OK");
+    shell.settle();
+    shell.step(typewrite("An"));
+    // Ctrl+L removes the block before the island's.
+    let ctrl_l = Message::Key(keyboard::Key::Character("l".into()), Modifiers::CTRL);
+    shell.update(ctrl_l);
+    shell.expect_absent("> say before");
+    // The name field still has focus.
+    shell.step(typewrite("n"));
+    shell.step(press(Key::Enter));
+    shell.expect("Hello, Ann!");
+}
+
+#[test]
 fn escape_cancels_an_island() {
     let mut shell = start(None);
     shell.run("greet");
@@ -326,7 +345,7 @@ struct Harness<P: Program + 'static> {
 
 /// Starts the shell in a [`Harness`], with [`interpreter`]'s commands and
 /// the given session file.
-fn start(session: Option<PathBuf>) -> Harness<impl Program + 'static> {
+fn start(session: Option<PathBuf>) -> Harness<impl Program<Message = Message> + 'static> {
     let program = application(
         Some(Arc::new(interpreter())),
         session,
@@ -359,6 +378,12 @@ impl<P: Program + 'static> Harness<P> {
         self.step(Instruction::Interact(Interaction::Keyboard(
             Keyboard::Type(Key::Enter),
         )));
+    }
+
+    /// Sends a message to the program, as if a widget had produced it.
+    fn update(&mut self, message: P::Message) {
+        self.emulator.update(&self.program, message);
+        self.settle();
     }
 
     /// Runs an instruction, and panics if it fails.

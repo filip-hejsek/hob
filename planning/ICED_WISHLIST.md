@@ -92,8 +92,9 @@ Also, its `Key` has only Enter, Escape, Tab and Backspace (no arrows or
 PageUp/PageDown), and there are no modifiers.
 
 **Workaround:** history and completion are tested on `History` and
-`Interpreter::complete`, Ctrl+L by calling the shell's `update` directly,
-and all of them checked by hand in a real window (Xvfb).
+`Interpreter::complete`, Ctrl+L by calling the shell's `update` directly
+(or the emulator's `update`, with the shell's key message), and all of them
+checked by hand in a real window (Xvfb).
 
 ## Finding a text editor's text in `iced_test`
 
@@ -137,6 +138,18 @@ there's no GPU, so they use tiny-skia.
 test can't tell that the app asked to exit.
 
 **Workaround:** none in the tests; checked by hand under Xvfb.
+
+## A keyed column that matches any change
+
+**Needed for:** keeping a live island's widget state (focus, cursor) in
+hob-gui's scrollback when `clear` removes the finished blocks around it.
+
+`keyed_column` matches children to their state by key only when one run of
+children was added or removed; after other changes (e.g. children removed
+both before and after a kept one), state goes to the wrong children.
+
+**Workaround:** hob-gui's own `Keyed` widget, a wrapper around `column`
+that reorders the children's state by key before diffing.
 
 ## JPEG XL images
 

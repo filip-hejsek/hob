@@ -422,6 +422,13 @@ Works like a terminal: a scrollback with the prompt below it.
 - Live islands are shown inline and freeze in place once submitted or
   cancelled. There are no tabs.
 - The scrollback sticks to the bottom while it's scrolled there.
+- The scrollback is a keyed column (our own `Keyed` widget), keyed by block
+  id, and so is each block's output, keyed by entry index. So a live island
+  keeps its widget state (focus, cursor) when `clear` removes blocks before
+  it, or the log level hides records before it. Notices and notes share
+  a key: they're plain text. Rejected: iced's `keyed_column`, which only
+  handles one run of children added or removed (see ICED_WISHLIST.md),
+  while `clear` can remove blocks on both sides of a running one.
 - A line with an unknown command is still added, with the error.
 - What commands print also goes to stdout.
 - The session (history and scrollback) is saved as versioned JSON after every
