@@ -456,8 +456,8 @@ impl Shell {
 
     fn run_prompt(&mut self) -> Task<Message> {
         // Trailing spaces are invisible (completion leaves one), so they
-        // shouldn't reach the command or the history.
-        let line = mem::take(&mut self.prompt).trim_end().to_owned();
+        // shouldn't reach the command or the history, unless escaped or quoted.
+        let line = hob_core::trim_line_end(&mem::take(&mut self.prompt)).to_owned();
         let Some(interpreter) = self.interpreter.clone() else {
             return Task::none();
         };

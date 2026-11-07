@@ -233,7 +233,15 @@ and renders the island as an indented text outline.
 
 - Commands run on their own thread and block in `Context::show`. They may
   become async later; blocking keeps it simple for now.
-- Command lines are split at whitespace; there's no quoting yet.
+- Command lines are split into words like a POSIX shell does, as far as
+  quoting goes: `'…'` is literal, in `"…"` only `\"` and `\\` are escapes,
+  and outside quotes `\` escapes any character; pieces next to each other
+  join into one word. An unquoted `~` at the start of a word, alone or
+  before `/`, is the home directory, so `'~'` is a file named `~`. There's
+  no other expansion (`$VAR`, globs): nothing needs it yet. A line that
+  doesn't split (an unclosed quote, a trailing `\`) is an error. Rejected:
+  only double quotes, which would surprise shell users typing `'a b'` or
+  `a\ b`.
 - Commands that work with any frontend (such as `help` and `messages`) are
   built into hob-core (`hob_core::builtins`), and registered by `hob`.
 - Every command is registered with a one-line description (required, so
@@ -244,9 +252,11 @@ and renders the island as an indented text outline.
 - Command names must start with a letter or digit (`char::is_alphanumeric`;
   `register` panics otherwise). Names starting with other characters
   (`!`, `@`, `#`, `_`, ...) are reserved for prefix commands and other
-  features.
+  features. A name can be quoted (`'ls'`); a quoted name never runs a
+  prefix command.
 - Prefix commands (`register_prefix`) are registered by a prefix that starts
-  with a special character and has no whitespace, and run for any line
+  with a special character other than a quote or `\` (those quote a
+  command name) and has no whitespace, and run for any line
   starting with it (after leading whitespace), getting the rest of the line
   unsplit. The longest matching prefix wins. They share the name table with
   other commands, so `help` lists them and `help !` describes one, but Tab
@@ -267,10 +277,10 @@ and renders the island as an indented text outline.
   (`ctx.cwd()`); `ctx.set_cwd` changes it for the command and for commands
   started later, but not for those already running, like a shell's
   background jobs. It lives in hob-core, not hob-fs, because any command
-  that takes a path needs it. `ctx.resolve(path)` makes a path absolute,
-  expanding a leading `~` to the home directory (there's no other shell
-  expansion yet). It doesn't normalize, so `..` in a path is followed by
-  the OS, as in a shell.
+  that takes a path needs it. `ctx.resolve(path)` makes a path absolute.
+  It doesn't expand `~`, which the command line already did (as a shell
+  does, so a quoted `~` stays), and doesn't normalize, so `..` in a path
+  is followed by the OS, as in a shell.
 - The prompt's placeholder is a parameter of `hob_gui::run`; `hob` passes a
   hint to use `help`, since only it knows that `help` is registered.
 
@@ -521,7 +531,9 @@ Works like a terminal: a scrollback with the prompt below it.
   hob-core.
 - Trailing whitespace is trimmed from a submitted line, so the space that
   completion adds doesn't reach the command or the history. It's invisible,
-  and words are split at whitespace anyway, so it can't mean anything.
+  and words are split at whitespace anyway, so it can't mean anything,
+  unless it's escaped or quoted (`a\ `); that's kept
+  (`hob_core::trim_line_end`).
 - A line starting with whitespace is private, like bash's `ignorespace`:
   neither it nor its output is saved, and its block says so. Unlike bash,
   Up/Down still offer it while its block is in the scrollback; `clear`

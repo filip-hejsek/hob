@@ -243,7 +243,8 @@ impl<W: Write> Server<W> {
         let block = self.next_id();
         self.pump(block, requests)
             .map_err(|e| ErrorObject::new(code::NOT_STARTED, e.to_string()))?;
-        self.running.insert(block, line.trim_end().to_owned());
+        self.running
+            .insert(block, hob_core::trim_line_end(line).to_owned());
         Ok(serde_json::to_value(RunResult { block }).expect("results serialize"))
     }
 

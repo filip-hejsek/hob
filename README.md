@@ -50,6 +50,9 @@ the platform's state directory (e.g. `~/.local/state/hob/session.json`); set
 `hob --preview [FILE]` shows a saved session (by default, the current one)
 read-only: nothing runs, and the file isn't changed.
 
+Arguments can be quoted like in a shell (`cat 'my file'`, `"my file"` or
+`my\ file`), and `~` is the home directory.
+
 A line starting with `!` runs a shell command (with `sh -c`), e.g.
 `!git status`. Its output is shown as it comes; it can't read input yet.
 

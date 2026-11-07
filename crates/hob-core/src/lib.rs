@@ -42,6 +42,7 @@
 
 pub mod builtins;
 mod history;
+mod line;
 pub mod logger;
 mod record;
 mod session;
@@ -60,6 +61,7 @@ use futures_core::Stream;
 use kettle_ui::{FrozenIsland, IslandBuilder, Outcome};
 
 pub use history::History;
+pub use line::trim_line_end;
 pub use record::{Level, LogRecord};
 pub use session::{Block, Entry, Item, Session, SessionError};
 
@@ -68,6 +70,9 @@ pub type CommandResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
 /// A command's function, given its arguments.
 type CommandFn<Args> = Arc<dyn Fn(&mut Context, &Args) -> CommandResult + Send + Sync>;
+
+/// A command, with its arguments, ready to run on its thread.
+type Job = Box<dyn FnOnce(&mut Context) -> CommandResult + Send>;
 
 /// How a command is run.
 #[derive(Clone)]
@@ -161,7 +166,8 @@ impl Interpreter {
     ///
     /// If a command with this prefix is already registered, the prefix
     /// doesn't start with a special character (one that isn't a letter, digit
-    /// or whitespace) or contains whitespace, or the description is empty or
+    /// or whitespace; quotes and `\` aren't allowed either, as they quote the
+    /// command name) or contains whitespace, or the description is empty or
     /// has more than one line.
     pub fn register_prefix(
         &mut self,
@@ -170,8 +176,11 @@ impl Interpreter {
         run: impl Fn(&mut Context, &str) -> CommandResult + Send + Sync + 'static,
     ) {
         assert!(
-            is_prefix(prefix) && !prefix.contains(char::is_whitespace),
-            "the prefix {prefix:?} must start with a special character and have no whitespace"
+            is_prefix(prefix)
+                && !prefix.starts_with(['\'', '"', '\\'])
+                && !prefix.contains(char::is_whitespace),
+            "the prefix {prefix:?} must start with a special character other than a quote \
+             or backslash, and have no whitespace"
         );
         self.insert(prefix, description.into(), Run::Rest(Arc::new(run)));
     }
@@ -228,41 +237,41 @@ impl Interpreter {
 
     /// Starts running a command line on a new thread. If it starts with a
     /// special character (after any whitespace), it runs the command with the
-    /// longest matching prefix. Otherwise it's split into words at whitespace;
-    /// the first is the command name.
+    /// longest matching prefix. Otherwise it's split into words at whitespace,
+    /// with quotes and backslashes as in a shell (`'a b'`, `"a b"`, `a\ b`)
+    /// and `~` as the home directory; the first is the command name.
     ///
     /// Returns the command's requests, which the frontend must carry out. The
     /// stream ends when the command finishes. If the command fails or panics,
     /// its last request is a [`Request::Log`] of the error.
     pub fn run(&self, line: &str) -> Result<Requests, Error> {
         let line = line.trim_start();
-        let found = match is_prefix(line) {
-            true => (self.commands.iter())
-                .filter(|(prefix, _)| is_prefix(prefix) && line.starts_with(prefix.as_str()))
-                .max_by_key(|(prefix, _)| prefix.len())
-                .map(|(prefix, command)| (prefix.clone(), command.run.clone())),
-            false => {
-                let name = line.split_whitespace().next().ok_or(Error::Empty)?;
-                (self.commands.get(name)).map(|command| (name.to_owned(), command.run.clone()))
-            }
+        let unknown = |name: &str| Error::UnknownCommand {
+            name: name.to_owned(),
+            known: self.commands.keys().cloned().collect(),
         };
-        let Some((name, run)) = found else {
-            let name = line.split_whitespace().next().unwrap_or_default();
-            return Err(Error::UnknownCommand {
-                name: name.to_owned(),
-                known: self.commands.keys().cloned().collect(),
-            });
-        };
-        let command: Box<dyn FnOnce(&mut Context) -> CommandResult + Send> = match run {
-            Run::Words(run) => {
-                let args: Vec<String> =
-                    line.split_whitespace().skip(1).map(str::to_owned).collect();
-                Box::new(move |ctx| run(ctx, &args))
-            }
-            Run::Rest(run) => {
-                let rest = line[name.len()..].to_owned();
-                Box::new(move |ctx| run(ctx, &rest))
-            }
+        let prefixed = (self.commands.iter())
+            .filter(|(prefix, _)| is_prefix(prefix) && line.starts_with(prefix.as_str()))
+            .max_by_key(|(prefix, _)| prefix.len());
+        let (name, command): (String, Job) = if let Some((prefix, command)) = prefixed {
+            let Run::Rest(run) = command.run.clone() else {
+                unreachable!("prefixes are registered with Run::Rest");
+            };
+            let rest = line[prefix.len()..].to_owned();
+            (prefix.clone(), Box::new(move |ctx| run(ctx, &rest)))
+        } else {
+            let words = line::split(line).map_err(|e| Error::Syntax(e.to_string()))?;
+            let mut words = words.into_iter().map(|w| w.value);
+            let name = words.next().ok_or(Error::Empty)?;
+            // A quoted name can't run a prefix command.
+            let command = (self.commands.get(&name))
+                .filter(|_| !is_prefix(&name))
+                .ok_or_else(|| unknown(&name))?;
+            let Run::Words(run) = command.run.clone() else {
+                unreachable!("names are registered with Run::Words");
+            };
+            let args: Vec<String> = words.collect();
+            (name, Box::new(move |ctx| run(ctx, &args)))
         };
         let (sender, receiver) = mpsc::unbounded();
         let mut ctx = Context {
@@ -340,6 +349,8 @@ fn common_prefix_len(a: &str, b: &str) -> usize {
 pub enum Error {
     /// The line has no command name.
     Empty,
+    /// The line couldn't be split into words, e.g. a quote isn't closed.
+    Syntax(String),
     /// No command with this name is registered.
     UnknownCommand {
         /// The name in the command line.
@@ -355,6 +366,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Empty => f.write_str("no command given"),
+            Error::Syntax(message) => f.write_str(message),
             Error::UnknownCommand { name, known } => {
                 write!(
                     f,
@@ -408,20 +420,10 @@ impl Context {
     }
 
     /// Turns a path given by the user into one the command can use: relative
-    /// to the working directory, and with a leading `~` meaning the home
-    /// directory (if it's known), as in a shell. It isn't normalized, so
-    /// `..` is left for the OS to follow.
+    /// to the working directory. It isn't normalized, so `..` is left for the
+    /// OS to follow. (`~` is expanded when the command line is split, so it
+    /// isn't expanded here.)
     pub fn resolve(&self, path: impl AsRef<Path>) -> PathBuf {
-        let path = path.as_ref();
-        if let Ok(rest) = path.strip_prefix("~")
-            && let Some(home) = std::env::home_dir()
-        {
-            // Joining an empty path would add a trailing slash.
-            return match rest.as_os_str().is_empty() {
-                true => home,
-                false => home.join(rest),
-            };
-        }
         self.cwd.join(path)
     }
 
@@ -698,6 +700,27 @@ mod tests {
     }
 
     #[test]
+    fn arguments_can_be_quoted() {
+        let i = interpreter();
+        assert_eq!(
+            printed(&mut i.run(r#"'echo' "a b" c\ d"#).unwrap()),
+            "a b|c d"
+        );
+        let Err(Error::Syntax(message)) = i.run("echo 'a") else {
+            panic!("expected Syntax");
+        };
+        assert_eq!(message, "missing closing '");
+    }
+
+    #[test]
+    fn quoted_names_are_not_prefixes() {
+        let Err(Error::UnknownCommand { name, .. }) = prefixed().run("'!' x") else {
+            panic!("expected UnknownCommand");
+        };
+        assert_eq!(name, "!");
+    }
+
+    #[test]
     fn unknown_command_lists_known_ones() {
         let error = interpreter().run("nope").err().unwrap();
         assert_eq!(
@@ -855,8 +878,8 @@ mod tests {
             }
             Ok(())
         });
-        let mut requests = i.run("resolve a ../b /c ~x").unwrap();
-        for expected in ["/work/a", "/work/../b", "/c", "/work/~x"] {
+        let mut requests = i.run("resolve a ../b /c ~x '~'").unwrap();
+        for expected in ["/work/a", "/work/../b", "/c", "/work/~x", "/work/~"] {
             assert_eq!(printed(&mut requests), expected);
         }
         if let Some(home) = std::env::home_dir() {
@@ -941,6 +964,12 @@ mod tests {
     #[should_panic(expected = "must start with a special character")]
     fn prefixes_must_start_with_a_special_character() {
         Interpreter::new().register_prefix("x", "Test", |_, _| Ok(()));
+    }
+
+    #[test]
+    #[should_panic(expected = "must start with a special character")]
+    fn prefixes_must_not_start_with_a_quote() {
+        Interpreter::new().register_prefix("'", "Test", |_, _| Ok(()));
     }
 
     #[test]
