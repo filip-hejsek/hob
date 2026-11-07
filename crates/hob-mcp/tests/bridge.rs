@@ -24,6 +24,7 @@ const TESTS: &[(&str, fn())] = &[
         runs_commands_and_acts_on_islands,
     ),
     ("waits_for_commands", waits_for_commands),
+    ("shows_changed_islands", shows_changed_islands),
     ("reports_errors_to_the_agent", reports_errors_to_the_agent),
     ("agent_starts_and_closes_hob", agent_starts_and_closes_hob),
     ("exit_closes_hob", exit_closes_hob),
@@ -75,6 +76,23 @@ fn interpreter() -> Interpreter {
         ctx.print("slept");
         Ok(())
     });
+    i.register(
+        "progress",
+        "Show an island that changes, until OK",
+        |ctx, _| {
+            let mut builder = IslandBuilder::new(column([progress("done"), submit_button("OK")]));
+            builder.set_state("done", 0.0);
+            let handle = builder.handle();
+            thread::spawn(move || {
+                for i in 1..=10 {
+                    thread::sleep(Duration::from_millis(150));
+                    handle.set("done", f64::from(i) / 10.0);
+                }
+            });
+            ctx.show(builder)?;
+            Ok(())
+        },
+    );
     i.register("crash", "Exit with status 3", |_, _| {
         eprintln!("crashing on purpose");
         std::process::exit(3);
@@ -228,9 +246,26 @@ fn waits_for_commands() {
     let (text, error) = tool(&mut bridge, "wait", arguments);
     assert!(!error);
     assert!(text.contains("[1] slept\n  [1] finished"), "{text}");
+    assert!(text.ends_with("[1] has finished.\n"), "{text}");
 
     let (text, _) = tool(&mut bridge, "wait", json!({"timeout_seconds": 0.05}));
     assert!(text.contains("Nothing to wait for came"), "{text}");
+}
+
+/// A changed island is shown in results about its command, not in others.
+fn shows_changed_islands() {
+    let mut bridge = bridge();
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "progress"}));
+    assert!(text.contains("Island #2 of [1], live:"), "{text}");
+    // It changes while nothing reports, so the next result has it all.
+    thread::sleep(Duration::from_millis(1600));
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "echo hi"}));
+    assert!(text.contains("[1] island #2 changed"), "{text}");
+    assert!(!text.contains("Island #2"), "{text}");
+    // Still to be shown, now by a result about [1].
+    let (text, _) = tool(&mut bridge, "fill", json!({"island": 2, "fields": {}}));
+    assert!(text.starts_with("Island #2 of [1], live:"), "{text}");
+    assert!(text.contains("progress 100%"), "{text}");
 }
 
 fn reports_errors_to_the_agent() {

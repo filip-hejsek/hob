@@ -39,8 +39,10 @@ its keyboard key after the label, as in `button \"Yes\" [y]`; its label is \
 still just Yes. Labels and lists update as you fill fields in.
 
 Commands keep running between tool calls. Every tool result starts with what \
-happened since the last one, and shows islands that are new or changed. Use \
-wait to wait for more, and state for an overview.";
+happened since the last one, and shows new islands. Changed islands are \
+shown when the result is about their command; others are only listed as \
+changed until then. Use wait to wait for more (it shows all changed islands, \
+or those of the command given), and state for an overview.";
 
 /// Added to [`INSTRUCTIONS`] when the agent starts hob.
 const BY_AGENT: &str = "

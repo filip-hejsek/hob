@@ -349,7 +349,13 @@ operands, `--` ends them); unknown ones are errors.
   ("changed (3 times)"), and things that happen together are reported
   together (up to 0.5 s of settling).
 - Islands are shown as kettle-ui-headless's text outline, with the island
-  number to act on; a live island after every change, a printed one once.
+  number to act on; a printed one once. A live island is shown in full when
+  new, and after a change only in a result about its command (`run`,
+  `fill`, `press`, `wait` for its block) or in `wait` without a block and
+  `state`; other results only list it as changed (counted), so an island
+  that keeps changing (e.g. a progress bar) doesn't fill unrelated results.
+  `run`, `press` and `wait` for a block end with the command's status
+  ("has finished", "is waiting for island #3").
 - Errors are tool results with `isError`, so the agent sees them.
 - Hob runs as a child process, started with a fixed command (`hob
   --headless` from the same directory, or the arguments), or with

@@ -5,7 +5,9 @@
 //! [`mcp`]). Hob doesn't wait for the agent: commands print, islands change
 //! and commands finish in the meantime. All of that is collected, and every
 //! tool result starts with what happened since the last one, so the agent
-//! never misses anything. The `wait` tool waits for more.
+//! never misses anything. The `wait` tool waits for more. A result shows
+//! new islands in full, but changed ones only if they're of the command it's
+//! about, so a progress bar elsewhere doesn't fill every result.
 //!
 //! Hob runs as a child process, which the bridge starts with a command: a
 //! fixed one, or one the agent gives (see [`Launch`]). If restarting is
@@ -99,6 +101,19 @@ struct Island {
     live: bool,
     /// Whether it was printed frozen, rather than shown live.
     printed: bool,
+    /// Whether a report has shown it in full.
+    shown: bool,
+}
+
+/// Which changed islands a report shows in full. New ones are shown anyway.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Focus {
+    /// None.
+    Nothing,
+    /// Those of this block.
+    Block(BlockId),
+    /// All.
+    All,
 }
 
 struct Event {
@@ -251,10 +266,11 @@ impl Bridge {
                 }
             };
             if let Err(e) = self.call(call) {
-                return Err(self.report_with(&format!("{field:?}: {e}")));
+                let focus = self.island_focus(island);
+                return Err(self.report(focus, &format!("{field:?}: {e}")));
             }
         }
-        Ok(self.report_with(""))
+        Ok(self.report(self.island_focus(island), ""))
     }
 
     /// Presses a button, and waits until the command finishes or shows an
@@ -273,8 +289,14 @@ impl Bridge {
     /// and all live islands.
     pub fn state(&mut self) -> ToolResult {
         self.settle();
+        // Live islands are all shown below; this adds printed ones.
+        let to_show = std::mem::take(&mut self.to_show);
         let mut report = self.events_report();
-        self.to_show.clear();
+        for id in to_show {
+            if !self.islands[&id].live {
+                report += &self.show_island(id);
+            }
+        }
         let Some(hob) = &self.hob else {
             report += "hob isn't running.\n";
             return Ok(report);
@@ -291,12 +313,13 @@ impl Bridge {
         }
         let live: Vec<_> = (self.islands.keys())
             .filter(|id| self.islands[id].live)
+            .copied()
             .collect();
         if live.is_empty() {
             report += "No live islands.\n";
         }
         for id in live {
-            report += &self.show_island(*id);
+            report += &self.show_island(id);
         }
         Ok(report)
     }
@@ -325,11 +348,13 @@ impl Bridge {
                 (b.events.iter()).any(|e| block.is_none() || e.block == block)
             }),
         };
-        let status = match done {
+        let mut status = match done {
             true => String::new(),
-            false => format!("Nothing to wait for came within {}.", seconds(timeout)),
+            false => format!("Nothing to wait for came within {}.\n", seconds(timeout)),
         };
-        Ok(self.report_with(&status))
+        status += &block.and_then(|b| self.block_status(b)).unwrap_or_default();
+        let focus = block.map_or(Focus::All, Focus::Block);
+        Ok(self.report(focus, status.trim_end()))
     }
 
     /// Calls the frontend. The error says what went wrong, for the agent.
@@ -418,21 +443,36 @@ impl Bridge {
         let done = self.wait_until(timeout, |b| {
             b.finished(block) || b.live_island(block).is_some()
         });
-        let status = if self.blocks.get(&block).is_some_and(|b| b.interrupted) {
-            format!("[{block}] was interrupted.")
-        } else if self.finished(block) {
-            format!("[{block}] has finished.")
-        } else if let Some(island) = self.live_island(block) {
-            format!("[{block}] is waiting for island #{island}.")
-        } else if !done {
-            format!(
+        let status = match self.block_status(block) {
+            Some(status) => status,
+            None if !done => format!(
                 "[{block}] is still running after {}; use wait.",
                 seconds(timeout)
-            )
-        } else {
-            String::new()
+            ),
+            None => String::new(),
         };
-        Ok(self.report_with(&status))
+        Ok(self.report(Focus::Block(block), &status))
+    }
+
+    /// Whether the command of `block` was interrupted, has finished or waits
+    /// for an island; `None` if it's just running.
+    fn block_status(&self, block: BlockId) -> Option<String> {
+        if self.blocks.get(&block).is_some_and(|b| b.interrupted) {
+            Some(format!("[{block}] was interrupted."))
+        } else if self.finished(block) {
+            Some(format!("[{block}] has finished."))
+        } else {
+            (self.live_island(block))
+                .map(|island| format!("[{block}] is waiting for island #{island}."))
+        }
+    }
+
+    /// The focus for acting on `island`: its block.
+    fn island_focus(&self, island: IslandId) -> Focus {
+        match self.islands.get(&island) {
+            Some(island) => Focus::Block(island.block),
+            None => Focus::Nothing,
+        }
     }
 
     fn finished(&self, block: BlockId) -> bool {
@@ -529,9 +569,9 @@ impl Bridge {
                     (true, true) => format!("[{block}] island #{island} changed"),
                     (true, false) => format!("[{block}] island #{island} closed"),
                 };
-                let printed = match self.islands.get(&island) {
-                    Some(old) => old.printed,
-                    None => !live,
+                let (printed, shown) = match self.islands.get(&island) {
+                    Some(old) => (old.printed, old.shown),
+                    None => (!live, false),
                 };
                 self.to_show.insert(island);
                 self.event(Some(block), text);
@@ -540,6 +580,7 @@ impl Bridge {
                     contents,
                     live,
                     printed,
+                    shown,
                 };
                 self.islands.insert(island, island_state);
             }
@@ -565,16 +606,34 @@ impl Bridge {
         }
     }
 
-    /// What happened since the last report, and `status`.
+    /// What happened since the last report, and `status`; changed islands
+    /// aren't shown.
     fn report_with(&mut self, status: &str) -> String {
+        self.report(Focus::Nothing, status)
+    }
+
+    /// What happened since the last report, the islands to show (by
+    /// `focus`), and `status`. Changed islands that aren't shown are kept
+    /// for a later report.
+    fn report(&mut self, focus: Focus, status: &str) -> String {
         self.apply_arrived();
         let mut report = self.events_report();
-        // Islands closed since they changed aren't worth showing.
         let to_show = std::mem::take(&mut self.to_show);
         for id in to_show {
             let island = &self.islands[&id];
-            if island.live || island.printed {
+            // Islands closed since they changed aren't worth showing.
+            if !island.live && !island.printed {
+                continue;
+            }
+            let wanted = match focus {
+                Focus::Nothing => false,
+                Focus::Block(block) => island.block == block,
+                Focus::All => true,
+            };
+            if wanted || !island.shown {
                 report += &self.show_island(id);
+            } else {
+                self.to_show.insert(id);
             }
         }
         if !status.is_empty() {
@@ -606,8 +665,10 @@ impl Bridge {
         report
     }
 
-    fn show_island(&self, id: IslandId) -> String {
-        let island = &self.islands[&id];
+    /// An island's outline, which then counts as shown.
+    fn show_island(&mut self, id: IslandId) -> String {
+        let island = self.islands.get_mut(&id).expect("known island");
+        island.shown = true;
         let kind = if island.live { "live" } else { "frozen" };
         let mut text = format!("Island #{id} of [{}], {kind}:\n", island.block);
         for line in kettle_ui_headless::outline(&island.contents).lines() {
