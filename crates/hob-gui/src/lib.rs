@@ -32,7 +32,10 @@ use std::sync::{Arc, Mutex};
 use hob_core::{History, Interpreter, Level, LogRecord, Reply, Request, Session, SessionError};
 use iced::keyboard::{self, key};
 use iced::widget::{Id, column, container, operation, rule, scrollable, text, text_input};
-use iced::{Element, Event, Font, Length, Subscription, Task, event, font, padding, window};
+use iced::{
+    Border, Color, Element, Event, Font, Length, Subscription, Task, Theme, event, font, padding,
+    window,
+};
 use kettle_ui::FrozenIsland;
 use kettle_ui_iced::{Island, spacing, view_frozen};
 
@@ -560,7 +563,17 @@ impl Shell {
         let prompt = text_input(&self.placeholder, &self.prompt)
             .id(Id::new(PROMPT))
             .on_input(Message::PromptChanged)
-            .on_submit(Message::PromptSubmitted);
+            .on_submit(Message::PromptSubmitted)
+            // Like the command lines in the scrollback.
+            .icon(text_input::Icon {
+                font: BOLD,
+                code_point: '>',
+                size: None,
+                spacing: 4.0,
+                side: text_input::Side::Left,
+            })
+            .padding(padding::vertical(5.0))
+            .style(prompt_style);
 
         column([
             scrollable(container(scrollback).padding(2.0 * spacing()))
@@ -577,7 +590,7 @@ impl Shell {
                 ))
                 .spacing(spacing()),
             )
-            .padding(spacing())
+            .padding(padding::vertical(spacing()).horizontal(2.0 * spacing()))
             .into(),
         ])
         .into()
@@ -656,12 +669,29 @@ fn shows_notice(record: &LogRecord, level: Level) -> bool {
     record.level <= lowest.min(level)
 }
 
+/// The font of command lines, and of the prompt's `>`.
+const BOLD: Font = Font {
+    weight: font::Weight::Bold,
+    ..Font::DEFAULT
+};
+
+/// The prompt has no box; its `>` is coloured while it's focused.
+fn prompt_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let palette = theme.extended_palette();
+    let icon = match status {
+        text_input::Status::Focused { .. } => palette.primary.base.color,
+        _ => palette.background.strong.color,
+    };
+    text_input::Style {
+        background: Color::TRANSPARENT.into(),
+        border: Border::default(),
+        icon,
+        ..text_input::default(theme, status)
+    }
+}
+
 /// Shows a block; log records below `level` are hidden.
 fn view_block(block: &Block, level: Level) -> Element<'_, Message> {
-    let bold = Font {
-        weight: font::Weight::Bold,
-        ..Font::DEFAULT
-    };
     let note = block.interrupted.then(|| {
         text("Interrupted: hob exited while this command was running.")
             .style(text::secondary)
@@ -672,7 +702,7 @@ fn view_block(block: &Block, level: Level) -> Element<'_, Message> {
         .map(view_entry)
         .chain(note);
     column([
-        text(format!("> {}", block.line)).font(bold).into(),
+        text(format!("> {}", block.line)).font(BOLD).into(),
         container(column(entries).spacing(spacing()))
             .padding(padding::left(2.0 * spacing()))
             .into(),

@@ -221,6 +221,11 @@ Works like a terminal: a scrollback with the prompt below it.
   and Tab completion of command names: unambiguous part completed, the
   candidates listed below the prompt if there are several. Both live in
   hob-core.
+- The prompt has no box: a bold `>` (the text input's icon) like the command
+  lines in the scrollback, with the typed text aligned with theirs. Focus is
+  shown by the `>`'s colour (primary when focused, dim otherwise); as the
+  icon, its colour comes from the input's style, so the shell doesn't need
+  to track focus.
 - End-to-end tests run the real shell (`application()`, the same builder
   `run` uses) in `iced_test`'s `Emulator`, without a window, with test-only
   commands. The emulator runs in `Mode::Immediate`, and a small harness
