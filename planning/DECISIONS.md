@@ -509,6 +509,15 @@ Works like a terminal: a scrollback with the prompt below it.
   rest of the session still loads.
 - Commands still running when the session was last saved are marked as
   interrupted after a restore.
+- Command lines, printed text and log records can be selected with the
+  mouse and copied with Ctrl+C. Each is a `SelectableText`: a `text_editor`
+  that ignores edits, wheel scrolling and keys other than copying and
+  selecting, styled like plain text. It focuses itself only while it has
+  a selection (the editor shows a caret when focused), and has no Id, so
+  the focus rules treat it as nothing having focus; focusing anything else
+  clears the selection. A selection stays within one entry. Rejected:
+  iced's `text` (can't be selected); a selection across the whole
+  scrollback, which would need our own text layout.
 - `hob --preview [FILE]` shows a saved session read-only: the shell gets no
   interpreter at all (it's optional in hob-gui), so no command can run.
   There's no prompt, only a note saying what file is shown; only scrolling

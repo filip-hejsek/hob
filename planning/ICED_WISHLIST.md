@@ -46,6 +46,17 @@ the editor's shell requests. Since the editor is temporary, it can't keep
 its status (hovered, focused) either, so the wrapper tracks it and passes
 it in through the style.
 
+## Selectable text
+
+**Needed for:** copying command output in hob-gui.
+
+iced's `text` and `rich_text` can't be selected.
+
+**Workaround:** hob-gui's `SelectableText`, a wrapper around `text_editor`
+(like kettle-ui-iced's `TextArea`) that drops edit actions, ignores the
+wheel and editing keys, and focuses itself only while it has a selection.
+A selection can't span several widgets.
+
 ## Focusable buttons and checkboxes
 
 **Needed for:** using islands from the keyboard.

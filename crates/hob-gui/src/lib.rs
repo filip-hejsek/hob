@@ -24,6 +24,9 @@
 //! it says so, and focuses an island waiting for input. The bindings are a table (see the
 //! `keys` module), to make them configurable later.
 //!
+//! Command lines and output can be selected with the mouse and copied with
+//! Ctrl+C, one printed text or log record at a time.
+//!
 //! A newly shown island gets focus, unless the user is busy elsewhere
 //! (something other than the empty prompt has focus). When an island
 //! freezes and nothing has focus, the prompt gets it back. Islands handle
@@ -58,9 +61,11 @@ use kettle_ui_iced::{Island, spacing, view_frozen};
 
 use keyed::keyed;
 use keys::{Action, Binding};
+use selectable::selectable;
 
 mod keyed;
 mod keys;
+mod selectable;
 
 /// The target of the shell's own log records.
 const TARGET: &str = "hob_gui";
@@ -1065,7 +1070,7 @@ fn view_block(block: &Block, level: Level) -> Element<'_, Message> {
         .chain(interrupted)
         .chain(private);
     column([
-        text(format!("> {}", block.line)).font(BOLD).into(),
+        selectable(format!("> {}", block.line)).font(BOLD).into(),
         container(keyed(entries).spacing(spacing()))
             .padding(padding::left(2.0 * spacing()))
             .into(),
@@ -1076,7 +1081,7 @@ fn view_block(block: &Block, level: Level) -> Element<'_, Message> {
 
 fn view_entry(entry: &Entry) -> Element<'_, Message> {
     match entry {
-        Entry::Text(message) => text(message).into(),
+        Entry::Text(message) => selectable(message).into(),
         Entry::Log(record) => view_record(record),
         Entry::Live { id, island, .. } => {
             let id = *id;
@@ -1097,7 +1102,7 @@ fn view_record(record: &LogRecord) -> Element<'_, Message> {
         Level::Info => text::default,
         Level::Debug => text::secondary,
     };
-    text(record.to_string()).style(style).into()
+    selectable(record.to_string()).style(style).into()
 }
 
 #[cfg(test)]

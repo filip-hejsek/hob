@@ -154,3 +154,5 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   stall on a slow or network filesystem; so could a command's custom
   completer (e.g. `git log` reading refs).
 - There is no way to move focus to the command prompt using only the keyboard.
+- Selecting output works only within one printed text or log record; a
+  selection can't span several, nor include islands.
