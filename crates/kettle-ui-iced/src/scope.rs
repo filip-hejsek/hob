@@ -14,22 +14,27 @@ use crate::Message;
 
 /// Wraps the UI of a live island, and handles its keys before its widgets
 /// see them:
-/// - Enter in a text field focuses the next field or area; in the last, it
-///   submits. Ctrl+Enter does the same, also in a text area (where Enter
+/// - Enter in a text field or checkbox focuses the next field; in the last,
+///   it submits. Ctrl+Enter does the same, also in a text area (where Enter
 ///   starts a new line).
+/// - In a checkbox: Space toggles it; `y` checks it and `n` unchecks it, and
+///   both move on to the next field, or after the last one to the island as
+///   a whole; Up and Down focus the previous and next field.
 /// - Escape, while the island has focus, cancels.
-/// - A button's key presses it, while the island has focus.
+/// - While the island as a whole has focus, Enter submits, a button's key
+///   presses it, and Up (if there are fields) focuses the last field.
 ///
-/// An island without text fields can have focus as a whole: like a text
-/// field, it gets it when clicked or through iced's focus operations (with
-/// its own [`Id`]), and loses it on a click elsewhere.
+/// An island without fields can have focus as a whole: like a text field, it
+/// gets it when clicked or through iced's focus operations (with its own
+/// [`Id`]), and loses it on a click elsewhere. An island with fields gets it
+/// only from its last checkbox.
 pub(crate) struct Scope<'a> {
     pub content: Element<'a, Message>,
     /// The island's Id, for focus as a whole.
     pub id: Id,
-    /// Whether the island can have focus as a whole.
-    pub focusable: bool,
-    /// The shown text fields and areas, in tree order.
+    /// Whether the island has no fields, so a click focuses it as a whole.
+    pub click_focus: bool,
+    /// The shown fields, in tree order.
     pub fields: Vec<Field>,
     /// The keys of shown buttons, and what pressing them sends.
     pub keys: Vec<(char, Message)>,
@@ -39,11 +44,24 @@ pub(crate) struct Scope<'a> {
     pub cancel: Option<Message>,
 }
 
-/// A shown text field or area.
+/// A shown field: a text field or area, or a checkbox.
 pub(crate) struct Field {
     pub id: Id,
-    /// Whether it's a text area, where Enter starts a new line.
-    pub multiline: bool,
+    pub kind: FieldKind,
+}
+
+/// What kind of field a [`Field`] is.
+pub(crate) enum FieldKind {
+    TextField,
+    /// Enter starts a new line in it.
+    TextArea,
+    Checkbox {
+        checked: bool,
+        /// What checking it sends.
+        check: Message,
+        /// What unchecking it sends.
+        uncheck: Message,
+    },
 }
 
 /// Whether the island has focus as a whole.
@@ -66,10 +84,34 @@ impl Focusable for State {
     }
 }
 
-/// What a key press does.
-enum KeyAction {
-    Send(Message),
-    Focus(Id),
+/// What a key press does: sends a message, moves focus, or both.
+#[derive(Default)]
+struct KeyAction {
+    send: Option<Message>,
+    focus: Option<Focus>,
+}
+
+/// Where focus goes.
+enum Focus {
+    Field(Id),
+    /// The island as a whole.
+    Whole,
+}
+
+impl KeyAction {
+    fn send(message: Message) -> Self {
+        KeyAction {
+            send: Some(message),
+            focus: None,
+        }
+    }
+
+    fn focus(focus: Focus) -> Self {
+        KeyAction {
+            send: None,
+            focus: Some(focus),
+        }
+    }
 }
 
 impl Scope<'_> {
@@ -102,27 +144,72 @@ impl Scope<'_> {
             );
             find.focused
         };
+        let kind = field.map(|i| &self.fields[i].kind);
+        let checkbox = match kind {
+            Some(FieldKind::Checkbox {
+                checked,
+                check,
+                uncheck,
+            }) => Some((*checked, check, uncheck)),
+            _ => None,
+        };
+        // The field after the focused one, or else the island as a whole.
+        let next = |field: usize| match self.fields.get(field + 1) {
+            Some(next) => Focus::Field(next.id.clone()),
+            None => Focus::Whole,
+        };
         match key.as_ref() {
             keyboard::Key::Named(key::Named::Escape) if plain && (whole || field.is_some()) => {
-                self.cancel.clone().map(KeyAction::Send)
+                self.cancel.clone().map(KeyAction::send)
+            }
+            keyboard::Key::Named(key::Named::Enter) if whole => {
+                self.submit.clone().map(KeyAction::send)
             }
             keyboard::Key::Named(key::Named::Enter) => {
                 let field = field?;
-                if plain && self.fields[field].multiline {
+                if plain && matches!(kind, Some(FieldKind::TextArea)) {
                     return None;
                 }
                 match self.fields.get(field + 1) {
-                    Some(next) => Some(KeyAction::Focus(next.id.clone())),
-                    None => self.submit.clone().map(KeyAction::Send),
+                    Some(next) => Some(KeyAction::focus(Focus::Field(next.id.clone()))),
+                    None => self.submit.clone().map(KeyAction::send),
                 }
             }
-            keyboard::Key::Character(c) if plain && whole => {
+            keyboard::Key::Named(key::Named::Space) if plain => {
+                let (checked, check, uncheck) = checkbox?;
+                Some(KeyAction::send(
+                    if checked { uncheck } else { check }.clone(),
+                ))
+            }
+            keyboard::Key::Named(key::Named::ArrowUp) if plain => {
+                let previous = match field {
+                    _ if whole && !self.click_focus => self.fields.last()?,
+                    Some(field) if checkbox.is_some() => self.fields.get(field.checked_sub(1)?)?,
+                    _ => return None,
+                };
+                Some(KeyAction::focus(Focus::Field(previous.id.clone())))
+            }
+            keyboard::Key::Named(key::Named::ArrowDown) if plain && checkbox.is_some() => {
+                Some(KeyAction::focus(next(field?)))
+            }
+            keyboard::Key::Character(c) if plain && (whole || checkbox.is_some()) => {
                 let mut chars = c.chars().map(|c| c.to_ascii_lowercase());
                 let (Some(c), None) = (chars.next(), chars.next()) else {
                     return None;
                 };
+                if let Some((checked, check, uncheck)) = checkbox {
+                    let (message, value) = match c {
+                        'y' => (check, true),
+                        'n' => (uncheck, false),
+                        _ => return None,
+                    };
+                    return Some(KeyAction {
+                        send: (checked != value).then(|| message.clone()),
+                        focus: Some(next(field?)),
+                    });
+                }
                 let (_, message) = self.keys.iter().find(|(k, _)| *k == c)?;
-                Some(KeyAction::Send(message.clone()))
+                Some(KeyAction::send(message.clone()))
             }
             _ => None,
         }
@@ -205,10 +292,9 @@ impl Widget<Message, Theme, Renderer> for Scope<'_> {
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        if self.focusable {
-            let state = tree.state.downcast_mut::<State>();
-            operation.focusable(Some(&self.id), layout.bounds(), state);
-        }
+        // Always, so focusing something else unfocuses it.
+        let state = tree.state.downcast_mut::<State>();
+        operation.focusable(Some(&self.id), layout.bounds(), state);
         operation.traverse(&mut |operation| {
             self.content.as_widget_mut().operate(
                 &mut tree.children[0],
@@ -232,11 +318,9 @@ impl Widget<Message, Theme, Renderer> for Scope<'_> {
     ) {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-            | Event::Touch(touch::Event::FingerPressed { .. })
-                if self.focusable =>
-            {
+            | Event::Touch(touch::Event::FingerPressed { .. }) => {
                 let state = tree.state.downcast_mut::<State>();
-                let focused = cursor.is_over(layout.bounds());
+                let focused = self.click_focus && cursor.is_over(layout.bounds());
                 if state.focused != focused {
                     state.focused = focused;
                     shell.request_redraw();
@@ -246,18 +330,24 @@ impl Widget<Message, Theme, Renderer> for Scope<'_> {
                 if let Some(action) =
                     self.key_action(tree, key, *modifiers, child(layout), renderer)
                 {
-                    match action {
-                        KeyAction::Send(message) => shell.publish(message),
-                        KeyAction::Focus(id) => {
-                            let mut focus = focusable::focus::<()>(id);
-                            (self.content.as_widget_mut()).operate(
-                                &mut tree.children[0],
-                                child(layout),
-                                renderer,
-                                &mut focus,
-                            );
-                            shell.request_redraw();
-                        }
+                    if let Some(message) = action.send {
+                        shell.publish(message);
+                    }
+                    if let Some(focus) = action.focus {
+                        let (id, whole) = match focus {
+                            Focus::Field(id) => (id, false),
+                            // Unfocuses all fields.
+                            Focus::Whole => (self.id.clone(), true),
+                        };
+                        let mut focus = focusable::focus::<()>(id);
+                        (self.content.as_widget_mut()).operate(
+                            &mut tree.children[0],
+                            child(layout),
+                            renderer,
+                            &mut focus,
+                        );
+                        tree.state.downcast_mut::<State>().focused = whole;
+                        shell.request_redraw();
                     }
                     // Handled: the island's widgets don't see it.
                     shell.capture_event();

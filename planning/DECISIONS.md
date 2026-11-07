@@ -98,16 +98,30 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   one submits, if there's a submit button; Escape cancels while the island
   has focus, if there's a cancel button (otherwise the field just loses
   focus, as in iced); a button's key presses it while the island has
-  focus. Rejected: handling these in the host through a subscription; by
+  focus as a whole. Rejected: handling these in the host through a subscription; by
   then a text input has already handled Escape (it unfocuses), so the host
   can't tell which island had focus.
-- An island without text fields can have focus as a whole: the wrapper is
+- An island without fields can have focus as a whole: the wrapper is
   focusable, with its own `Id::unique()`, and behaves like a text input
   (focused by a click on it or by iced's focus operations, unfocused by a
   click elsewhere), so the host's focus checks see it like any other
   focusable widget. It's shown by a thin primary-coloured border around the
-  island. `Island::focus` focuses the first shown text field, or the island
-  as a whole.
+  island. `Island::focus` focuses the first shown field, or the island
+  as a whole. Enter submits while the island as a whole has focus.
+- Checkboxes can have focus: iced's checkbox in our own wrapper widget,
+  which is `Focusable` and has an Id like a text field (checkboxes count as
+  fields for `Island::field_id`, `has_focus` and Enter). The island's
+  wrapper handles their keys: Space toggles; Enter moves on or submits,
+  as in a text field; `y` and `n` check and uncheck and move on, but never
+  submit: after the last field, focus goes to the island as a whole, where
+  Enter submits. That's the only way an island with fields gets focus as a
+  whole (a click inside it doesn't), and Up from there goes back to the
+  last field. Up and Down move between fields. A focused checkbox has a
+  thin primary-coloured border around it and its label (like the island's
+  focus border), and shows a muted `[y/n]` after it, whose space is always
+  kept so the layout doesn't move. The border, focus operations and clicks
+  use the checkbox's own bounds, without the hint's space. Button keys work only while the island as a whole has
+  focus, so `y`/`n` in a checkbox never clash with them.
 - A text area is iced's `text_editor` inside our own widget, which keeps the
   editor's `Content` in its widget state and takes the value as a string,
   like `text_input`. The `Content` is remade only when the value changes

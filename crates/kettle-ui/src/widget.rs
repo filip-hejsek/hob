@@ -214,8 +214,9 @@ pub fn suggestions(state: &str, field: &str) -> Widget {
 /// them with [`ButtonLabel::new`] (and [`ButtonLabel::key`]). That's also
 /// the way to a label that ends with a bracketed letter.
 ///
-/// A key is a lowercase ASCII letter. It works while the island has focus,
-/// and only in islands without text fields; no two buttons of an island can
+/// A key is a lowercase ASCII letter. It works while the island has focus
+/// as a whole: in an island without text fields or checkboxes, or after its
+/// last checkbox (backends may differ); no two buttons of an island can
 /// have the same key (see [`IslandBuilder::build`](crate::IslandBuilder::build)).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ButtonLabel {

@@ -26,24 +26,31 @@
 //! with nothing to show (see [`is_visible`]) get no gaps around them, but
 //! stay in the iced tree for the same reason.
 //!
-//! In this crate, "text fields" include text areas, unless said otherwise.
-//! The text fields of a live island have iced [`Id`]s, made when the island
+//! In this crate, "text fields" include text areas, unless said otherwise,
+//! and "fields" are text fields and checkboxes: what can have focus.
+//! The fields of a live island have iced [`Id`]s, made when the island
 //! is created and kept for its whole life, for the host's focus operations
 //! (see [`Island::field_id`] and [`Island::has_focus`]). They are unique, so
 //! they never clash with the host's own Ids or another island's. An island
-//! without text fields can have focus as a whole, with its own Id;
+//! can also have focus as a whole, with its own Id: one without fields when
+//! clicked, one with fields only when its last checkbox moves on;
 //! [`Island::focus`] focuses an island either way.
 //!
 //! A live island handles some keys itself, while it has focus: Enter in a
-//! text field focuses the next shown one, and submits in the last one (if
+//! field focuses the next shown one, and submits in the last one (if
 //! there's a submit button), while in a text area it starts a new line and
-//! Ctrl+Enter does that instead; Escape cancels (if there's a cancel button);
-//! and a button's key (see [`ButtonLabel`](kettle_ui::widget::ButtonLabel))
-//! presses it.
+//! Ctrl+Enter does that instead. In a checkbox, Space toggles it, `y` and
+//! `n` check and uncheck it and move on (after the last field, to the
+//! island as a whole; they never submit), and Up and Down move between
+//! fields; a border and a muted `[y/n]` after its label show it has focus. Escape cancels
+//! (if there's a cancel button). While the island as a whole has focus,
+//! Enter submits and a button's key (see
+//! [`ButtonLabel`](kettle_ui::widget::ButtonLabel)) presses it.
 //!
 //! [`render_png`] renders an island offscreen, without a window; the
 //! `kettle-render` binary does the same for an island saved as JSON.
 
+mod checkbox;
 mod offscreen;
 mod scope;
 mod text_area;
@@ -53,7 +60,7 @@ use std::sync::Arc;
 use iced::advanced::widget::operation::{Focusable, Outcome as OperationOutcome};
 use iced::advanced::widget::{Id, Operation, operate};
 use iced::widget::{
-    Container, button, checkbox, column, container, operation, progress_bar, row, text, text_input,
+    Container, button, column, container, operation, progress_bar, row, text, text_input,
 };
 use iced::{Element, Padding, Rectangle, Task, task};
 use kettle_ui::widget::{Action, Kind, Text, Widget, is_shown, is_visible};
@@ -78,10 +85,9 @@ pub fn spacing() -> f32 {
 /// runs the tasks it gets back.
 pub struct Island {
     model: Model,
-    /// The iced Ids of the text fields, in tree order.
+    /// The iced Ids of the fields, in tree order.
     fields: Vec<(Arc<str>, Id)>,
-    /// The Id of the island as a whole, which can have focus if it has no
-    /// text fields.
+    /// The Id of the island as a whole, which can also have focus.
     id: Id,
     /// Stops delivering [`StateHandle`](kettle_ui::StateHandle) updates when
     /// the island is dropped.
@@ -116,7 +122,7 @@ impl Island {
         } = builder.build()?;
         let (updates, handle) = Task::run(updates, |u| Message(Msg::StateSet(u))).abortable();
         let mut fields = Vec::new();
-        text_fields(model.root(), &mut fields);
+        field_ids(model.root(), &mut fields);
         let island = Island {
             model,
             fields: fields.into_iter().map(|f| (f, Id::unique())).collect(),
@@ -156,7 +162,7 @@ impl Island {
         scope::Scope {
             content: render(&self.model, self.model.root(), true, Some(&self.fields)),
             id: self.id.clone(),
-            focusable: self.fields.is_empty(),
+            click_focus: self.fields.is_empty(),
             fields: shown.fields,
             keys: (shown.keys.into_iter())
                 .map(|(key, action)| (key, message(action)))
@@ -167,9 +173,8 @@ impl Island {
         .into()
     }
 
-    /// Focuses the island: its first shown text field, or the island as a
-    /// whole if it has no text fields. Does nothing if all its text fields
-    /// are hidden.
+    /// Focuses the island: its first shown field, or the island as a whole
+    /// if it has no fields. Does nothing if all its fields are hidden.
     pub fn focus<T: Send + 'static>(&self) -> Task<T> {
         if self.fields.is_empty() {
             return operation::focus(self.id.clone());
@@ -182,13 +187,13 @@ impl Island {
         }
     }
 
-    /// The iced Id of text field `field`, for focus operations. `None` if the
-    /// island has no text field with this id.
+    /// The iced Id of field `field` (a text field or checkbox), for focus
+    /// operations. `None` if the island has no field with this id.
     pub fn field_id(&self, field: &str) -> Option<Id> {
         field_id(&self.fields, field).cloned()
     }
 
-    /// Whether the island or one of its text fields has focus.
+    /// Whether the island or one of its fields has focus.
     pub fn has_focus(&self) -> Task<bool> {
         let fields = self.fields.iter().map(|(_, id)| id.clone());
         let ids = fields.chain([self.id.clone()]).collect();
@@ -211,11 +216,11 @@ pub fn view_frozen<'a, M: 'a>(island: &'a FrozenIsland) -> Element<'a, M> {
         .map(|_| unreachable!("frozen islands send no messages"))
 }
 
-/// The iced Ids of text fields, in tree order.
+/// The iced Ids of fields, in tree order.
 type FieldIds = [(Arc<str>, Id)];
 
 /// Renders `widget` from `contents`. Without `interactive`, no widget sends
-/// messages, so they all look disabled. Text fields get their Ids from `ids`.
+/// messages, so they all look disabled. Fields get their Ids from `ids`.
 fn render<'a>(
     contents: &'a impl Contents,
     widget: &'a Widget,
@@ -264,10 +269,17 @@ fn render<'a>(
             }
             area.into()
         }
-        Kind::Checkbox { id, label } => checkbox(fields.checked(id))
-            .label(label)
-            .on_toggle_maybe(interactive.then_some(|b| Message(Msg::Toggled(id.clone(), b))))
-            .into(),
+        Kind::Checkbox { id, label } => {
+            let mut checkbox = checkbox::Checkbox::new(
+                label,
+                fields.checked(id),
+                interactive.then_some(|b| Message(Msg::Toggled(id.clone(), b))),
+            );
+            if let Some(widget_id) = ids.and_then(|ids| field_id(ids, id)) {
+                checkbox = checkbox.id(widget_id.clone());
+            }
+            checkbox.into()
+        }
         Kind::Progress { state } => {
             let value = match contents.state(state) {
                 Some(Value::Number(n)) => n.clamp(0.0, 1.0) as f32,
@@ -340,7 +352,7 @@ fn hideable(content: Element<'_, Message>, visible: bool) -> Container<'_, Messa
 /// What a live island shows that its keys act on.
 #[derive(Default)]
 struct Shown {
-    /// The shown text fields and areas, in tree order.
+    /// The shown fields, in tree order.
     fields: Vec<scope::Field>,
     /// The keys of shown buttons.
     keys: Vec<(char, Action)>,
@@ -351,8 +363,7 @@ struct Shown {
 }
 
 impl Shown {
-    /// Collects what's shown of `widget`; text fields get their Ids from
-    /// `ids`.
+    /// Collects what's shown of `widget`; fields get their Ids from `ids`.
     fn collect(&mut self, contents: &impl Contents, widget: &Widget, ids: &FieldIds) {
         match widget.kind() {
             Kind::Column(children) | Kind::Row(children) => {
@@ -361,10 +372,21 @@ impl Shown {
             Kind::When { state, child } if is_shown(contents, state) => {
                 self.collect(contents, child, ids);
             }
-            Kind::TextField { id, .. } | Kind::TextArea { id, .. } => {
-                let multiline = matches!(widget.kind(), Kind::TextArea { .. });
+            Kind::TextField { id, .. } | Kind::TextArea { id, .. } | Kind::Checkbox { id, .. } => {
+                let kind = match widget.kind() {
+                    Kind::TextArea { .. } => scope::FieldKind::TextArea,
+                    Kind::Checkbox { .. } => {
+                        let set = |b| Message(Msg::Toggled(id.clone(), b));
+                        scope::FieldKind::Checkbox {
+                            checked: contents.fields().checked(id),
+                            check: set(true),
+                            uncheck: set(false),
+                        }
+                    }
+                    _ => scope::FieldKind::TextField,
+                };
                 let ids = field_id(ids, id).cloned();
-                (self.fields).extend(ids.map(|id| scope::Field { id, multiline }));
+                (self.fields).extend(ids.map(|id| scope::Field { id, kind }));
             }
             Kind::Button { key, action, .. } => {
                 match action {
@@ -380,19 +402,21 @@ impl Shown {
     }
 }
 
-/// Collects the ids of the text fields and areas in `widget`, in tree order.
-fn text_fields(widget: &Widget, out: &mut Vec<Arc<str>>) {
+/// Collects the ids of the fields in `widget`, in tree order.
+fn field_ids(widget: &Widget, out: &mut Vec<Arc<str>>) {
     match widget.kind() {
         Kind::Column(children) | Kind::Row(children) => {
-            children.iter().for_each(|c| text_fields(c, out));
+            children.iter().for_each(|c| field_ids(c, out));
         }
-        Kind::When { child, .. } => text_fields(child, out),
-        Kind::TextField { id, .. } | Kind::TextArea { id, .. } => out.push(id.clone()),
+        Kind::When { child, .. } => field_ids(child, out),
+        Kind::TextField { id, .. } | Kind::TextArea { id, .. } | Kind::Checkbox { id, .. } => {
+            out.push(id.clone());
+        }
         _ => {}
     }
 }
 
-/// The Id of text field `field`.
+/// The Id of field `field`.
 fn field_id<'a>(ids: &'a FieldIds, field: &str) -> Option<&'a Id> {
     ids.iter().find(|(f, _)| **f == *field).map(|(_, id)| id)
 }
@@ -466,11 +490,10 @@ mod tests {
     }
 
     #[test]
-    fn text_fields_have_ids_in_tree_order() {
+    fn fields_have_ids_in_tree_order() {
         let island = island();
         let fields: Vec<&str> = island.fields.iter().map(|(f, _)| &**f).collect();
-        assert_eq!(fields, ["a", "b"]);
-        assert_eq!(island.field_id("c"), None);
+        assert_eq!(fields, ["a", "c", "b"]);
         assert_eq!(island.field_id("x"), None);
         assert_ne!(island.field_id("a"), island.field_id("b"));
     }
@@ -521,7 +544,15 @@ mod tests {
                     if let Some(outcome) = outcome.filter(|_| self.outcome.is_none()) {
                         self.outcome = Some(match outcome {
                             Outcome::Submitted(fields) => {
-                                format!("submitted {:?} {:?}", fields.text("a"), fields.text("b"))
+                                let mut out = format!(
+                                    "submitted {:?} {:?}",
+                                    fields.text("a"),
+                                    fields.text("b")
+                                );
+                                for c in ["c", "d"].into_iter().filter(|c| fields.checked(c)) {
+                                    out += &format!(" {c}");
+                                }
+                                out
                             }
                             Outcome::Cancelled => "cancelled".into(),
                         });
@@ -773,6 +804,102 @@ mod tests {
                 })),
                 expect(r#"outcome: Some("cancelled")"#),
             ],
+        );
+    }
+
+    /// A text field, then two checkboxes, the first one checked.
+    fn toppings() -> Island {
+        let mut builder = IslandBuilder::new(column([
+            text_field("a", "A"),
+            checkbox("c", "C"),
+            checkbox("d", "D"),
+            row([submit_button("OK"), cancel_button("Cancel")]),
+        ]));
+        builder.set_checked("c", true);
+        Island::new(builder).unwrap().0
+    }
+
+    #[test]
+    fn enter_goes_through_checkboxes_then_submits() {
+        check(
+            program(toppings, Focus::Field("a")),
+            &[
+                expect("focused: Some(true)"),
+                typewrite("1"),
+                press(Key::Enter),
+                press(Key::Enter),
+                press(Key::Enter),
+                expect(r#"outcome: Some("submitted \"1\" \"\" c")"#),
+            ],
+        );
+    }
+
+    #[test]
+    fn y_and_n_set_checkboxes_and_move_on_but_never_submit() {
+        check(
+            program(toppings, Focus::Field("c")),
+            &[
+                expect("focused: Some(true)"),
+                typewrite("n"),
+                typewrite("y"),
+                // Now the island as a whole has focus.
+                typewrite("y"),
+                expect("outcome: None"),
+                press(Key::Enter),
+                expect(r#"outcome: Some("submitted \"\" \"\" d")"#),
+            ],
+        );
+    }
+
+    #[test]
+    fn island_focus_goes_to_the_first_checkbox() {
+        fn checkboxes() -> Island {
+            let builder = IslandBuilder::new(column([checkbox("c", "C"), submit_button("OK")]));
+            Island::new(builder).unwrap().0
+        }
+        check(
+            program(checkboxes, Focus::Island),
+            &[
+                expect("focused: Some(true)"),
+                typewrite("y"),
+                press(Key::Enter),
+                expect(r#"outcome: Some("submitted \"\" \"\" c")"#),
+            ],
+        );
+    }
+
+    #[test]
+    fn space_toggles_and_arrows_move_between_fields() {
+        use iced::keyboard::{Key, key::Named};
+
+        let island = toppings();
+        let d = island.field_id("d").unwrap();
+        let mut ui = simulator(island.view());
+        // Clicking focuses it, and toggles it.
+        ui.click(d).unwrap();
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::Space));
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        // The island as a whole, where Enter submits.
+        ui.tap_key(Key::Named(Named::Space));
+        ui.tap_key(Key::Named(Named::Enter));
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::Space));
+        // Up from a checkbox goes to a text field too.
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.typewrite("x");
+        let messages: Vec<String> = ui.into_messages().map(|m| format!("{m:?}")).collect();
+        assert_eq!(
+            messages,
+            [
+                r#"Message(Toggled("d", true))"#,
+                r#"Message(Toggled("c", false))"#,
+                "Message(Submit)",
+                r#"Message(Toggled("d", true))"#,
+                r#"Message(TextChanged("a", "x"))"#,
+            ]
         );
     }
 }

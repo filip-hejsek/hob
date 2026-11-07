@@ -53,10 +53,10 @@ it in through the style.
 Only `text_input` and `text_editor` can be focused; buttons, checkboxes
 and the like can't, so focus operations skip them and they take no keys.
 
-**Workaround:** an island without text fields can be focused as a whole
-(a wrapper widget implementing `Focusable`), and its buttons have keys.
-In an island with text fields, Enter in the last field submits; checkboxes
-are mouse-only.
+**Workaround:** checkboxes are wrapped in our own widget implementing
+`Focusable`, with the island's wrapper handling their keys. An island
+without fields can be focused as a whole (another wrapper implementing
+`Focusable`), and its buttons have keys.
 
 ## An element that sends no messages
 

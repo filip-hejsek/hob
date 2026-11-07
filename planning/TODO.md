@@ -30,16 +30,12 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - **`suggestions()`:** make it a full-featured autocomplete widget, with
   suggestions selectable by keyboard like in an IDE. (Currently it only
   supports clicking.)
-- **Keyboard:** buttons and checkboxes can't get focus (iced can only focus
-  text inputs; see ICED_WISHLIST.md), so an island with text fields can be
-  submitted by keyboard only through Enter, and a checkbox only clicked.
-  Making them focusable needs our own widgets in kettle-ui-iced. Until
-  then, islands without text fields have focus as a whole, with button
-  keys.
+- **Keyboard:** buttons can't get focus (iced can only focus text inputs;
+  checkboxes have our own wrapper), so button keys work only while the
+  island as a whole has focus. Should Up/Down also move between text
+  fields, as they do from checkboxes?
 - Chord keys (e.g. Ctrl+N) for buttons, which could work in islands with
   text fields.
-- Enter in an island without text fields does nothing. Should it press
-  the only submit button, if there's one?
 
 ## kettle-ui-iced
 
