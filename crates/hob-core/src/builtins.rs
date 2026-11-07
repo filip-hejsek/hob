@@ -1,7 +1,8 @@
 //! Commands that work with any frontend. Register them with [`register`].
 //!
 //! - `clear`: clears the scrollback.
-//! - `exit`: exits hob.
+//! - `exit`: exits hob; if other commands are running, asks first, listing
+//!   them.
 //! - `help [COMMAND]`: lists all commands with their descriptions, or shows
 //!   the description of one.
 //! - `messages [LEVEL]`: lists the log records the frontend has, oldest
@@ -10,6 +11,9 @@
 
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, Zoned};
+
+use kettle_ui::widget::{button_danger, cancel_button, column, label, row};
+use kettle_ui::{IslandBuilder, Outcome};
 
 use crate::{CommandResult, Context, Interpreter, Level, LogRecord};
 
@@ -36,6 +40,23 @@ fn clear(ctx: &mut Context, args: &[String]) -> CommandResult {
 fn exit(ctx: &mut Context, args: &[String]) -> CommandResult {
     if !args.is_empty() {
         return Err("usage: exit".into());
+    }
+    let running = ctx.running_commands()?;
+    if !running.is_empty() {
+        // "Yes" isn't a submit button, so Enter can't confirm by accident.
+        let island = IslandBuilder::new(column(
+            [label("These commands are still running:")]
+                .into_iter()
+                .chain(running.into_iter().map(label))
+                .chain([
+                    label("Exit anyway? They will be interrupted."),
+                    row([button_danger("exit", "Yes [y]"), cancel_button("No [n]")]),
+                ]),
+        ));
+        if !matches!(ctx.show(island)?, Outcome::Pressed(..)) {
+            ctx.print("Not exiting.");
+            return Ok(());
+        }
     }
     ctx.exit();
     Ok(())
@@ -135,10 +156,22 @@ mod tests {
     /// Runs `line`, answering its request for log records with `records`;
     /// returns what it prints or logs.
     fn run(line: &str, records: Vec<LogRecord>) -> Vec<String> {
+        run_with(line, records, vec![], None)
+    }
+
+    /// Like [`run`], but also answers the request for running commands with
+    /// `running`, and an island with `outcome` (shown as `<island>`).
+    fn run_with(
+        line: &str,
+        records: Vec<LogRecord>,
+        running: Vec<String>,
+        outcome: Option<Outcome>,
+    ) -> Vec<String> {
         let mut interpreter = Interpreter::new();
         register(&mut interpreter);
         let mut requests = interpreter.run(line).unwrap();
         let mut records = Some(records);
+        let (mut running, mut outcome) = (Some(running), outcome);
         let mut output = Vec::new();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
@@ -146,6 +179,11 @@ mod tests {
             match std::pin::Pin::new(&mut requests).poll_next(&mut cx) {
                 std::task::Poll::Ready(Some(request)) => match request {
                     Request::LogRecords(reply) => reply.send(records.take().unwrap()),
+                    Request::RunningCommands(reply) => reply.send(running.take().unwrap()),
+                    Request::Show(show) => {
+                        output.push("<island>".to_owned());
+                        show.into_parts().1.send(outcome.take().unwrap());
+                    }
                     Request::Print(message) => output.push(message),
                     Request::Log(record) => output.push(record.to_string()),
                     Request::Clear => output.push("<clear>".to_owned()),
@@ -207,6 +245,20 @@ mod tests {
     fn exit_asks_to_exit() {
         assert_eq!(run("exit", vec![]), ["<exit>"]);
         assert_eq!(run("exit now", vec![]), ["error: usage: exit"]);
+    }
+
+    #[test]
+    fn exit_asks_first_if_commands_are_running() {
+        let running = || vec!["count 9".to_owned()];
+        let pressed = Outcome::Pressed("exit".into(), Default::default());
+        assert_eq!(
+            run_with("exit", vec![], running(), Some(pressed)),
+            ["<island>", "<exit>"]
+        );
+        assert_eq!(
+            run_with("exit", vec![], running(), Some(Outcome::Cancelled)),
+            ["<island>", "Not exiting."]
+        );
     }
 
     #[test]

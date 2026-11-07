@@ -10,8 +10,9 @@
 //! [`warn`](Context::warn), [`info`](Context::info) and
 //! [`debug`](Context::debug) log messages ([`LogRecord`]s), and
 //! [`Context::log_records`] reads back all records the frontend has.
-//! [`Context::clear`] clears the scrollback, and [`Context::exit`] asks the
-//! frontend to exit.
+//! [`Context::clear`] clears the scrollback, [`Context::exit`] asks the
+//! frontend to exit, and [`Context::running_commands`] lists the other
+//! commands still running.
 //!
 //! [`builtins`] has commands that work with any frontend, such as a log viewer.
 //!
@@ -304,6 +305,14 @@ impl Context {
         receiver.recv().map_err(|_| Closed)
     }
 
+    /// The command lines of the other commands still running, oldest first.
+    pub fn running_commands(&self) -> Result<Vec<String>, Closed> {
+        let (reply, receiver) = std_mpsc::channel();
+        let request = Request::RunningCommands(LinesReply(reply));
+        self.sender.unbounded_send(request).map_err(|_| Closed)?;
+        receiver.recv().map_err(|_| Closed)
+    }
+
     /// Clears the scrollback, like `clear` in a terminal. Blocks of other
     /// commands that are still running are kept, and so are log records, for
     /// [`log_records`](Context::log_records). This command's own block is
@@ -391,6 +400,9 @@ pub enum Request {
     Show(Show),
     /// Reply with all log records; see [`Context::log_records`].
     LogRecords(RecordsReply),
+    /// Reply with the command lines of the other running commands; see
+    /// [`Context::running_commands`].
+    RunningCommands(LinesReply),
     /// Clear the scrollback; see [`Context::clear`].
     Clear,
     /// Exit; see [`Context::exit`].
@@ -404,6 +416,17 @@ impl RecordsReply {
     /// Sends the records, oldest first.
     pub fn send(self, records: Vec<LogRecord>) {
         let _ = self.0.send(records);
+    }
+}
+
+/// Sends command lines back to the command; see
+/// [`Context::running_commands`].
+pub struct LinesReply(std_mpsc::Sender<Vec<String>>);
+
+impl LinesReply {
+    /// Sends the lines.
+    pub fn send(self, lines: Vec<String>) {
+        let _ = self.0.send(lines);
     }
 }
 

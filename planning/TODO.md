@@ -92,6 +92,8 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   the cursor, or to the start or end of the line). They need the cursor
   position, which iced doesn't expose (see ICED_WISHLIST.md); the plan is
   to contribute that upstream, then pin iced to a git version.
+- When Ctrl+D moves focus to a waiting island, it isn't scrolled into
+  view, so focus may go to an island out of sight.
 - Ctrl+R history search. Needs a UI design: a bash-style search in the
   prompt line, or a list of matches?
 - Completion works only at the end of the line (iced doesn't tell the app

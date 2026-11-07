@@ -307,6 +307,10 @@ Works like a terminal: a scrollback with the prompt below it.
   ends (by ending its input): hob-cli quits, hob-mcp only reports it, since
   an agent can't end the MCP server. The frontend treats a broken pipe on
   its output like the end of its input, so a client can just quit.
+- If other commands are running, `exit` first asks to confirm, listing
+  them; "Yes" is a plain red button, so Enter can't confirm. It learns of
+  them through `Context::running_commands`, a request both frontends
+  answer. Without other commands, it exits at once, without asking.
 - Key bindings are a table (the `keys` module) from a key with exact
   modifiers to a named action, kept apart from what the actions do, so it
   can become configurable. Letters are compared in lowercase. History and
@@ -314,7 +318,11 @@ Works like a terminal: a scrollback with the prompt below it.
   PageUp/PageDown scroll the scrollback by a bit less than a page, and
   Ctrl+L clears it like `clear`, keeping the blocks of running commands.
   Ctrl+D exits like `exit`, but only in the focused, empty prompt, as in
-  a terminal; otherwise it does nothing.
+  a terminal; otherwise it does nothing. It never asks: while commands are
+  running, it doesn't exit, but adds an ephemeral warning ("Not exiting:
+  LINE [and N other commands] are running"), naming the newest command
+  waiting for input, else the newest running one, and moves focus to that
+  command's island. Closing the window still exits without asking.
   Escape has no binding.
 - A newly shown island gets focus, unless something other than the empty
   prompt has it, so an island that appears later doesn't take keys meant

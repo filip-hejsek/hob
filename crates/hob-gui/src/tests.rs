@@ -124,6 +124,56 @@ fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
 }
 
 #[test]
+fn ctrl_d_does_not_exit_while_commands_are_running() {
+    let (mut shell, _) = Shell::new(
+        Arc::new(interpreter()),
+        None,
+        PLACEHOLDER.into(),
+        Level::Info,
+        None,
+    );
+    let mut notices = Vec::new();
+    for line in ["one", "two", "three"] {
+        let id = shell.next_id();
+        shell.scrollback.push(Item::Block(Block {
+            id,
+            line: line.into(),
+            entries: Vec::new(),
+            running: true,
+            interrupted: false,
+        }));
+        let _ = shell.update(Message::Action(Action::Exit));
+        let Some(Item::Notice(record)) = shell.scrollback.last() else {
+            panic!("no notice");
+        };
+        notices.push(record.message.clone());
+    }
+    assert_eq!(
+        notices,
+        [
+            "Not exiting: one is running",
+            "Not exiting: two and 1 other command are running",
+            "Not exiting: three and 2 other commands are running",
+        ]
+    );
+}
+
+#[test]
+fn exit_asks_first_if_commands_are_running() {
+    let mut shell = start(None);
+    shell.run("greet");
+    shell.expect("OK");
+    // Let the greeting take focus first, so it doesn't take "exit".
+    shell.settle();
+    shell.run("exit");
+    shell.expect("These commands are still running:");
+    shell.expect("greet");
+    shell.settle();
+    shell.step(typewrite("n"));
+    shell.expect("Not exiting.");
+}
+
+#[test]
 fn clear_clears_the_scrollback() {
     let mut shell = start(None);
     shell.run("say hi");

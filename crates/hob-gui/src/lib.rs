@@ -20,7 +20,8 @@
 //! The prompt works like a shell's: Up and Down browse the history, and Tab
 //! completes command names. Tab doesn't move focus. Anywhere, PageUp and
 //! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). Ctrl+D
-//! in the empty prompt exits (like `exit`). The bindings are a table (see the
+//! in the empty prompt exits (like `exit`), unless commands are running: then
+//! it says so, and focuses an island waiting for input. The bindings are a table (see the
 //! `keys` module), to make them configurable later.
 //!
 //! A newly shown island gets focus, unless the user is busy elsewhere
@@ -465,7 +466,7 @@ impl Shell {
                 self.save();
                 return Task::none();
             }
-            Action::Exit if self.prompt.is_empty() => return self.exit(),
+            Action::Exit if self.prompt.is_empty() => return self.exit_if_idle(),
             Action::Exit => return Task::none(),
         };
         match line {
@@ -492,6 +493,11 @@ impl Shell {
         let request = match request {
             Request::LogRecords(reply) => {
                 reply.send(self.log_records());
+                return Task::none();
+            }
+            Request::RunningCommands(reply) => {
+                let others = self.running().filter(|b| b.id != block);
+                reply.send(others.map(|b| b.line.clone()).collect());
                 return Task::none();
             }
             Request::Clear => {
@@ -524,7 +530,10 @@ impl Shell {
                 Entry::Log(record)
             }
             Request::PrintIsland(island) => Entry::Frozen(island),
-            Request::LogRecords(_) | Request::Clear | Request::Exit => {
+            Request::LogRecords(_)
+            | Request::RunningCommands(_)
+            | Request::Clear
+            | Request::Exit => {
                 unreachable!("handled above")
             }
             Request::Show(show) => {
@@ -552,6 +561,45 @@ impl Shell {
         };
         block.entries.push(entry);
         Task::none()
+    }
+
+    /// The blocks of commands still running, oldest first.
+    fn running(&self) -> impl Iterator<Item = &Block> {
+        self.scrollback.iter().filter_map(|item| match item {
+            Item::Block(block) if block.running => Some(block),
+            _ => None,
+        })
+    }
+
+    /// Exits, unless commands are running: then says so instead, and moves
+    /// focus to the newest island waiting for input, if any.
+    fn exit_if_idle(&mut self) -> Task<Message> {
+        let running: Vec<&Block> = self.running().collect();
+        let waiting = (running.iter().rev()).find_map(|block| {
+            block.entries.iter().rev().find_map(|e| match e {
+                Entry::Live { island, .. } => Some((block, island)),
+                _ => None,
+            })
+        });
+        let (named, focus) = match (waiting, running.last()) {
+            (Some((block, island)), _) => (block, island.focus()),
+            (None, Some(block)) => (block, Task::none()),
+            (None, None) => return self.exit(),
+        };
+        let message = match running.len() - 1 {
+            0 => format!("Not exiting: {} is running", named.line),
+            1 => format!(
+                "Not exiting: {} and 1 other command are running",
+                named.line
+            ),
+            n => format!(
+                "Not exiting: {} and {n} other commands are running",
+                named.line
+            ),
+        };
+        let record = LogRecord::new(Level::Warn, TARGET, message).ephemeral();
+        self.scrollback.push(Item::Notice(record));
+        focus
     }
 
     /// Saves the session and exits.

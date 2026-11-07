@@ -18,7 +18,7 @@ pub(crate) enum Action {
     PageDown,
     /// Clears the scrollback, like the `clear` command.
     Clear,
-    /// Exits, like the `exit` command, if the prompt is empty.
+    /// Exits if the prompt is empty and no command is running.
     Exit,
 }
 

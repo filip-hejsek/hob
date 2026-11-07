@@ -20,6 +20,7 @@ fn rest(requests: BlockingStream<Requests>) -> Vec<String> {
             Request::PrintIsland(island) => outline(&island),
             Request::Show(_) => panic!("unexpected Show"),
             Request::LogRecords(_) => panic!("unexpected LogRecords"),
+            Request::RunningCommands(_) => panic!("unexpected RunningCommands"),
             Request::Clear => panic!("unexpected Clear"),
             Request::Exit => panic!("unexpected Exit"),
         })

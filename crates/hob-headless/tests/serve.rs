@@ -271,3 +271,30 @@ fn exit_is_passed_on() {
     assert_eq!(client.next(), format!("{block} exit requested"));
     assert_eq!(client.next(), format!("{block} finished"));
 }
+
+#[test]
+fn exit_asks_first_if_commands_are_running() {
+    let mut client = Client::start(interpreter());
+    let ask = client.run("ask");
+    assert!(client.next().starts_with(&format!("{ask} island")));
+    let exit = client.run("exit");
+    let shown = client.next();
+    let prefix = format!("{exit} island ");
+    let island: u64 = shown
+        .strip_prefix(&prefix)
+        .unwrap()
+        .split(' ')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(shown.contains("ask"), "{shown}");
+    let press = Call::Press {
+        island,
+        label: "Yes".into(),
+    };
+    client.call(press).unwrap();
+    assert!(client.next().contains("frozen"));
+    assert_eq!(client.next(), format!("{exit} exit requested"));
+    assert_eq!(client.next(), format!("{exit} finished"));
+}

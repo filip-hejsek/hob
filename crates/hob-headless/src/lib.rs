@@ -11,7 +11,7 @@
 pub mod client;
 pub mod protocol;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -54,6 +54,7 @@ pub fn serve(
         next_id: 0,
         islands: HashMap::new(),
         records: Vec::new(),
+        running: BTreeMap::new(),
     };
     // Dropping the live islands makes their commands' `show` fail.
     match server.serve(receiver) {
@@ -103,6 +104,9 @@ struct Server<W> {
     islands: HashMap<IslandId, Live>,
     /// All log records, for `Context::log_records`.
     records: Vec<LogRecord>,
+    /// The command lines of running commands, for
+    /// `Context::running_commands`.
+    running: BTreeMap<BlockId, String>,
 }
 
 /// A live island.
@@ -151,7 +155,10 @@ impl<W: Write> Server<W> {
                 Event::Input(line) => self.handle_line(&line?)?,
                 Event::InputEnd => break,
                 Event::Request(block, request) => self.handle_request(block, request)?,
-                Event::Finished(block) => self.notify(Notification::Finished { block })?,
+                Event::Finished(block) => {
+                    self.running.remove(&block);
+                    self.notify(Notification::Finished { block })?;
+                }
                 Event::Log(record) => {
                     self.records.push(record.clone());
                     self.notify(Notification::Logged {
@@ -207,6 +214,7 @@ impl<W: Write> Server<W> {
         let block = self.next_id();
         self.pump(block, requests)
             .map_err(|e| ErrorObject::new(code::NOT_STARTED, e.to_string()))?;
+        self.running.insert(block, line.trim_end().to_owned());
         Ok(serde_json::to_value(RunResult { block }).expect("results serialize"))
     }
 
@@ -326,6 +334,11 @@ impl<W: Write> Server<W> {
             }
             Request::LogRecords(reply) => {
                 reply.send(self.records.clone());
+                Ok(())
+            }
+            Request::RunningCommands(reply) => {
+                let others = self.running.iter().filter(|&(&b, _)| b != block);
+                reply.send(others.map(|(_, line)| line.clone()).collect());
                 Ok(())
             }
             Request::Clear => self.notify(Notification::Cleared { block }),
