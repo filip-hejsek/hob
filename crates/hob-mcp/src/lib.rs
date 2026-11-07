@@ -323,6 +323,11 @@ impl Bridge {
             Notification::Cleared { block } => {
                 self.event(Some(block), format!("[{block}] cleared the scrollback"));
             }
+            Notification::ExitRequested { block } => {
+                // The agent can't end the MCP server.
+                let text = format!("[{block}] asked to exit, which does nothing here");
+                self.event(Some(block), text);
+            }
             Notification::Finished { block } => {
                 if let Some(b) = self.blocks.get_mut(&block) {
                     b.finished = true;

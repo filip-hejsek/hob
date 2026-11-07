@@ -7,6 +7,8 @@
 //! [`HELP`]). Everything the commands do is printed as it arrives, prefixed
 //! with the command's block number; islands are printed as text outlines.
 //!
+//! The `exit` command quits, like `/quit`.
+//!
 //! Output from commands can arrive while the user types. As a stopgap, the
 //! `> ` prompt is only shown once output has paused for [`PROMPT_DELAY`], and
 //! not at all if stdin isn't a terminal.
@@ -304,6 +306,12 @@ fn print_notification(notification: Notification, state: &Mutex<State>, level: L
             state.islands.insert(island, (block, contents, live));
         }
         Notification::Cleared { block } => OUTPUT.clear(block),
+        Notification::ExitRequested { .. } => {
+            OUTPUT.end();
+            // The main thread may be waiting for input. Exiting ends the
+            // frontend's input, so it exits too.
+            std::process::exit(0);
+        }
         Notification::Finished { block } => out!("[{block}] done"),
     }
 }

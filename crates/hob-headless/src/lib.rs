@@ -14,7 +14,7 @@ pub mod protocol;
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::sync::Arc;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::task::{Wake, Waker};
 use std::thread;
 
@@ -27,7 +27,8 @@ use serde_json::Value;
 use protocol::{BlockId, Call, ErrorObject, IslandId, Notification, RunResult, code};
 
 /// Serves `interpreter` to a client: reads calls from `input`, and writes
-/// replies and notifications to `output`. Returns when `input` ends.
+/// replies and notifications to `output`. Returns when `input` ends, or
+/// `output` is closed (a broken pipe): either way, the client is gone.
 ///
 /// Installs the `log` backend, if no other logger is installed yet.
 pub fn serve(
@@ -54,25 +55,11 @@ pub fn serve(
         islands: HashMap::new(),
         records: Vec::new(),
     };
-    // The server keeps a sender, so this only ends by returning.
-    for event in receiver {
-        match event {
-            Event::Input(line) => server.handle_line(&line?)?,
-            Event::InputEnd => break,
-            Event::Request(block, request) => server.handle_request(block, request)?,
-            Event::Finished(block) => server.notify(Notification::Finished { block })?,
-            Event::Log(record) => {
-                server.records.push(record.clone());
-                server.notify(Notification::Logged {
-                    block: None,
-                    record,
-                })?;
-            }
-            Event::Wake(island) => server.poll_island(island)?,
-        }
-    }
     // Dropping the live islands makes their commands' `show` fail.
-    Ok(())
+    match server.serve(receiver) {
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
+    }
 }
 
 /// Something the server reacts to.
@@ -154,6 +141,28 @@ impl<W: Write> Server<W> {
 
     fn notify(&mut self, notification: Notification) -> io::Result<()> {
         self.send(&protocol::notification(&notification))
+    }
+
+    /// Handles events until the input ends.
+    fn serve(&mut self, events: Receiver<Event>) -> io::Result<()> {
+        // The server keeps a sender, so this only ends by returning.
+        for event in events {
+            match event {
+                Event::Input(line) => self.handle_line(&line?)?,
+                Event::InputEnd => break,
+                Event::Request(block, request) => self.handle_request(block, request)?,
+                Event::Finished(block) => self.notify(Notification::Finished { block })?,
+                Event::Log(record) => {
+                    self.records.push(record.clone());
+                    self.notify(Notification::Logged {
+                        block: None,
+                        record,
+                    })?;
+                }
+                Event::Wake(island) => self.poll_island(island)?,
+            }
+        }
+        Ok(())
     }
 
     fn handle_line(&mut self, line: &str) -> io::Result<()> {
@@ -320,6 +329,7 @@ impl<W: Write> Server<W> {
                 Ok(())
             }
             Request::Clear => self.notify(Notification::Cleared { block }),
+            Request::Exit => self.notify(Notification::ExitRequested { block }),
         }
     }
 }

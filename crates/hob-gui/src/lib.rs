@@ -6,7 +6,7 @@
 //! scrollback: its command line, then what it prints, logs and the islands it
 //! shows, in order. A live island freezes in place once the user submits or
 //! cancels it. The `clear` command clears the scrollback, except for
-//! commands still running.
+//! commands still running, and `exit` closes the window.
 //!
 //! Log records that aren't from a command (from the shell itself, kettle-ui
 //! or dependencies, through the `log` crate) are added to the scrollback as
@@ -375,10 +375,7 @@ impl Shell {
                 }
                 Task::none()
             }
-            Message::CloseRequested => {
-                self.save();
-                iced::exit()
-            }
+            Message::CloseRequested => self.exit(),
         }
     }
 
@@ -473,6 +470,13 @@ impl Shell {
                 self.clear(block);
                 return Task::none();
             }
+            Request::Exit => {
+                // The caller is done, so it isn't interrupted.
+                if let Some(block) = self.block_mut(block) {
+                    block.running = false;
+                }
+                return self.exit();
+            }
             request => request,
         };
         let island_id = self.next_id();
@@ -492,7 +496,9 @@ impl Shell {
                 Entry::Log(record)
             }
             Request::PrintIsland(island) => Entry::Frozen(island),
-            Request::LogRecords(_) | Request::Clear => unreachable!("handled above"),
+            Request::LogRecords(_) | Request::Clear | Request::Exit => {
+                unreachable!("handled above")
+            }
             Request::Show(show) => {
                 let (builder, reply) = show.into_parts();
                 match Island::new(builder) {
@@ -513,6 +519,12 @@ impl Shell {
         };
         block.entries.push(entry);
         Task::none()
+    }
+
+    /// Saves the session and exits.
+    fn exit(&mut self) -> Task<Message> {
+        self.save();
+        iced::exit()
     }
 
     /// Clears the scrollback, except for blocks of commands still running

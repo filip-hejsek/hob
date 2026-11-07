@@ -81,3 +81,12 @@ first, falling back to tiny-skia.
 
 **Workaround:** none; the tests don't depend on pixels. In the container
 there's no GPU, so they use tiny-skia.
+
+## Exit in the test emulator
+
+**Needed for:** testing the `exit` command in hob-gui's end-to-end tests.
+
+`iced_test`'s `Emulator` ignores `iced::exit()` (a TODO in its source), so a
+test can't tell that the app asked to exit.
+
+**Workaround:** none in the tests; checked by hand under Xvfb.

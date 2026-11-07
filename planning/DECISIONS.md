@@ -217,6 +217,13 @@ Works like a terminal: a scrollback with the prompt below it.
   items are kept in memory for `messages`. In hob-headless, it's a
   `cleared` notification, since the client owns the scrollback: hob-cli
   clears the terminal, hob-mcp reports it.
+- `exit` (a builtin; commands call `ctx.exit()`) works like closing the
+  window: the session is saved and other running commands are marked
+  interrupted, but not `exit` itself. In hob-headless, it's an
+  `exit_requested` notification, since the client decides when the frontend
+  ends (by ending its input): hob-cli quits, hob-mcp only reports it, since
+  an agent can't end the MCP server. The frontend treats a broken pipe on
+  its output like the end of its input, so a client can just quit.
 - The prompt has history (Up/Down; the line being typed is kept as a draft)
   and Tab completion of command names: unambiguous part completed, the
   candidates listed below the prompt if there are several. Both live in

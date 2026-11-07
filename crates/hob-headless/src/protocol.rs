@@ -126,6 +126,13 @@ pub enum Notification {
         /// The command's block.
         block: BlockId,
     },
+    /// A command asked hob to exit (see
+    /// [`Context::exit`](hob_core::Context::exit)). The frontend exits when
+    /// its input ends, so it's up to the client whether to end it.
+    ExitRequested {
+        /// The command's block.
+        block: BlockId,
+    },
     /// A command finished; nothing more will refer to its block.
     Finished {
         /// The command's block.

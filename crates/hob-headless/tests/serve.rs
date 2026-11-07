@@ -93,6 +93,7 @@ impl Client {
                 format!("{block} island {island} {live}\n{}", outline(&contents))
             }
             Notification::Cleared { block } => format!("{block} cleared"),
+            Notification::ExitRequested { block } => format!("{block} exit requested"),
             Notification::Finished { block } => format!("{block} finished"),
         }
     }
@@ -260,5 +261,13 @@ fn clear_is_passed_on() {
     let mut client = Client::start(interpreter());
     let block = client.run("clear");
     assert_eq!(client.next(), format!("{block} cleared"));
+    assert_eq!(client.next(), format!("{block} finished"));
+}
+
+#[test]
+fn exit_is_passed_on() {
+    let mut client = Client::start(interpreter());
+    let block = client.run("exit");
+    assert_eq!(client.next(), format!("{block} exit requested"));
     assert_eq!(client.next(), format!("{block} finished"));
 }

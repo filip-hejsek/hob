@@ -10,7 +10,8 @@
 //! [`warn`](Context::warn), [`info`](Context::info) and
 //! [`debug`](Context::debug) log messages ([`LogRecord`]s), and
 //! [`Context::log_records`] reads back all records the frontend has.
-//! [`Context::clear`] clears the scrollback.
+//! [`Context::clear`] clears the scrollback, and [`Context::exit`] asks the
+//! frontend to exit.
 //!
 //! [`builtins`] has commands that work with any frontend, such as a log viewer.
 //!
@@ -312,6 +313,13 @@ impl Context {
         let _ = self.sender.unbounded_send(Request::Clear);
     }
 
+    /// Asks the frontend to exit, like closing its window. Commands still
+    /// running are interrupted, so this should be the last thing the command
+    /// does. A frontend without a window of its own leaves it to its client.
+    pub fn exit(&self) {
+        let _ = self.sender.unbounded_send(Request::Exit);
+    }
+
     /// Shows a frozen island, e.g. to present a result. Create it with
     /// [`IslandBuilder::freeze`].
     pub fn print_island(&self, island: FrozenIsland) {
@@ -385,6 +393,8 @@ pub enum Request {
     LogRecords(RecordsReply),
     /// Clear the scrollback; see [`Context::clear`].
     Clear,
+    /// Exit; see [`Context::exit`].
+    Exit,
 }
 
 /// Sends log records back to the command; see [`Context::log_records`].
