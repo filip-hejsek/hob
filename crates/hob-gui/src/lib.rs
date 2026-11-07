@@ -385,10 +385,12 @@ impl Shell {
     }
 
     fn run_prompt(&mut self) -> Task<Message> {
-        if self.prompt.trim().is_empty() {
+        // Trailing spaces are invisible (completion leaves one), so they
+        // shouldn't reach the command or the history.
+        let line = mem::take(&mut self.prompt).trim_end().to_owned();
+        if line.is_empty() {
             return Task::none();
         }
-        let line = mem::take(&mut self.prompt);
         self.history.push(&line);
         self.candidates.clear();
         let id = self.next_id();

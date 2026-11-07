@@ -221,6 +221,9 @@ Works like a terminal: a scrollback with the prompt below it.
   and Tab completion of command names: unambiguous part completed, the
   candidates listed below the prompt if there are several. Both live in
   hob-core.
+- Trailing whitespace is trimmed from a submitted line, so the space that
+  completion adds doesn't reach the command or the history. It's invisible,
+  and words are split at whitespace anyway, so it can't mean anything.
 - The prompt has no box: a bold `>` (the text input's icon) like the command
   lines in the scrollback, with the typed text aligned with theirs. Focus is
   shown by the `>`'s colour (primary when focused, dim otherwise); as the

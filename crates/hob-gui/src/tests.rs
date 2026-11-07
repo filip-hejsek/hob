@@ -89,7 +89,8 @@ fn session_is_restored_and_saved() {
     shell.expect("Old output");
     shell.expect("A frozen label");
 
-    shell.run("say new");
+    // The trailing space is trimmed.
+    shell.run("say new ");
     let saved = Session::load(&file.0).unwrap().unwrap();
     assert_eq!(saved.history, ["old", "say new"]);
     let lines: Vec<_> = (saved.scrollback.iter())
