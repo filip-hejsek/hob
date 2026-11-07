@@ -507,6 +507,16 @@ Works like a terminal: a scrollback with the prompt below it.
   (`data/io.github.filip_hejsek.hob.desktop`), so desktops can match the
   two. The desktop file runs `hob` from `PATH`. Rejected: a plain `hob`,
   which could clash with other programs' IDs.
+- iced comes from a fork (https://github.com/filip-hejsek/iced, branch
+  `startup-notify`) that passes the launcher's startup notification token
+  to winit (see ICED_WISHLIST.md). Every iced crate is patched, not just
+  iced_winit, so that there's one copy of each. Rejected: activating the
+  window ourselves through its raw Wayland handle (needs `unsafe` FFI
+  outside kettle-jxl), and dropping the token in the desktop file's `Exec`
+  (the window then may not get focus).
+- `!` commands don't inherit the startup notification token: it's for
+  hob's window. hob doesn't remove it from its own environment, since
+  that's unsafe with other threads running.
 
 - Each command line gets a block in the scrollback, with what the command
   printed and the islands it showed, in order. Concurrent commands each add

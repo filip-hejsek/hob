@@ -173,3 +173,18 @@ crate), but not JPEG XL.
 **Workaround:** kettle-ui decodes every image to RGBA itself, and
 kettle-ui-iced hands iced the pixels (`Handle::from_rgba`), with iced's
 `image-without-codecs` feature.
+
+## Startup notification
+
+**Needed for:** launching hob from its desktop file: the window should
+get focus, and the launcher should stop waiting (GNOME Shell shows a busy
+cursor, and the dock doesn't show the window, until it times out).
+
+iced never reads the launcher's token (`XDG_ACTIVATION_TOKEN` on Wayland,
+`DESKTOP_STARTUP_ID` on X11) or passes it to winit, which would use it
+(iced#3317).
+
+**Workaround:** iced is patched (`[patch.crates-io]` in Cargo.toml) with
+our fork's `startup-notify` branch: the 0.14 branch plus one commit that
+gives the first window the token from the environment. To be sent
+upstream as a fix for iced#3317.

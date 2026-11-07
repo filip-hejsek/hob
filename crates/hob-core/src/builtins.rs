@@ -56,7 +56,8 @@ pub fn register(interpreter: &mut Interpreter) {
 const SHELL_OUTPUT_LIMIT: usize = 1024 * 1024;
 
 /// Runs `command` with `sh -c`, with pipes for stdio. Nothing is written to
-/// its stdin, which is closed right away. Its stdout and stderr are printed
+/// its stdin, which is closed right away. It doesn't inherit startup
+/// notification tokens. Its stdout and stderr are printed
 /// as they come, a chunk of whole lines at a time, up to
 /// [`SHELL_OUTPUT_LIMIT`]; the rest is read but dropped. Exiting with a
 /// failure is an error.
@@ -68,6 +69,9 @@ fn shell(ctx: &mut Context, command: &str) -> CommandResult {
         .arg("-c")
         .arg(command)
         .current_dir(ctx.cwd())
+        // The launcher's startup notification token is for hob's window.
+        .env_remove("XDG_ACTIVATION_TOKEN")
+        .env_remove("DESKTOP_STARTUP_ID")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
