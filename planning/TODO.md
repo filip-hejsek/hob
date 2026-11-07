@@ -97,3 +97,4 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - Completion works only at the end of the line (iced doesn't tell the app
   where the cursor is; see ICED_WISHLIST.md), and doesn't complete
   arguments: commands would need a way to say what they accept.
+- There is no way to move focus to the command prompt using only the keyboard.
