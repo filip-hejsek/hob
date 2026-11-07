@@ -1,19 +1,70 @@
-//! Drives the bridge over MCP, with the headless frontend in this process.
+//! Drives the bridge over MCP. Hob is this test program itself, started
+//! with `--hob` (the headless frontend with test commands) or
+//! `--hob-stuck` (a process that never replies nor exits).
+//!
+//! It has its own `main` (`harness = false`), so that it can act as hob.
+//! Arguments that don't start with `-` filter the tests by name.
 
-use std::io;
-use std::sync::mpsc;
+use std::ffi::OsString;
+use std::panic;
+use std::process::ExitCode;
 use std::thread;
 use std::time::Duration;
 
 use hob_core::Interpreter;
-use hob_headless::client::Client;
-use hob_mcp::Bridge;
+use hob_mcp::{Bridge, Launch, Limits};
 use kettle_ui::widget::*;
 use kettle_ui::{IslandBuilder, Outcome};
 use serde_json::{Value, json};
 
+const TESTS: &[(&str, fn())] = &[
+    ("initializes_and_lists_tools", initializes_and_lists_tools),
+    (
+        "runs_commands_and_acts_on_islands",
+        runs_commands_and_acts_on_islands,
+    ),
+    ("waits_for_commands", waits_for_commands),
+    ("reports_errors_to_the_agent", reports_errors_to_the_agent),
+    ("agent_starts_and_closes_hob", agent_starts_and_closes_hob),
+    ("exit_closes_hob", exit_closes_hob),
+    ("reports_crashes", reports_crashes),
+    ("kills_hob_that_is_stuck", kills_hob_that_is_stuck),
+    #[cfg(unix)]
+    ("notices_when_hob_is_killed", notices_when_hob_is_killed),
+];
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("--hob") => {
+            let stdin = std::io::stdin();
+            let _ = hob_headless::serve(interpreter(), stdin, std::io::stdout());
+            return ExitCode::SUCCESS;
+        }
+        Some("--hob-stuck") => loop {
+            thread::sleep(Duration::from_secs(1));
+        },
+        _ => {}
+    }
+    let filters: Vec<_> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    let mut failed = 0;
+    for (name, test) in TESTS {
+        if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
+            continue;
+        }
+        let ok = panic::catch_unwind(test).is_ok();
+        println!("test {name} ... {}", if ok { "ok" } else { "FAILED" });
+        failed += usize::from(!ok);
+    }
+    match failed {
+        0 => ExitCode::SUCCESS,
+        _ => ExitCode::FAILURE,
+    }
+}
+
 fn interpreter() -> Interpreter {
     let mut i = Interpreter::new();
+    hob_core::builtins::register(&mut i);
     i.register("echo", "Print the arguments", |ctx, args| {
         ctx.print(args.join(" "));
         Ok(())
@@ -22,6 +73,10 @@ fn interpreter() -> Interpreter {
         thread::sleep(Duration::from_millis(300));
         ctx.print("slept");
         Ok(())
+    });
+    i.register("crash", "Exit with status 3", |_, _| {
+        eprintln!("crashing on purpose");
+        std::process::exit(3);
     });
     i.register("ask", "Ask for a name", |ctx, _| {
         let mut builder = IslandBuilder::new(column([
@@ -43,15 +98,27 @@ fn interpreter() -> Interpreter {
     i
 }
 
+/// The command that starts this program as hob, in `mode` (`--hob` or
+/// `--hob-stuck`).
+fn hob_command(mode: &str) -> Vec<String> {
+    let exe = std::env::current_exe().unwrap();
+    vec![exe.to_str().unwrap().to_owned(), mode.to_owned()]
+}
+
+fn limits() -> Limits {
+    Limits {
+        call: Duration::from_millis(500),
+        grace: Duration::from_millis(500),
+    }
+}
+
+/// A bridge with a fixed command, and hob started.
 fn bridge() -> Bridge {
-    let (input_reader, input) = io::pipe().unwrap();
-    let (output, output_writer) = io::pipe().unwrap();
-    thread::spawn(move || hob_headless::serve(interpreter(), input_reader, output_writer));
-    let (sender, notifications) = mpsc::channel();
-    let client = Client::new(input, output, move |n| {
-        let _ = sender.send(n);
-    });
-    Bridge::new(client, notifications)
+    let command = hob_command("--hob").into_iter().map(OsString::from);
+    let mut bridge = Bridge::new(Launch::Command(command.collect()), limits());
+    let report = bridge.start(None).unwrap();
+    assert!(report.contains("hob started (PID "), "{report}");
+    bridge
 }
 
 /// Sends a request; returns the reply.
@@ -73,7 +140,12 @@ fn tool(bridge: &mut Bridge, name: &str, arguments: Value) -> (String, bool) {
     (text, result["isError"].as_bool().unwrap())
 }
 
-#[test]
+/// The PID in "hob started (PID 123)".
+fn pid(report: &str) -> u32 {
+    let (_, rest) = report.split_once("hob started (PID ").unwrap();
+    rest.split(')').next().unwrap().parse().unwrap()
+}
+
 fn initializes_and_lists_tools() {
     let mut bridge = bridge();
     let params = json!({"protocolVersion": "2025-06-18", "capabilities": {}});
@@ -82,19 +154,30 @@ fn initializes_and_lists_tools() {
     assert!(reply["result"]["capabilities"]["tools"].is_object());
 
     let reply = request(&mut bridge, "tools/list", json!({}));
-    let names: Vec<_> = (reply["result"]["tools"].as_array().unwrap().iter())
-        .map(|t| t["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(names, ["run", "fill", "press", "state", "wait"]);
+    let tools = reply["result"]["tools"].as_array().unwrap();
+    let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        ["run", "fill", "press", "state", "wait", "start", "close"]
+    );
+    assert_eq!(tools[5]["inputSchema"]["properties"], json!({}));
 
     // Notifications get no reply.
     let notification = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
     assert_eq!(bridge.handle_message(notification), None);
     let reply = request(&mut bridge, "nope", json!({}));
     assert_eq!(reply["error"]["code"], -32601);
+
+    // When the agent starts hob, it gives the command.
+    let mut bridge = Bridge::new(Launch::ByAgent, limits());
+    let reply = request(&mut bridge, "tools/list", json!({}));
+    let start = &reply["result"]["tools"][5];
+    assert_eq!(start["inputSchema"]["required"], json!(["command"]));
+    let reply = request(&mut bridge, "initialize", json!({}));
+    let instructions = reply["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("Hob isn't running at first"));
 }
 
-#[test]
 fn runs_commands_and_acts_on_islands() {
     let mut bridge = bridge();
     let (text, error) = tool(&mut bridge, "run", json!({"line": "echo hi"}));
@@ -120,7 +203,6 @@ fn runs_commands_and_acts_on_islands() {
     assert!(text.ends_with("[2] has finished.\n"), "{text}");
 }
 
-#[test]
 fn waits_for_commands() {
     let mut bridge = bridge();
     let (text, _) = tool(
@@ -130,6 +212,7 @@ fn waits_for_commands() {
     );
     assert!(text.contains("is still running"), "{text}");
     let (text, _) = tool(&mut bridge, "state", json!({}));
+    assert!(text.contains("hob is running (PID "), "{text}");
     assert!(text.contains("Running commands:\n  [1] slow"), "{text}");
     let arguments = json!({"block": 1, "until": "finished"});
     let (text, error) = tool(&mut bridge, "wait", arguments);
@@ -140,7 +223,6 @@ fn waits_for_commands() {
     assert!(text.contains("Nothing to wait for came"), "{text}");
 }
 
-#[test]
 fn reports_errors_to_the_agent() {
     let mut bridge = bridge();
     let (text, error) = tool(&mut bridge, "run", json!({"line": "nope"}));
@@ -155,7 +237,132 @@ fn reports_errors_to_the_agent() {
         json!({"island": 1, "fields": {"a": 1}}),
     );
     assert!(error && text.contains("must be a string"), "{text}");
+    // The command is fixed.
+    let (text, error) = tool(&mut bridge, "start", json!({"command": ["sh"]}));
+    assert!(error && text.contains("fixed command"), "{text}");
 
     let reply = request(&mut bridge, "tools/call", json!({"name": "fly"}));
     assert_eq!(reply["error"]["code"], -32602);
+}
+
+fn agent_starts_and_closes_hob() {
+    let mut bridge = Bridge::new(Launch::ByAgent, limits());
+    let (text, error) = tool(&mut bridge, "run", json!({"line": "echo hi"}));
+    assert!(error && text.contains("hob isn't running"), "{text}");
+    let (text, _) = tool(&mut bridge, "state", json!({}));
+    assert_eq!(text, "hob isn't running.\n");
+    let (text, error) = tool(&mut bridge, "wait", json!({}));
+    assert!(error && text.contains("hob isn't running"), "{text}");
+    let (text, error) = tool(&mut bridge, "start", json!({}));
+    assert!(error && text.contains("give the command"), "{text}");
+    let (text, error) = tool(&mut bridge, "start", json!({"command": ["/no/such/hob"]}));
+    assert!(
+        error && text.contains("couldn't start /no/such/hob"),
+        "{text}"
+    );
+    let (text, error) = tool(&mut bridge, "start", json!({"command": ["false"]}));
+    assert!(
+        error && text.contains("exited unexpectedly (exit status: 1)"),
+        "{text}"
+    );
+
+    let command = hob_command("--hob");
+    let (text, error) = tool(&mut bridge, "start", json!({"command": command}));
+    assert!(!error, "{text}");
+    let first = pid(&text);
+    let (text, error) = tool(&mut bridge, "start", json!({"command": command}));
+    assert!(error && text.contains("already running"), "{text}");
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "ask"}));
+    assert!(text.contains("[1] showed island #2"), "{text}");
+
+    // Closing interrupts the command waiting for its island.
+    let (text, error) = tool(&mut bridge, "close", json!({}));
+    assert!(!error, "{text}");
+    assert!(text.contains("[1] was interrupted"), "{text}");
+    let exited = format!("hob (PID {first}) exited (exit status: 0)");
+    assert!(text.contains(&exited), "{text}");
+    let (text, error) = tool(&mut bridge, "close", json!({}));
+    assert!(error && text.contains("hob isn't running"), "{text}");
+    let (text, error) = tool(&mut bridge, "fill", json!({"island": 2, "fields": {}}));
+    assert!(error && text.contains("hob isn't running"), "{text}");
+
+    // A new hob starts over.
+    let (text, _) = tool(&mut bridge, "start", json!({"command": command}));
+    assert_ne!(pid(&text), first);
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "echo again"}));
+    assert!(text.contains("[1] again"), "{text}");
+}
+
+fn exit_closes_hob() {
+    let mut bridge = bridge();
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "exit"}));
+    assert!(text.contains("[1] asked hob to exit"), "{text}");
+    assert!(text.contains("exited (exit status: 0)"), "{text}");
+    assert!(!text.contains("interrupted"), "{text}");
+    assert!(text.ends_with("[1] has finished.\n"), "{text}");
+    let (text, error) = tool(&mut bridge, "run", json!({"line": "echo"}));
+    assert!(error && text.contains("hob isn't running"), "{text}");
+    // It starts again with the fixed command.
+    let (text, error) = tool(&mut bridge, "start", json!({}));
+    assert!(!error && text.contains("hob started"), "{text}");
+}
+
+fn reports_crashes() {
+    let mut bridge = bridge();
+    let (text, _) = tool(
+        &mut bridge,
+        "run",
+        json!({"line": "slow", "timeout_seconds": 0}),
+    );
+    assert!(text.contains("still running"), "{text}");
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "crash"}));
+    assert!(text.contains("[1] was interrupted"), "{text}");
+    assert!(text.contains("[2] was interrupted"), "{text}");
+    assert!(
+        text.contains("exited unexpectedly (exit status: 3)"),
+        "{text}"
+    );
+    assert!(text.contains("\n    crashing on purpose"), "{text}");
+    assert!(text.ends_with("[2] was interrupted.\n"), "{text}");
+    let (text, _) = tool(&mut bridge, "state", json!({}));
+    assert_eq!(text, "hob isn't running.\n");
+    let (text, error) = tool(&mut bridge, "start", json!({}));
+    assert!(!error && text.contains("hob started"), "{text}");
+}
+
+fn kills_hob_that_is_stuck() {
+    let mut bridge = Bridge::new(Launch::ByAgent, limits());
+    let command = hob_command("--hob-stuck");
+    let (text, _) = tool(&mut bridge, "start", json!({"command": command}));
+    let pid = pid(&text);
+    let (text, error) = tool(&mut bridge, "run", json!({"line": "echo"}));
+    assert!(
+        error && text.contains("didn't reply within 0.5 s"),
+        "{text}"
+    );
+    let (text, error) = tool(&mut bridge, "close", json!({}));
+    assert!(!error, "{text}");
+    let killed = format!("hob (PID {pid}) didn't exit within 0.5 s, so it was killed");
+    assert!(text.contains(&killed), "{text}");
+}
+
+#[cfg(unix)]
+fn notices_when_hob_is_killed() {
+    let mut bridge = bridge();
+    let (text, _) = tool(&mut bridge, "state", json!({}));
+    let pid = text
+        .split("(PID ")
+        .nth(1)
+        .unwrap()
+        .split(')')
+        .next()
+        .unwrap();
+    let status = std::process::Command::new("kill")
+        .args(["-KILL", pid])
+        .status();
+    assert!(status.unwrap().success());
+    let (text, _) = tool(&mut bridge, "wait", json!({}));
+    assert!(text.contains("exited unexpectedly (signal: 9"), "{text}");
+    let (text, error) = tool(&mut bridge, "start", json!({}));
+    assert!(!error && text.contains("hob started"), "{text}");
 }

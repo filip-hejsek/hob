@@ -3,8 +3,9 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -69,18 +70,40 @@ impl Client {
 
     /// Calls a method, and waits for the reply. Fails if the frontend is gone.
     pub fn call(&mut self, call: &Call) -> io::Result<Result<Value, ErrorObject>> {
+        self.call_timeout(call, None)
+    }
+
+    /// Like [`call`](Client::call), but waits for the reply at most for
+    /// `timeout`; then fails with [`io::ErrorKind::TimedOut`]. A reply that
+    /// comes later is ignored.
+    pub fn call_timeout(
+        &mut self,
+        call: &Call,
+        timeout: Option<Duration>,
+    ) -> io::Result<Result<Value, ErrorObject>> {
         self.next_id += 1;
         writeln!(self.input, "{}", protocol::request(self.next_id, call))?;
         self.input.flush()?;
+        let deadline = timeout.map(|t| Instant::now() + t);
         loop {
-            let Ok((id, result)) = self.replies.recv() else {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "the frontend exited",
-                ));
+            let reply = match deadline {
+                Some(deadline) => self
+                    .replies
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .map_err(|e| e == RecvTimeoutError::Timeout),
+                None => self.replies.recv().map_err(|_| false),
             };
-            if id == self.next_id {
-                return Ok(result);
+            match reply {
+                Ok((id, result)) if id == self.next_id => return Ok(result),
+                Ok(_) => {}
+                Err(true) => {
+                    let message = "the frontend didn't reply in time";
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, message));
+                }
+                Err(false) => {
+                    let message = "the frontend exited";
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, message));
+                }
             }
         }
     }

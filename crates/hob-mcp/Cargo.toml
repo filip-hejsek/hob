@@ -17,3 +17,10 @@ kettle-ui.workspace = true
 kettle-ui-headless.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
+[[test]]
+name = "bridge"
+harness = false

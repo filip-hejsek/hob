@@ -6,19 +6,27 @@
 //! and commands finish in the meantime. All of that is collected, and every
 //! tool result starts with what happened since the last one, so the agent
 //! never misses anything. The `wait` tool waits for more.
+//!
+//! Hob runs as a child process, which the bridge starts with a command: a
+//! fixed one, or one the agent gives (see [`Launch`]). When it exits (a
+//! command asks it to, the agent closes it, or it crashes), the agent can
+//! start it again.
 
 pub mod mcp;
+mod process;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fmt::Write;
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::io;
 use std::time::{Duration, Instant};
 
 use hob_core::Level;
-use hob_headless::client::Client;
 use hob_headless::protocol::{BlockId, Call, IslandId, Notification};
 use kettle_ui::FrozenIsland;
 use serde_json::Value;
+
+use process::{Hob, HobEvent};
 
 /// After something happens, how long to wait for more before reporting, so
 /// that things that happen together are reported together.
@@ -27,10 +35,40 @@ const SETTLE: Duration = Duration::from_millis(100);
 /// The longest a report waits for things to settle.
 const MAX_SETTLE: Duration = Duration::from_millis(500);
 
+/// How hob is started.
+#[derive(Clone, Debug)]
+pub enum Launch {
+    /// With this command (the program and its arguments), whenever the agent
+    /// starts it; the agent can't give another.
+    Command(Vec<OsString>),
+    /// With the command the agent gives.
+    ByAgent,
+}
+
+/// How long the bridge waits for hob.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    /// For a reply to a call; after that, hob may be stuck.
+    pub call: Duration,
+    /// For hob to exit after its input ends; after that, it's killed.
+    pub grace: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            call: Duration::from_secs(10),
+            grace: Duration::from_secs(3),
+        }
+    }
+}
+
 /// Hob, as the agent sees it.
 pub struct Bridge {
-    client: Client,
-    notifications: Receiver<Notification>,
+    launch: Launch,
+    limits: Limits,
+    /// `None` while hob isn't running.
+    hob: Option<Hob>,
     /// Log records below this level aren't reported.
     level: Level,
     blocks: BTreeMap<BlockId, Block>,
@@ -44,6 +82,8 @@ pub struct Bridge {
 struct Block {
     line: String,
     finished: bool,
+    /// Whether hob ended while it ran.
+    interrupted: bool,
 }
 
 struct Island {
@@ -61,16 +101,29 @@ struct Event {
     count: u32,
 }
 
+/// Why hob ended.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Why {
+    /// Its output ended, without anyone asking it to exit.
+    Unexpected,
+    /// A command asked it to exit.
+    Exit(BlockId),
+    /// The agent closed it.
+    Close,
+}
+
 /// What a tool returns: text for the agent, either way.
 pub type ToolResult = Result<String, String>;
 
+const NOT_RUNNING: &str = "error: hob isn't running; start starts it";
+
 impl Bridge {
-    /// A bridge to the frontend behind `client`, which passes its
-    /// notifications to `notifications`.
-    pub fn new(client: Client, notifications: Receiver<Notification>) -> Self {
+    /// A bridge that starts hob as `launch` says. Hob isn't started yet.
+    pub fn new(launch: Launch, limits: Limits) -> Self {
         Bridge {
-            client,
-            notifications,
+            launch,
+            limits,
+            hob: None,
             level: hob_core::logger::level_from_env(),
             blocks: BTreeMap::new(),
             islands: BTreeMap::new(),
@@ -79,14 +132,70 @@ impl Bridge {
         }
     }
 
+    /// Starts hob, with `command` if it's started [by the
+    /// agent](Launch::ByAgent), otherwise with the fixed command. Fails if
+    /// it's running.
+    pub fn start(&mut self, command: Option<Vec<OsString>>) -> ToolResult {
+        self.apply_arrived();
+        let command = match (&self.launch, command) {
+            (Launch::Command(command), None) => command.clone(),
+            (Launch::Command(_), Some(_)) => {
+                let message = "error: hob-mcp starts hob with a fixed command; give none";
+                return Err(self.report_with(message));
+            }
+            (Launch::ByAgent, Some(command)) => command,
+            (Launch::ByAgent, None) => {
+                return Err(self.report_with("error: give the command to start hob with"));
+            }
+        };
+        if let Some(hob) = &self.hob {
+            let message = format!("error: hob is already running (PID {})", hob.pid);
+            return Err(self.report_with(&message));
+        }
+        let shown = (command.iter())
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let hob = Hob::spawn(&command, self.limits.grace)
+            .map_err(|e| self.report_with(&format!("error: couldn't start {shown}: {e}")))?;
+        // Block and island numbers start over.
+        self.blocks.clear();
+        self.islands.clear();
+        self.to_show.clear();
+        self.event(None, format!("hob started (PID {}): {shown}", hob.pid));
+        self.hob = Some(hob);
+        // Report it if it exits right away, e.g. because of bad arguments.
+        self.settle();
+        match self.hob {
+            Some(_) => Ok(self.report_with("")),
+            None => Err(self.report_with("")),
+        }
+    }
+
+    /// Closes hob, like closing its window: running commands are
+    /// interrupted. Kills it if it doesn't exit.
+    pub fn close(&mut self) -> ToolResult {
+        self.apply_arrived();
+        if self.hob.is_none() {
+            return Err(self.report_with("error: hob isn't running"));
+        }
+        self.end(Why::Close);
+        Ok(self.report_with(""))
+    }
+
     /// Runs a command line, and waits until it finishes or shows an island.
     pub fn run(&mut self, line: &str, timeout: Duration) -> ToolResult {
         let call = Call::Run { line: line.into() };
         let result = self.call(call).map_err(|e| self.report_with(&e))?;
         let block = (result["block"].as_u64()).ok_or_else(|| self.report_with("bad reply"))?;
         let line = line.trim().to_owned();
-        let finished = false;
-        self.blocks.insert(block, Block { line, finished });
+        let (finished, interrupted) = (false, false);
+        let block_state = Block {
+            line,
+            finished,
+            interrupted,
+        };
+        self.blocks.insert(block, block_state);
         self.wait_for_input(block, timeout)
     }
 
@@ -97,6 +206,10 @@ impl Bridge {
         island: IslandId,
         fields: &serde_json::Map<String, Value>,
     ) -> ToolResult {
+        self.apply_arrived();
+        if self.hob.is_none() {
+            return Err(self.report_with(NOT_RUNNING));
+        }
         for (field, value) in fields {
             let call = match value {
                 Value::String(text) => Call::TypeText {
@@ -142,6 +255,11 @@ impl Bridge {
         self.settle();
         let mut report = self.events_report();
         self.to_show.clear();
+        let Some(hob) = &self.hob else {
+            report += "hob isn't running.\n";
+            return Ok(report);
+        };
+        let _ = writeln!(report, "hob is running (PID {}).", hob.pid);
         let running: Vec<_> = (self.blocks.iter()).filter(|(_, b)| !b.finished).collect();
         if running.is_empty() {
             report += "No commands are running.\n";
@@ -171,6 +289,10 @@ impl Bridge {
         block: Option<BlockId>,
         finished: bool,
     ) -> ToolResult {
+        self.apply_arrived();
+        if self.hob.is_none() && self.events.is_empty() {
+            return Err(self.report_with("error: hob isn't running"));
+        }
         if let Some(block) = block
             && !self.blocks.contains_key(&block)
         {
@@ -192,11 +314,80 @@ impl Bridge {
 
     /// Calls the frontend. The error says what went wrong, for the agent.
     fn call(&mut self, call: Call) -> Result<Value, String> {
-        match self.client.call(&call) {
+        let Some(hob) = &mut self.hob else {
+            return Err(NOT_RUNNING.into());
+        };
+        match hob.call(&call, self.limits.call) {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(format!("error: {}", error.message)),
-            Err(e) => Err(format!("error: hob's headless frontend is gone: {e}")),
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => Err(format!(
+                "error: hob didn't reply within {}; it may be stuck (close ends it)",
+                seconds(self.limits.call)
+            )),
+            Err(_) => {
+                self.end(Why::Unexpected);
+                Err("error: hob has exited".into())
+            }
         }
+    }
+
+    /// Receives an event from hob, waiting at most for `timeout`. `None` if
+    /// none came, or hob isn't running.
+    fn receive(&self, timeout: Duration) -> Option<HobEvent> {
+        self.hob.as_ref()?.events.recv_timeout(timeout).ok()
+    }
+
+    /// Stops hob, applies what it sent before it ended, and reports how it
+    /// ended.
+    fn end(&mut self, why: Why) {
+        let Some(mut hob) = self.hob.take() else {
+            return;
+        };
+        let ended = hob.stop(self.limits.grace);
+        for event in hob.remaining_events() {
+            self.apply(event);
+        }
+        for (&id, block) in &mut self.blocks {
+            if !block.finished {
+                block.finished = true;
+                block.interrupted = why != Why::Exit(id);
+            }
+        }
+        let interrupted: Vec<_> = (self.blocks.iter())
+            .filter(|(_, b)| b.interrupted)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in interrupted {
+            self.event(Some(id), format!("[{id}] was interrupted"));
+        }
+        for island in self.islands.values_mut() {
+            island.live = false;
+        }
+
+        let pid = hob.pid;
+        let status = match &ended.status {
+            Ok(status) => status.to_string(),
+            Err(e) => format!("couldn't get its exit status: {e}"),
+        };
+        let mut text = match (why, ended.killed) {
+            (Why::Unexpected, false) => format!("hob (PID {pid}) exited unexpectedly ({status})"),
+            (Why::Unexpected, true) => {
+                format!("hob (PID {pid}) closed its output, so it was killed ({status})")
+            }
+            (_, false) => format!("hob (PID {pid}) exited ({status})"),
+            (_, true) => format!(
+                "hob (PID {pid}) didn't exit within {}, so it was killed ({status})",
+                seconds(self.limits.grace)
+            ),
+        };
+        let failed = !ended.status.as_ref().is_ok_and(|s| s.success());
+        if (failed || why == Why::Unexpected) && !ended.stderr.is_empty() {
+            text += "; the last lines of its stderr:";
+            for line in &ended.stderr {
+                let _ = write!(text, "\n    {line}");
+            }
+        }
+        self.event(None, text);
     }
 
     /// Waits until the command of `block` finishes or has a live island.
@@ -204,7 +395,9 @@ impl Bridge {
         let done = self.wait_until(timeout, |b| {
             b.finished(block) || b.live_island(block).is_some()
         });
-        let status = if self.finished(block) {
+        let status = if self.blocks.get(&block).is_some_and(|b| b.interrupted) {
+            format!("[{block}] was interrupted.")
+        } else if self.finished(block) {
             format!("[{block}] has finished.")
         } else if let Some(island) = self.live_island(block) {
             format!("[{block}] is waiting for island #{island}.")
@@ -240,9 +433,9 @@ impl Bridge {
                 break true;
             }
             let left = deadline.saturating_duration_since(Instant::now());
-            match self.notifications.recv_timeout(left) {
-                Ok(n) => self.apply(n),
-                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => break false,
+            match self.receive(left) {
+                Some(event) => self.apply(event),
+                None => break false,
             }
         };
         self.settle();
@@ -251,8 +444,8 @@ impl Bridge {
 
     /// Applies the notifications that have arrived, without waiting.
     fn apply_arrived(&mut self) {
-        while let Ok(n) = self.notifications.try_recv() {
-            self.apply(n);
+        while let Some(event) = self.receive(Duration::ZERO) {
+            self.apply(event);
         }
     }
 
@@ -262,9 +455,9 @@ impl Bridge {
         let deadline = Instant::now() + MAX_SETTLE;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
-            match self.notifications.recv_timeout(SETTLE.min(left)) {
-                Ok(n) => self.apply(n),
-                Err(_) => return,
+            match self.receive(SETTLE.min(left)) {
+                Some(event) => self.apply(event),
+                None => return,
             }
         }
     }
@@ -281,7 +474,14 @@ impl Bridge {
         self.events.push(Event { block, text, count });
     }
 
-    fn apply(&mut self, notification: Notification) {
+    fn apply(&mut self, event: HobEvent) {
+        match event {
+            HobEvent::Notification(n) => self.apply_notification(n),
+            HobEvent::OutputEnded => self.end(Why::Unexpected),
+        }
+    }
+
+    fn apply_notification(&mut self, notification: Notification) {
         match notification {
             Notification::Printed { block, text } => {
                 for line in text.lines() {
@@ -324,9 +524,8 @@ impl Bridge {
                 self.event(Some(block), format!("[{block}] cleared the scrollback"));
             }
             Notification::ExitRequested { block } => {
-                // The agent can't end the MCP server.
-                let text = format!("[{block}] asked to exit, which does nothing here");
-                self.event(Some(block), text);
+                self.event(Some(block), format!("[{block}] asked hob to exit"));
+                self.end(Why::Exit(block));
             }
             Notification::Finished { block } => {
                 if let Some(b) = self.blocks.get_mut(&block) {

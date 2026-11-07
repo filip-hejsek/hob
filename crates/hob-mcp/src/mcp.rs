@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
-use crate::Bridge;
+use crate::{Bridge, Launch};
 
 /// The protocol versions this server knows, newest first. It speaks the
 /// client's if it's one of them, otherwise the newest.
@@ -42,6 +42,21 @@ Commands keep running between tool calls. Every tool result starts with what \
 happened since the last one, and shows islands that are new or changed. Use \
 wait to wait for more, and state for an overview.";
 
+/// Added to [`INSTRUCTIONS`] when the agent starts hob.
+const BY_AGENT: &str = "
+
+Hob isn't running at first: start it with start, giving the command that \
+runs its headless frontend. It stops when a command exits it (e.g. exit), \
+when you close it, or if it crashes or is killed; results report that, with \
+its exit status. Then start it again; block and island numbers start over.";
+
+/// Added to [`INSTRUCTIONS`] when hob-mcp starts hob with a fixed command.
+const FIXED: &str = "
+
+Hob stops when a command exits it (e.g. exit), when you close it, or if it \
+crashes; results report that. start starts it again; block and island \
+numbers start over.";
+
 /// Serves MCP over `input` and `output`, until `input` ends.
 pub fn serve(bridge: &mut Bridge, input: impl Read, mut output: impl Write) -> io::Result<()> {
     for line in BufReader::new(input).lines() {
@@ -71,9 +86,9 @@ impl Bridge {
         };
         let params = message.get("params").cloned().unwrap_or(json!({}));
         let result = match method.as_str().unwrap_or("") {
-            "initialize" => Ok(initialize(&params)),
+            "initialize" => Ok(initialize(&params, &self.launch)),
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": tools() })),
+            "tools/list" => Ok(json!({ "tools": tools(&self.launch) })),
             "tools/call" => self.call_tool(&params),
             method => Err((-32601, format!("no method {method:?}"))),
         };
@@ -96,6 +111,10 @@ impl Bridge {
                 let finished = matches!(a.until.as_deref(), Some("finished"));
                 self.wait(timeout(a.timeout), a.block, finished)
             }),
+            "start" => args_for(args).and_then(|a: StartArgs| {
+                self.start(a.command.map(|c| c.into_iter().map(Into::into).collect()))
+            }),
+            "close" => args_for(args).and_then(|NoArgs {}| self.close()),
             name => return Err((-32602, format!("no tool {name:?}"))),
         };
         let (text, is_error) = match result {
@@ -113,7 +132,7 @@ fn error(id: &Value, code: i64, message: &str) -> String {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).to_string()
 }
 
-fn initialize(params: &Value) -> Value {
+fn initialize(params: &Value, launch: &Launch) -> Value {
     let requested = params["protocolVersion"].as_str().unwrap_or("");
     let version = match VERSIONS.contains(&requested) {
         true => requested,
@@ -123,7 +142,10 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": {"tools": {}},
         "serverInfo": {"name": "hob", "version": env!("CARGO_PKG_VERSION")},
-        "instructions": INSTRUCTIONS,
+        "instructions": match launch {
+            Launch::Command(_) => format!("{INSTRUCTIONS}{FIXED}"),
+            Launch::ByAgent => format!("{INSTRUCTIONS}{BY_AGENT}"),
+        },
     })
 }
 
@@ -172,10 +194,41 @@ struct WaitArgs {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct StartArgs {
+    command: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct NoArgs {}
 
 /// The tool definitions for `tools/list`.
-fn tools() -> Value {
+fn tools(launch: &Launch) -> Value {
+    let start = match launch {
+        Launch::Command(_) => json!({
+            "name": "start",
+            "description": "Start hob again, after it has exited. Reports its PID.",
+            "inputSchema": {"type": "object", "properties": {}},
+        }),
+        Launch::ByAgent => json!({
+            "name": "start",
+            "description": "Start hob with a command, which must run hob's headless \
+                frontend, e.g. [\"target/debug/hob\", \"--headless\"] (build it first). \
+                Reports its PID, and what it did. Only one hob runs at a time.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "description": "The program and its arguments; no shell is used.",
+                    },
+                },
+                "required": ["command"],
+            },
+        }),
+    };
     let timeout = |what: &str| {
         json!({
             "type": "number",
@@ -255,6 +308,13 @@ fn tools() -> Value {
                     "timeout_seconds": timeout("it"),
                 },
             },
+        },
+        start,
+        {
+            "name": "close",
+            "description": "Close hob, like closing its window: running commands are \
+                interrupted, without asking. If it doesn't exit within 3 s, it's killed.",
+            "inputSchema": {"type": "object", "properties": {}},
         },
     ])
 }
