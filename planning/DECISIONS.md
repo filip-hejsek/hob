@@ -311,6 +311,7 @@ Works like a terminal: a scrollback with the prompt below it.
   them; "Yes" is a plain red button, so Enter can't confirm. It learns of
   them through `Context::running_commands`, a request both frontends
   answer. Without other commands, it exits at once, without asking.
+  `jobs` prints the same list, one command line per line.
 - Key bindings are a table (the `keys` module) from a key with exact
   modifiers to a named action, kept apart from what the actions do, so it
   can become configurable. Letters are compared in lowercase. History and

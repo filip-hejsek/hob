@@ -5,6 +5,7 @@
 //!   them.
 //! - `help [COMMAND]`: lists all commands with their descriptions, or shows
 //!   the description of one.
+//! - `jobs`: lists the other commands still running, oldest first.
 //! - `messages [LEVEL]`: lists the log records the frontend has, oldest
 //!   first, from `LEVEL` up (`info` by default, so `messages debug` lists
 //!   all).
@@ -22,6 +23,7 @@ pub fn register(interpreter: &mut Interpreter) {
     interpreter.register("clear", "Clear the scrollback", clear);
     interpreter.register("exit", "Exit hob", exit);
     interpreter.register("help", "List the commands, or describe one", help);
+    interpreter.register("jobs", "List the other running commands", jobs);
     interpreter.register(
         "messages",
         "List log messages, from LEVEL up (info by default)",
@@ -74,6 +76,18 @@ fn help(ctx: &mut Context, args: &[String]) -> CommandResult {
             None => return Err(format!("no command {name:?}").into()),
         },
         _ => return Err("usage: help [COMMAND]".into()),
+    }
+    Ok(())
+}
+
+fn jobs(ctx: &mut Context, args: &[String]) -> CommandResult {
+    if !args.is_empty() {
+        return Err("usage: jobs".into());
+    }
+    let running = ctx.running_commands()?;
+    match running.is_empty() {
+        true => ctx.print("No other commands are running."),
+        false => ctx.print(running.join("\n")),
     }
     Ok(())
 }
@@ -226,6 +240,7 @@ mod tests {
             ["clear — Clear the scrollback\n\
               exit — Exit hob\n\
               help — List the commands, or describe one\n\
+              jobs — List the other running commands\n\
               messages — List log messages, from LEVEL up (info by default)"]
         );
         assert_eq!(
@@ -245,6 +260,17 @@ mod tests {
     fn exit_asks_to_exit() {
         assert_eq!(run("exit", vec![]), ["<exit>"]);
         assert_eq!(run("exit now", vec![]), ["error: usage: exit"]);
+    }
+
+    #[test]
+    fn jobs_lists_running_commands() {
+        let running = vec!["count 9".to_owned(), "confirm".to_owned()];
+        assert_eq!(
+            run_with("jobs", vec![], running, None),
+            ["count 9\nconfirm"]
+        );
+        assert_eq!(run("jobs", vec![]), ["No other commands are running."]);
+        assert_eq!(run("jobs x", vec![]), ["error: usage: jobs"]);
     }
 
     #[test]
