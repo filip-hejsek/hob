@@ -115,8 +115,8 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// The value of a piece of named state. Serialized as a plain string,
-/// number or list. JSON has no NaN or infinity: they're saved as `null`, and
-/// `null` is restored as NaN.
+/// number, list or bool. JSON has no NaN or infinity: they're saved as
+/// `null`, and `null` is restored as NaN.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Value {
@@ -126,6 +126,8 @@ pub enum Value {
     Number(f64),
     /// Lines, e.g. for a [`list`](widget::list).
     List(Vec<String>),
+    /// A flag, e.g. for showing or hiding widgets (planned).
+    Bool(bool),
 }
 
 impl<'de> Deserialize<'de> for Value {
@@ -137,11 +139,13 @@ impl<'de> Deserialize<'de> for Value {
             /// `None` for `null`, which is how non-finite numbers are saved.
             Number(Option<f64>),
             List(Vec<String>),
+            Bool(bool),
         }
         Ok(match Repr::deserialize(deserializer)? {
             Repr::Text(s) => Value::Text(s),
             Repr::Number(n) => Value::Number(n.unwrap_or(f64::NAN)),
             Repr::List(items) => Value::List(items),
+            Repr::Bool(b) => Value::Bool(b),
         })
     }
 }
@@ -152,6 +156,7 @@ impl fmt::Display for Value {
             Value::Text(s) => f.write_str(s),
             Value::Number(n) => write!(f, "{n}"),
             Value::List(items) => f.write_str(&items.join(", ")),
+            Value::Bool(b) => write!(f, "{b}"),
         }
     }
 }
@@ -177,6 +182,12 @@ impl From<f64> for Value {
 impl From<Vec<String>> for Value {
     fn from(items: Vec<String>) -> Self {
         Value::List(items)
+    }
+}
+
+impl From<bool> for Value {
+    fn from(b: bool) -> Self {
+        Value::Bool(b)
     }
 }
 

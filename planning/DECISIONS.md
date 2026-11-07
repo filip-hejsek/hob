@@ -45,6 +45,8 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   plain JSON (strings, numbers, lists, bools); maps are ordered, so output is
   stable. Deserializing checks the field values against the tree. JSON has
   no NaN or infinity: they're saved as `null`, which is restored as NaN.
+- `Value` includes bools (`Value::Bool`), saved as JSON booleans and shown
+  as `true`/`false`; for the planned `when` (see TODO.md).
 
 ## kettle-ui-iced
 

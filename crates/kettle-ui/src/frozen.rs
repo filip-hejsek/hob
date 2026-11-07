@@ -131,6 +131,7 @@ mod tests {
         b.derive("hi", |i| format!("Hi, {}!", i.text("name")).into());
         b.set_state("items", vec!["a".to_owned(), "b".to_owned()]);
         b.set_state("p", 0.5);
+        b.set_state("flag", true);
         b.freeze().unwrap()
     }
 
@@ -143,6 +144,7 @@ mod tests {
         assert!(back.fields().checked("sub"));
         assert_eq!(back.state("hi"), Some(&"Hi, Ada!".into()));
         assert_eq!(back.state("p"), Some(&0.5.into()));
+        assert_eq!(back.state("flag"), Some(&Value::Bool(true)));
         assert_eq!(json, serde_json::to_string(&back).unwrap());
     }
 
@@ -151,6 +153,7 @@ mod tests {
         let json = serde_json::to_value(frozen()).unwrap();
         assert_eq!(json["fields"], json!({"name": "Ada", "sub": true}));
         assert_eq!(json["state"]["items"], json!(["a", "b"]));
+        assert_eq!(json["state"]["flag"], json!(true));
         assert_eq!(
             json["root"]["column"][0],
             json!({"text_field": {"id": "name", "placeholder": "Name"}})
@@ -167,6 +170,17 @@ mod tests {
         for name in ["p", "q"] {
             assert!(matches!(back.state(name), Some(Value::Number(n)) if n.is_nan()));
         }
+    }
+
+    #[test]
+    fn values_deserialize_from_plain_json() {
+        let value = |v| serde_json::from_value::<Value>(v).unwrap();
+        assert_eq!(value(json!("hi")), Value::from("hi"));
+        assert_eq!(value(json!(2)), Value::Number(2.0));
+        assert_eq!(value(json!(["a"])), Value::List(vec!["a".into()]));
+        assert_eq!(value(json!(false)), Value::Bool(false));
+        assert!(matches!(value(json!(null)), Value::Number(n) if n.is_nan()));
+        assert_eq!(Value::Bool(true).to_string(), "true");
     }
 
     #[test]
