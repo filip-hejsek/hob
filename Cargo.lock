@@ -1291,6 +1291,7 @@ dependencies = [
  "dirs",
  "hob-core",
  "hob-demo",
+ "hob-fs",
  "hob-gui",
  "hob-headless",
  "iced",
@@ -1328,6 +1329,15 @@ dependencies = [
  "kettle-ui",
  "kettle-ui-demo",
  "kettle-ui-headless",
+]
+
+[[package]]
+name = "hob-fs"
+version = "0.1.0"
+dependencies = [
+ "futures-executor",
+ "hob-core",
+ "tempfile",
 ]
 
 [[package]]

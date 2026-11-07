@@ -13,6 +13,7 @@ fn main() -> ExitCode {
     let mut interpreter = Interpreter::new();
     hob_core::builtins::register(&mut interpreter);
     hob_demo::register(&mut interpreter);
+    hob_fs::register(&mut interpreter);
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.as_slice() {
         [] => {

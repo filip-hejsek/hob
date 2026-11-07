@@ -14,6 +14,11 @@
 //! frontend to exit, and [`Context::running_commands`] lists the other
 //! commands still running.
 //!
+//! The interpreter has a working directory, simulated: the process's own
+//! isn't changed. A command gets it with [`Context::cwd`], resolves paths
+//! against it with [`Context::resolve`], and changes it with
+//! [`Context::set_cwd`].
+//!
 //! [`builtins`] has commands that work with any frontend, such as a log viewer.
 //!
 //! A frontend (such as `hob-gui`) carries out these [`Request`]s. For its
@@ -42,8 +47,9 @@ mod session;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, mpsc as std_mpsc};
+use std::sync::{Arc, Mutex, PoisonError, mpsc as std_mpsc};
 use std::task::{Context as TaskContext, Poll};
 use std::thread;
 
@@ -71,16 +77,45 @@ struct Command {
 /// [`Context::commands`].
 type Commands = Arc<BTreeMap<String, Command>>;
 
+/// The interpreter's working directory, shared with running commands so
+/// that they can change it.
+type Cwd = Arc<Mutex<PathBuf>>;
+
 /// Runs command lines by looking up registered commands.
-#[derive(Default)]
 pub struct Interpreter {
     commands: Commands,
+    cwd: Cwd,
+}
+
+impl Default for Interpreter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Interpreter {
-    /// An interpreter with no commands.
+    /// An interpreter with no commands. Its working directory is the
+    /// process's (or `/`, if that can't be found).
     pub fn new() -> Self {
-        Self::default()
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        Self {
+            commands: Commands::default(),
+            cwd: Arc::new(Mutex::new(cwd)),
+        }
+    }
+
+    /// The working directory, which commands started from now on get.
+    pub fn cwd(&self) -> PathBuf {
+        lock(&self.cwd).clone()
+    }
+
+    /// Changes the working directory, for commands started from now on.
+    ///
+    /// # Panics
+    ///
+    /// If the path is relative.
+    pub fn set_cwd(&self, path: impl Into<PathBuf>) {
+        *lock(&self.cwd) = absolute(path.into());
     }
 
     /// Registers a command. It gets the words after its name as arguments.
@@ -167,6 +202,8 @@ impl Interpreter {
         let mut ctx = Context {
             name: name.clone(),
             commands: self.commands.clone(),
+            cwd: self.cwd(),
+            shared_cwd: self.cwd.clone(),
             sender,
         };
         thread::Builder::new()
@@ -186,6 +223,21 @@ impl Interpreter {
             .map_err(Error::Spawn)?;
         Ok(Requests(receiver))
     }
+}
+
+/// Locks the working directory. Nothing can panic while it's locked, but
+/// a poisoned lock would still hold a valid path.
+fn lock(cwd: &Cwd) -> std::sync::MutexGuard<'_, PathBuf> {
+    cwd.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Checks that a new working directory is absolute.
+fn absolute(path: PathBuf) -> PathBuf {
+    assert!(
+        path.is_absolute(),
+        "the working directory must be absolute: {path:?}"
+    );
+    path
 }
 
 /// The message of a panic, if it has one (`panic!` with a message does).
@@ -253,6 +305,10 @@ pub struct Context {
     /// The command's name, as the target of its log records.
     name: String,
     commands: Commands,
+    /// The command's working directory.
+    cwd: PathBuf,
+    /// The interpreter's working directory.
+    shared_cwd: Cwd,
     sender: mpsc::UnboundedSender<Request>,
 }
 
@@ -261,6 +317,42 @@ impl Context {
     /// descriptions.
     pub fn commands(&self) -> impl Iterator<Item = (&str, &str)> {
         (self.commands.iter()).map(|(name, command)| (name.as_str(), command.description.as_str()))
+    }
+
+    /// The working directory: the interpreter's when the command started,
+    /// unless the command changed it.
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    /// Changes the working directory, like `cd`: for this command, and for
+    /// commands started from now on. Commands already running keep theirs.
+    /// The path isn't checked or normalized.
+    ///
+    /// # Panics
+    ///
+    /// If the path is relative; [`resolve`](Context::resolve) it first.
+    pub fn set_cwd(&mut self, path: impl Into<PathBuf>) {
+        self.cwd = absolute(path.into());
+        *lock(&self.shared_cwd) = self.cwd.clone();
+    }
+
+    /// Turns a path given by the user into one the command can use: relative
+    /// to the working directory, and with a leading `~` meaning the home
+    /// directory (if it's known), as in a shell. It isn't normalized, so
+    /// `..` is left for the OS to follow.
+    pub fn resolve(&self, path: impl AsRef<Path>) -> PathBuf {
+        let path = path.as_ref();
+        if let Ok(rest) = path.strip_prefix("~")
+            && let Some(home) = std::env::home_dir()
+        {
+            // Joining an empty path would add a trailing slash.
+            return match rest.as_os_str().is_empty() {
+                true => home,
+                false => home.join(rest),
+            };
+        }
+        self.cwd.join(path)
     }
 
     /// Shows a message to the user.
@@ -641,6 +733,73 @@ mod tests {
     fn completing_nothing_lists_all_commands() {
         let c = interpreter().complete("");
         assert_eq!(c, completion("", &["ask", "echo", "fail", "panic"]));
+    }
+
+    #[test]
+    fn commands_share_the_working_directory() {
+        let mut i = Interpreter::new();
+        i.set_cwd("/start");
+        i.register("cd", "Test", |ctx, args| {
+            let path = ctx.resolve(&args[0]);
+            ctx.set_cwd(path);
+            ctx.print(ctx.cwd().display().to_string());
+            Ok(())
+        });
+        i.register("pwd", "Test", |ctx, _| {
+            ctx.print(ctx.cwd().display().to_string());
+            Ok(())
+        });
+        let mut requests = i.run("cd sub").unwrap();
+        assert_eq!(printed(&mut requests), "/start/sub");
+        assert!(next(&mut requests).is_none());
+        assert_eq!(i.cwd(), Path::new("/start/sub"));
+        let mut requests = i.run("pwd").unwrap();
+        assert_eq!(printed(&mut requests), "/start/sub");
+    }
+
+    #[test]
+    fn running_commands_keep_their_working_directory() {
+        let mut i = Interpreter::new();
+        i.set_cwd("/old");
+        i.register("wait", "Test", |ctx, _| {
+            let _ = ctx.show(IslandBuilder::new(column([])));
+            ctx.print(ctx.cwd().display().to_string());
+            Ok(())
+        });
+        let mut requests = i.run("wait").unwrap();
+        let Some(Request::Show(show)) = next(&mut requests) else {
+            panic!("expected Show");
+        };
+        i.set_cwd("/new");
+        drop(show);
+        assert_eq!(printed(&mut requests), "/old");
+    }
+
+    #[test]
+    fn paths_are_resolved_against_the_working_directory() {
+        let mut i = Interpreter::new();
+        i.set_cwd("/work");
+        i.register("resolve", "Test", |ctx, args| {
+            for arg in args {
+                ctx.print(ctx.resolve(arg).display().to_string());
+            }
+            Ok(())
+        });
+        let mut requests = i.run("resolve a ../b /c ~x").unwrap();
+        for expected in ["/work/a", "/work/../b", "/c", "/work/~x"] {
+            assert_eq!(printed(&mut requests), expected);
+        }
+        if let Some(home) = std::env::home_dir() {
+            let mut requests = i.run("resolve ~ ~/d").unwrap();
+            assert_eq!(printed(&mut requests), home.display().to_string());
+            assert_eq!(printed(&mut requests), home.join("d").display().to_string());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "must be absolute")]
+    fn the_working_directory_must_be_absolute() {
+        Interpreter::new().set_cwd("relative");
     }
 
     #[test]

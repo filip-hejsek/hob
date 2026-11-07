@@ -189,8 +189,37 @@ and renders the island as an indented text outline.
   "Print the arguments". Bare `help` lists all commands with their
   descriptions; `help COMMAND` shows one. Commands see the registered
   commands through `ctx.commands()`.
+- The interpreter has a working directory, simulated: the process's own
+  is never changed, since commands run concurrently in one process. It
+  starts as the process's. Each command gets a snapshot when it starts
+  (`ctx.cwd()`); `ctx.set_cwd` changes it for the command and for commands
+  started later, but not for those already running, like a shell's
+  background jobs. It lives in hob-core, not hob-fs, because any command
+  that takes a path needs it. `ctx.resolve(path)` makes a path absolute,
+  expanding a leading `~` to the home directory (there's no other shell
+  expansion yet). It doesn't normalize, so `..` in a path is followed by
+  the OS, as in a shell.
 - The prompt's placeholder is a parameter of `hob_gui::run`; `hob` passes a
   hint to use `help`, since only it knows that `help` is registered.
+
+## Filesystem commands (hob-fs)
+
+`pwd`, `cd`, `ls` and `cat`, behaving like their Unix namesakes where
+there's no reason to differ. Options are parsed like `getopt` (flags before
+operands, `--` ends them); unknown ones are errors.
+
+- `cd` resolves `..` lexically, like bash's default (`cd -L`), so
+  `cd link/..` comes back. It checks that the target is a directory. No
+  argument means the home directory.
+- `ls` prints one name per line, sorted, with `/` after directories (as
+  `ls -F` does; there are no colours), and hides dotfiles unless `-a`.
+  With several paths, each directory gets a `PATH:` header. A path that
+  can't be listed is logged as an error and the others are still listed.
+- `cat` prints each file as one message, without its final line break.
+  Files with a NUL byte are refused as not text, and files over 1 MiB as
+  too big: the scrollback isn't made for that, and it's saved with the
+  session. Invalid UTF-8 is replaced.
+- I/O errors are shown as `PATH: message`, without Rust's `(os error N)`.
 
 ## Logging
 

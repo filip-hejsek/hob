@@ -21,6 +21,7 @@ dbg_macro = "warn"
 [workspace.dependencies]
 hob-core = { path = "crates/hob-core" }
 hob-demo = { path = "crates/hob-demo" }
+hob-fs = { path = "crates/hob-fs" }
 hob-gui = { path = "crates/hob-gui" }
 hob-headless = { path = "crates/hob-headless" }
 hob-mcp = { path = "crates/hob-mcp" }
@@ -39,4 +40,5 @@ log = "0.4"
 png = "0.18"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+tempfile = "3"
 

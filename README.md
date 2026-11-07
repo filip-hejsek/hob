@@ -25,6 +25,7 @@ The project is split into these parts:
   renders it with iced, and **kettle-ui-headless** drives it without a GUI,
   for tests and (later) agents.
 - **hob-demo** — demo commands.
+- **hob-fs** — filesystem commands: `pwd`, `cd`, `ls`, `cat`.
 - **hob** — the application: registers the commands and starts the shell
   (or, with `--headless`, the headless frontend).
 

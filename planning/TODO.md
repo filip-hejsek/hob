@@ -79,6 +79,19 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   also drive argument completion?) and what `help COMMAND` shows. For now it
   shows the one-line description.
 
+- The working directory isn't saved with the session, and isn't shown
+  anywhere but by `pwd`. The prompt, or each block's command line, could
+  show it.
+
+## Filesystem commands (hob-fs)
+
+- More commands: `mkdir`, `touch`, `rm`, `cp`, `mv` (`rm` could ask to
+  confirm, like `exit`), maybe `cd -`.
+- `ls -l` (sizes, times, permissions), possibly as an island with a table
+  rather than text.
+- Path completion, once commands can say what arguments they take.
+- `cat` could show big files in parts, or a binary file as hex.
+
 ## Logging
 
 - `log` records from a command's thread could go into its block.
