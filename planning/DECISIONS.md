@@ -346,8 +346,10 @@ operands, `--` ends them); unknown ones are errors.
 - Updates come with tool results, not as MCP notifications (which clients
   mostly ignore): everything that happens is collected, and every result
   starts with what happened since the last one. Repeated events are counted
-  ("changed (3 times)"), and things that happen together are reported
-  together (up to 0.5 s of settling).
+  ("changed (3 times)"), also when other commands' events came between
+  (an event is counted with the last one of its command, so each command's
+  order is kept), and things that happen together are reported together
+  (up to 0.5 s of settling).
 - Islands are shown as kettle-ui-headless's text outline, with the island
   number to act on; a printed one once. A live island is shown in full when
   new, and after a change only in a result about its command (`run`,

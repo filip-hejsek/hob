@@ -525,9 +525,10 @@ impl Bridge {
         }
     }
 
+    /// Adds an event, or counts it if it repeats the last one of its block
+    /// (other blocks' events may come between).
     fn event(&mut self, block: Option<BlockId>, text: String) {
-        if let Some(last) = self.events.last_mut()
-            && last.block == block
+        if let Some(last) = (self.events.iter_mut().rev()).find(|e| e.block == block)
             && last.text == text
         {
             last.count += 1;

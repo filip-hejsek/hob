@@ -93,6 +93,13 @@ fn interpreter() -> Interpreter {
             Ok(())
         },
     );
+    i.register("ticks", "Print 3 ticks, slowly", |ctx, _| {
+        for i in 1..=3 {
+            thread::sleep(Duration::from_millis(200));
+            ctx.print(format!("tick {i}"));
+        }
+        Ok(())
+    });
     i.register("crash", "Exit with status 3", |_, _| {
         eprintln!("crashing on purpose");
         std::process::exit(3);
@@ -257,14 +264,18 @@ fn shows_changed_islands() {
     let mut bridge = bridge();
     let (text, _) = tool(&mut bridge, "run", json!({"line": "progress"}));
     assert!(text.contains("Island #2 of [1], live:"), "{text}");
-    // It changes while nothing reports, so the next result has it all.
-    thread::sleep(Duration::from_millis(1600));
-    let (text, _) = tool(&mut bridge, "run", json!({"line": "echo hi"}));
-    assert!(text.contains("[1] island #2 changed"), "{text}");
+    // It changes while [3] prints; the changes are listed once.
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "ticks"}));
+    assert!(
+        text.contains("[3] tick 1\n  [3] tick 2\n  [3] tick 3"),
+        "{text}"
+    );
+    assert_eq!(text.matches("[1] island #2 changed").count(), 1, "{text}");
     assert!(!text.contains("Island #2"), "{text}");
+    thread::sleep(Duration::from_millis(1600));
     // Still to be shown, now by a result about [1].
     let (text, _) = tool(&mut bridge, "fill", json!({"island": 2, "fields": {}}));
-    assert!(text.starts_with("Island #2 of [1], live:"), "{text}");
+    assert!(text.contains("Island #2 of [1], live:"), "{text}");
     assert!(text.contains("progress 100%"), "{text}");
 }
 
