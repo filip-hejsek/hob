@@ -183,6 +183,12 @@ Works like a terminal: a scrollback with the prompt below it.
   rest of the session still loads.
 - Commands still running when the session was last saved are marked as
   interrupted after a restore.
+- `clear` (a builtin; commands call `ctx.clear()`) clears the scrollback,
+  including its own block, but keeps the blocks of other commands still
+  running, so their live islands aren't cancelled. Log records of cleared
+  items are kept in memory for `messages`. In hob-headless, it's a
+  `cleared` notification, since the client owns the scrollback: hob-cli
+  clears the terminal, hob-mcp reports it.
 - The prompt has history (Up/Down; the line being typed is kept as a draft)
   and Tab completion of command names: unambiguous part completed, the
   candidates listed below the prompt if there are several. Both live in

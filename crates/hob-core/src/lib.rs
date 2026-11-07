@@ -10,6 +10,7 @@
 //! [`warn`](Context::warn), [`info`](Context::info) and
 //! [`debug`](Context::debug) log messages ([`LogRecord`]s), and
 //! [`Context::log_records`] reads back all records the frontend has.
+//! [`Context::clear`] clears the scrollback.
 //!
 //! [`builtins`] has commands that work with any frontend, such as a log viewer.
 //!
@@ -302,6 +303,15 @@ impl Context {
         receiver.recv().map_err(|_| Closed)
     }
 
+    /// Clears the scrollback, like `clear` in a terminal. Blocks of other
+    /// commands that are still running are kept, and so are log records, for
+    /// [`log_records`](Context::log_records). This command's own block is
+    /// cleared too, so it should be the last thing the command does: the
+    /// frontend may drop what it shows afterwards.
+    pub fn clear(&self) {
+        let _ = self.sender.unbounded_send(Request::Clear);
+    }
+
     /// Shows a frozen island, e.g. to present a result. Create it with
     /// [`IslandBuilder::freeze`].
     pub fn print_island(&self, island: FrozenIsland) {
@@ -373,6 +383,8 @@ pub enum Request {
     Show(Show),
     /// Reply with all log records; see [`Context::log_records`].
     LogRecords(RecordsReply),
+    /// Clear the scrollback; see [`Context::clear`].
+    Clear,
 }
 
 /// Sends log records back to the command; see [`Context::log_records`].

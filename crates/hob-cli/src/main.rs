@@ -82,6 +82,21 @@ impl Output {
         self.changed.notify_all();
     }
 
+    /// Clears the terminal, with its scrollback, for the `clear` command of
+    /// `block`. If stdout isn't a terminal, only says so.
+    fn clear(&self, block: BlockId) {
+        if !io::stdout().is_terminal() {
+            return self.line(&format!("[{block}] cleared"));
+        }
+        let mut state = self.state.lock().unwrap();
+        // Scrollback, screen, then the cursor to the top left.
+        print!("\x1b[3J\x1b[2J\x1b[H");
+        let _ = io::stdout().flush();
+        state.shown = false;
+        state.last = Some(Instant::now());
+        self.changed.notify_all();
+    }
+
     /// Says whether the user is expected to type a line. When a line has been
     /// typed, the prompt it followed is gone. The delay starts again, so that
     /// output of a command that was just started comes first.
@@ -288,6 +303,7 @@ fn print_notification(notification: Notification, state: &Mutex<State>, level: L
             }
             state.islands.insert(island, (block, contents, live));
         }
+        Notification::Cleared { block } => OUTPUT.clear(block),
         Notification::Finished { block } => out!("[{block}] done"),
     }
 }

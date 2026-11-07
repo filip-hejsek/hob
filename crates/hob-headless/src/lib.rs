@@ -319,6 +319,7 @@ impl<W: Write> Server<W> {
                 reply.send(self.records.clone());
                 Ok(())
             }
+            Request::Clear => self.notify(Notification::Cleared { block }),
         }
     }
 }

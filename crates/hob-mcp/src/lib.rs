@@ -320,6 +320,9 @@ impl Bridge {
                 };
                 self.islands.insert(island, island_state);
             }
+            Notification::Cleared { block } => {
+                self.event(Some(block), format!("[{block}] cleared the scrollback"));
+            }
             Notification::Finished { block } => {
                 if let Some(b) = self.blocks.get_mut(&block) {
                     b.finished = true;

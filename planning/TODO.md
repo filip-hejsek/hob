@@ -91,6 +91,8 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 
 - Focus: nothing moves focus to a newly shown island, or back to the prompt
   afterwards.
+- Log records cleared by `clear` are kept only in memory, so `messages`
+  no longer lists them after a restart.
 - The scrollback grows without limit, and so does the session file, which
   is rewritten in full on every change.
 - Edits in a live island are only saved on close (or with the next

@@ -1,5 +1,6 @@
 //! Commands that work with any frontend. Register them with [`register`].
 //!
+//! - `clear`: clears the scrollback.
 //! - `help [COMMAND]`: lists all commands with their descriptions, or shows
 //!   the description of one.
 //! - `messages [LEVEL]`: lists the log records the frontend has, oldest
@@ -13,12 +14,21 @@ use crate::{CommandResult, Context, Interpreter, Level, LogRecord};
 
 /// Registers all built-in commands.
 pub fn register(interpreter: &mut Interpreter) {
+    interpreter.register("clear", "Clear the scrollback", clear);
     interpreter.register("help", "List the commands, or describe one", help);
     interpreter.register(
         "messages",
         "List log messages, from LEVEL up (info by default)",
         messages,
     );
+}
+
+fn clear(ctx: &mut Context, args: &[String]) -> CommandResult {
+    if !args.is_empty() {
+        return Err("usage: clear".into());
+    }
+    ctx.clear();
+    Ok(())
 }
 
 fn help(ctx: &mut Context, args: &[String]) -> CommandResult {
@@ -128,6 +138,7 @@ mod tests {
                     Request::LogRecords(reply) => reply.send(records.take().unwrap()),
                     Request::Print(message) => output.push(message),
                     Request::Log(record) => output.push(record.to_string()),
+                    Request::Clear => output.push("<clear>".to_owned()),
                     _ => panic!("unexpected request"),
                 },
                 std::task::Poll::Ready(None) => return output,
@@ -163,7 +174,8 @@ mod tests {
     fn help_lists_commands() {
         assert_eq!(
             run("help", vec![]),
-            ["help — List the commands, or describe one\n\
+            ["clear — Clear the scrollback\n\
+              help — List the commands, or describe one\n\
               messages — List log messages, from LEVEL up (info by default)"]
         );
         assert_eq!(
@@ -171,6 +183,12 @@ mod tests {
             ["help — List the commands, or describe one"]
         );
         assert_eq!(run("help nope", vec![]), [r#"error: no command "nope""#]);
+    }
+
+    #[test]
+    fn clear_asks_to_clear() {
+        assert_eq!(run("clear", vec![]), ["<clear>"]);
+        assert_eq!(run("clear x", vec![]), ["error: usage: clear"]);
     }
 
     #[test]

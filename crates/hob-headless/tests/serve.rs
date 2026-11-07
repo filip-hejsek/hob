@@ -92,6 +92,7 @@ impl Client {
                 let live = if live { "live" } else { "frozen" };
                 format!("{block} island {island} {live}\n{}", outline(&contents))
             }
+            Notification::Cleared { block } => format!("{block} cleared"),
             Notification::Finished { block } => format!("{block} finished"),
         }
     }
@@ -252,4 +253,12 @@ fn commands_can_read_log_records() {
             && listed.ends_with("warning warn: careful"),
         "{listed}"
     );
+}
+
+#[test]
+fn clear_is_passed_on() {
+    let mut client = Client::start(interpreter());
+    let block = client.run("clear");
+    assert_eq!(client.next(), format!("{block} cleared"));
+    assert_eq!(client.next(), format!("{block} finished"));
 }

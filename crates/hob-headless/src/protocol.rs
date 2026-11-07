@@ -119,6 +119,13 @@ pub enum Notification {
         /// What the island shows.
         contents: FrozenIsland,
     },
+    /// A command cleared the scrollback (see
+    /// [`Context::clear`](hob_core::Context::clear)). The frontend keeps no
+    /// scrollback, so it's up to the client what to clear.
+    Cleared {
+        /// The command's block.
+        block: BlockId,
+    },
     /// A command finished; nothing more will refer to its block.
     Finished {
         /// The command's block.

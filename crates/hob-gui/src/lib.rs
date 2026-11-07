@@ -5,7 +5,8 @@
 //! with a command prompt below it. Each command gets a block in the
 //! scrollback: its command line, then what it prints, logs and the islands it
 //! shows, in order. A live island freezes in place once the user submits or
-//! cancels it.
+//! cancels it. The `clear` command clears the scrollback, except for
+//! commands still running.
 //!
 //! Log records that aren't from a command (from the shell itself, kettle-ui
 //! or dependencies, through the `log` crate) are added to the scrollback as
@@ -92,6 +93,8 @@ struct Shell {
     candidates: Vec<String>,
     /// The scrollback, oldest first.
     scrollback: Vec<Item>,
+    /// Log records of cleared items, kept for `messages`, but not saved.
+    cleared_records: Vec<LogRecord>,
     /// For block and island ids.
     next_id: u64,
 }
@@ -204,6 +207,7 @@ impl Shell {
             history: History::new(),
             candidates: Vec::new(),
             scrollback: Vec::new(),
+            cleared_records: Vec::new(),
             next_id: 0,
         };
         shell.restore();
@@ -438,6 +442,10 @@ impl Shell {
                 reply.send(self.log_records());
                 return Task::none();
             }
+            Request::Clear => {
+                self.clear(block);
+                return Task::none();
+            }
             request => request,
         };
         let island_id = self.next_id();
@@ -457,7 +465,7 @@ impl Shell {
                 Entry::Log(record)
             }
             Request::PrintIsland(island) => Entry::Frozen(island),
-            Request::LogRecords(_) => unreachable!("handled above"),
+            Request::LogRecords(_) | Request::Clear => unreachable!("handled above"),
             Request::Show(show) => {
                 let (builder, reply) = show.into_parts();
                 match Island::new(builder) {
@@ -480,19 +488,22 @@ impl Shell {
         Task::none()
     }
 
-    /// All log records in the scrollback, oldest first.
+    /// Clears the scrollback, except for blocks of commands still running
+    /// other than `caller`'s. Their log records are kept for `messages`.
+    fn clear(&mut self, caller: BlockId) {
+        let (kept, cleared) = mem::take(&mut self.scrollback)
+            .into_iter()
+            .partition(|item| matches!(item, Item::Block(b) if b.running && b.id != caller));
+        self.scrollback = kept;
+        self.cleared_records.extend(log_records(&cleared));
+    }
+
+    /// All log records, oldest first: of cleared items, then of the
+    /// scrollback.
     fn log_records(&self) -> Vec<LogRecord> {
-        (self.scrollback.iter())
-            .flat_map(|item| match item {
-                Item::Block(block) => (block.entries.iter())
-                    .filter_map(|entry| match entry {
-                        Entry::Log(record) => Some(record.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-                Item::Notice(record) => vec![record.clone()],
-            })
-            .collect()
+        let mut records = self.cleared_records.clone();
+        records.extend(log_records(&self.scrollback));
+        records
     }
 
     fn update_island(&mut self, id: IslandId, message: kettle_ui_iced::Message) -> Task<Message> {
@@ -592,6 +603,21 @@ impl Entry {
             },
         }
     }
+}
+
+/// The log records in `items`, oldest first.
+fn log_records(items: &[Item]) -> Vec<LogRecord> {
+    (items.iter())
+        .flat_map(|item| match item {
+            Item::Block(block) => (block.entries.iter())
+                .filter_map(|entry| match entry {
+                    Entry::Log(record) => Some(record.clone()),
+                    _ => None,
+                })
+                .collect(),
+            Item::Notice(record) => vec![record.clone()],
+        })
+        .collect()
 }
 
 /// Moves a file to `<path>.bad`, and returns the new path.
