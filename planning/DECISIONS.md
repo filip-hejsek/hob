@@ -239,6 +239,9 @@ and renders the island as an indented text outline.
   "Print the arguments". Bare `help` lists all commands with their
   descriptions; `help COMMAND` shows one. Commands see the registered
   commands through `ctx.commands()`.
+- Command names must start with a letter or digit (`char::is_alphanumeric`;
+  `register` panics otherwise). Lines starting with other characters
+  (`!`, `@`, `#`, `_`, ...) are reserved for features other than commands.
 - The interpreter has a working directory, simulated: the process's own
   is never changed, since commands run concurrently in one process. It
   starts as the process's. Each command gets a snapshot when it starts

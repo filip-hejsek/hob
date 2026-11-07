@@ -124,14 +124,19 @@ impl Interpreter {
     ///
     /// # Panics
     ///
-    /// If a command with this name is already registered, or the description
-    /// is empty or has more than one line.
+    /// If a command with this name is already registered, the name doesn't
+    /// start with a letter or digit (other first characters are reserved for
+    /// other features), or the description is empty or has more than one line.
     pub fn register(
         &mut self,
         name: &str,
         description: impl Into<String>,
         run: impl Fn(&mut Context, &[String]) -> CommandResult + Send + Sync + 'static,
     ) {
+        assert!(
+            name.starts_with(char::is_alphanumeric),
+            "the name {name:?} must start with a letter or digit"
+        );
         let description = description.into();
         assert!(
             !description.trim().is_empty() && !description.contains('\n'),
@@ -806,6 +811,18 @@ mod tests {
     #[should_panic(expected = "must be one non-empty line")]
     fn descriptions_must_be_one_line() {
         Interpreter::new().register("x", "One\ntwo", |_, _| Ok(()));
+    }
+
+    #[test]
+    #[should_panic(expected = "must start with a letter or digit")]
+    fn names_must_not_start_with_a_special_character() {
+        Interpreter::new().register("!x", "Test", |_, _| Ok(()));
+    }
+
+    #[test]
+    #[should_panic(expected = "must start with a letter or digit")]
+    fn names_must_not_be_empty() {
+        Interpreter::new().register("", "Test", |_, _| Ok(()));
     }
 
     #[test]
