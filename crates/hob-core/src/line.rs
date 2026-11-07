@@ -16,6 +16,8 @@ pub(crate) struct Word {
     pub start: usize,
     /// Where it ends (after its last character, including a closing quote).
     pub end: usize,
+    /// Whether it starts with a `~` that was expanded.
+    pub tilde: bool,
 }
 
 /// Why a line couldn't be split.
@@ -58,6 +60,7 @@ fn scan(line: &str, home: Option<&str>) -> Scan {
             value: String::new(),
             start: i,
             end,
+            tilde: false,
         });
         current.end = end;
         match quote {
@@ -97,7 +100,13 @@ fn scan(line: &str, home: Option<&str>) -> Scan {
                         .peek()
                         .is_none_or(|&(_, n)| n == '/' || n.is_whitespace()) =>
                 {
-                    current.value.push_str(home.unwrap_or("~"));
+                    match home {
+                        Some(home) => {
+                            current.value.push_str(home);
+                            current.tilde = true;
+                        }
+                        None => current.value.push('~'),
+                    }
                 }
                 _ => current.value.push(c),
             },
@@ -112,7 +121,7 @@ fn scan(line: &str, home: Option<&str>) -> Scan {
 }
 
 /// The home directory as a string, if it's known and valid UTF-8.
-fn home() -> Option<String> {
+pub(crate) fn home() -> Option<String> {
     std::env::home_dir()?.into_os_string().into_string().ok()
 }
 
@@ -128,6 +137,82 @@ fn split_with_home(line: &str, home: Option<&str>) -> Result<Vec<Word>, SyntaxEr
         (None, true) => Err(SyntaxError::TrailingBackslash),
         (None, false) => Ok(scan.words),
     }
+}
+
+/// The word being typed at the end of a line, for completion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Partial {
+    /// The word so far (empty after whitespace).
+    pub word: Word,
+    /// The quote it's inside of, if any.
+    pub quote: Option<char>,
+}
+
+/// Splits a line for completion: the finished words, and the word at the end
+/// being typed, which may be inside an unclosed quote.
+pub(crate) fn split_partial(line: &str, home: Option<&str>) -> (Vec<Word>, Partial) {
+    let mut scan = scan(line, home);
+    let partial = match scan.words.last() {
+        Some(last) if last.end == line.len() => Partial {
+            word: scan.words.pop().expect("a last word"),
+            quote: scan.quote,
+        },
+        _ => Partial {
+            word: Word {
+                value: String::new(),
+                start: line.len(),
+                end: line.len(),
+                tilde: false,
+            },
+            quote: None,
+        },
+    };
+    (scan.words, partial)
+}
+
+/// Writes `value` back as a word that splits to it: inside `quote` if one was
+/// opened (closed if `close`), otherwise with backslashes. If the word
+/// started with an expanded `~`, it's written as `~` again.
+pub(crate) fn requote(
+    value: &str,
+    quote: Option<char>,
+    close: bool,
+    home: Option<&str>,
+    tilde: bool,
+) -> String {
+    let (mut out, value) = match home.and_then(|home| value.strip_prefix(home)) {
+        Some(rest) if tilde && rest.is_empty() => return "~".to_owned(),
+        Some(rest) if tilde && rest.starts_with('/') => ("~/".to_owned(), &rest[1..]),
+        _ => (String::new(), value),
+    };
+    match quote {
+        Some('\'') => {
+            out.push('\'');
+            out += &value.replace('\'', r"'\''");
+        }
+        Some(q) => {
+            out.push(q);
+            for c in value.chars() {
+                if matches!(c, '"' | '\\') {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+        }
+        None => {
+            for (i, c) in value.char_indices() {
+                let tilde = c == '~' && i == 0 && out.is_empty();
+                if tilde || c.is_whitespace() || matches!(c, '\'' | '"' | '\\') {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+        }
+    }
+    if let Some(q) = quote.filter(|_| close) {
+        out.push(q);
+    }
+    out
 }
 
 /// The line without trailing whitespace, unless the whitespace is part of
@@ -213,6 +298,53 @@ mod tests {
         assert_eq!(error("a 'b"), SyntaxError::UnterminatedQuote('\''));
         assert_eq!(error(r#"a "b\""#), SyntaxError::UnterminatedQuote('"'));
         assert_eq!(error(r"a \"), SyntaxError::TrailingBackslash);
+    }
+
+    fn partial(line: &str) -> (Vec<String>, String, Option<char>, &str) {
+        let (words, partial) = split_partial(line, Some("/home/me"));
+        let words = words.into_iter().map(|w| w.value).collect();
+        let raw = &line[partial.word.start..];
+        (words, partial.word.value, partial.quote, raw)
+    }
+
+    #[test]
+    fn finds_the_word_being_typed() {
+        assert_eq!(partial("ls a"), (vec!["ls".into()], "a".into(), None, "a"));
+        assert_eq!(
+            partial("ls a "),
+            (vec!["ls".into(), "a".into()], "".into(), None, "")
+        );
+        assert_eq!(
+            partial(r#"ls "a b"#),
+            (vec!["ls".into()], "a b".into(), Some('"'), r#""a b"#)
+        );
+        assert_eq!(
+            partial(r"ls a\ "),
+            (vec!["ls".into()], "a ".into(), None, r"a\ ")
+        );
+        assert_eq!(partial("ls ~/x").1, "/home/me/x");
+        assert_eq!(partial("").1, "");
+    }
+
+    #[test]
+    fn requotes_words() {
+        let q = |value, quote, close| requote(value, quote, close, Some("/home/me"), false);
+        assert_eq!(q(r#"a b'c"d\e"#, None, false), r#"a\ b\'c\"d\\e"#);
+        assert_eq!(q("~x~", None, false), r"\~x~");
+        assert_eq!(q(r#"a "b\"#, Some('"'), true), r#""a \"b\\""#);
+        assert_eq!(q("a 'b", Some('\''), false), r"'a '\''b");
+        let t = |value, quote| requote(value, quote, false, Some("/home/me"), true);
+        assert_eq!(t("/home/me", None), "~");
+        assert_eq!(t("/home/me/a b", None), r"~/a\ b");
+        assert_eq!(t("/home/me/a b", Some('"')), r#"~/"a b"#);
+        assert_eq!(t("/elsewhere", None), "/elsewhere");
+        // Whatever it's quoted like, it splits back to the value.
+        for value in [r#"a b'c"d\e~"#, "~", "~/x"] {
+            for quote in [None, Some('\''), Some('"')] {
+                let word = requote(value, quote, true, None, false);
+                assert_eq!(words(&word), [value], "{word}");
+            }
+        }
     }
 
     #[test]

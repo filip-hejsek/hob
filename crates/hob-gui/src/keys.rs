@@ -10,7 +10,7 @@ pub(crate) enum Action {
     HistoryBack,
     /// The next line in the history.
     HistoryForward,
-    /// Completes the command name.
+    /// Completes the word being typed.
     Complete,
     /// Scrolls the scrollback up by a page.
     PageUp,

@@ -18,7 +18,7 @@
 //! [`Context::log_records`](hob_core::Context::log_records).
 //!
 //! The prompt works like a shell's: Up and Down browse the history, and Tab
-//! completes command names. Tab doesn't move focus. Anywhere, PageUp and
+//! completes command names and arguments. Tab doesn't move focus. Anywhere, PageUp and
 //! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). Ctrl+D
 //! in the empty prompt exits (like `exit`), unless commands are running: then
 //! it says so, and focuses an island waiting for input. The bindings are a table (see the

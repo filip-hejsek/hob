@@ -257,6 +257,17 @@ and renders the island as an indented text outline.
   text (`echo`, `confirm`). Rejected: clap (a big dependency with its own
   help style, made for process arguments), and only a completion callback
   per command (no shared parsing, usage or help).
+- Tab completion (`Interpreter::complete`) completes the word at the end
+  of the line: the command name, then what the command's spec says comes
+  next: `--long` options (while options are allowed, and the word starts
+  with `-`), subcommands, choices, a custom completer's words, or paths.
+  Paths are read relative to the interpreter's working directory; hidden
+  entries are offered only once a `.` is typed, directories get a `/` and
+  no space, and candidates are listed by their last component, like bash.
+  The completed word is written back quoted as it was typed (an opened
+  quote is continued, and closed if the word is finished; otherwise
+  backslashes), and a `~` stays a `~`. Commands without a spec, and text
+  arguments, aren't completed.
 - Commands that work with any frontend (such as `help` and `messages`) are
   built into hob-core (`hob_core::builtins`), and registered by `hob`.
 - Every command is registered with a one-line description (required, so
@@ -542,7 +553,7 @@ Works like a terminal: a scrollback with the prompt below it.
   prompt gets it back. Both check with an operation that always answers
   (iced's `find_focused` gives no answer when nothing is focused).
 - The prompt has history (Up/Down; the line being typed is kept as a draft)
-  and Tab completion of command names: unambiguous part completed, the
+  and Tab completion (see hob-core): unambiguous part completed, the
   candidates listed below the prompt if there are several. Both live in
   hob-core.
 - Trailing whitespace is trimmed from a submitted line, so the space that

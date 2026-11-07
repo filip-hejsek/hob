@@ -117,7 +117,6 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   confirm, like `exit`), maybe `cd -`.
 - `ls -l` (sizes, times, permissions), possibly as an island with a table
   rather than text.
-- Path completion, once commands can say what arguments they take.
 - `cat` could show big files in parts, or a binary file as hex.
 
 ## Git commands (hob-git)
@@ -150,6 +149,8 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - Ctrl+R history search. Needs a UI design: a bash-style search in the
   prompt line, or a list of matches?
 - Completion works only at the end of the line (iced doesn't tell the app
-  where the cursor is; see ICED_WISHLIST.md), and doesn't complete
-  arguments: commands would need a way to say what they accept.
+  where the cursor is; see ICED_WISHLIST.md).
+- Completing a path reads its directory on the UI thread, which could
+  stall on a slow or network filesystem; so could a command's custom
+  completer (e.g. `git log` reading refs).
 - There is no way to move focus to the command prompt using only the keyboard.

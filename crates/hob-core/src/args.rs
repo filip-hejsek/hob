@@ -420,6 +420,93 @@ impl Spec {
     }
 }
 
+/// What can come next on a command line, for completion.
+pub(crate) struct Expect<'a> {
+    /// The long names of the options, if they're still allowed.
+    pub options: Vec<&'a str>,
+    /// The words that can come next: subcommand names, or the kind of an
+    /// argument or option value.
+    pub next: Next<'a>,
+}
+
+/// See [`Expect::next`].
+pub(crate) enum Next<'a> {
+    Subcommands(Vec<&'a str>),
+    Value(&'a Kind),
+    Nothing,
+}
+
+impl Spec {
+    /// What can follow `words` (the finished arguments), leniently: unknown
+    /// options are skipped. `None` if a subcommand is unknown.
+    pub(crate) fn expect(&self, words: &[String]) -> Option<Expect<'_>> {
+        let mut operands = 0;
+        let mut options_done = false;
+        let mut words = words.iter();
+        while let Some(word) = words.next() {
+            if options_done || operands > 0 || word == "-" || !word.starts_with('-') {
+                if !self.subcommands.is_empty() {
+                    let sub = self.subcommands.iter().find(|s| &s.name == word)?;
+                    return sub.spec.expect(words.as_slice());
+                }
+                operands += 1;
+                continue;
+            }
+            if word == "--" {
+                options_done = true;
+                continue;
+            }
+            // The option whose value is the next word, if any.
+            let wants_value = match word.strip_prefix("--") {
+                Some(long) if !long.contains('=') => {
+                    value_of(self.options.iter().find(|o| o.long == long))
+                }
+                Some(_) => None,
+                None => {
+                    let letters = &word[1..];
+                    letters
+                        .char_indices()
+                        .find_map(|(i, letter)| {
+                            let opt = self.options.iter().find(|o| o.short == Some(letter));
+                            let rest = &letters[i + letter.len_utf8()..];
+                            value_of(opt).map(|kind| rest.is_empty().then_some(kind))
+                        })
+                        .flatten()
+                }
+            };
+            if let Some(kind) = wants_value
+                && words.next().is_none()
+            {
+                return Some(Expect {
+                    options: Vec::new(),
+                    next: Next::Value(kind),
+                });
+            }
+        }
+        let options = match options_done || operands > 0 {
+            true => Vec::new(),
+            false => self.options.iter().map(|o| o.long.as_str()).collect(),
+        };
+        let next = if !self.subcommands.is_empty() {
+            Next::Subcommands(self.subcommands.iter().map(|s| s.name.as_str()).collect())
+        } else {
+            // Each argument takes one operand, except a repeated last one.
+            let arg = (self.args.iter().enumerate())
+                .find(|&(i, arg)| i == operands || (arg.repeated && i < operands));
+            match arg {
+                Some((_, arg)) => Next::Value(&arg.kind),
+                None => Next::Nothing,
+            }
+        };
+        Some(Expect { options, next })
+    }
+}
+
+/// The kind of an option's value, if it has one.
+fn value_of(opt: Option<&Opt>) -> Option<&Kind> {
+    opt.and_then(|o| o.value.as_ref().map(|(_, kind)| kind))
+}
+
 /// A parse error: one to add this spec's usage to, or a finished message
 /// (from a subcommand, with its usage).
 enum ParseError {

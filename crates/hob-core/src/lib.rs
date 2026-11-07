@@ -44,6 +44,7 @@
 
 pub mod args;
 pub mod builtins;
+mod complete;
 mod history;
 mod line;
 pub mod logger;
@@ -64,6 +65,7 @@ use futures_channel::mpsc;
 use futures_core::Stream;
 use kettle_ui::{FrozenIsland, IslandBuilder, Outcome};
 
+pub use complete::Completion;
 pub use history::History;
 pub use line::trim_line_end;
 pub use record::{Level, LogRecord};
@@ -228,39 +230,13 @@ impl Interpreter {
         self.commands.keys().map(String::as_str)
     }
 
-    /// Completes the command name at the end of `line`, like a shell does on
-    /// Tab: as far as it's unambiguous, with a space after a complete name.
-    /// Arguments aren't completed yet.
+    /// Completes the word at the end of `line`, like a shell does on Tab:
+    /// as far as it's unambiguous, with a space after a finished word. The
+    /// first word is a command name; after it, what the command's
+    /// [`Spec`] says comes next (options, subcommands, paths, ...).
+    /// Commands without a spec, and prefix commands, aren't completed.
     pub fn complete(&self, line: &str) -> Completion {
-        let start = line.len() - line.trim_start().len();
-        let (before, word) = line.split_at(start);
-        let unchanged = Completion {
-            line: line.to_owned(),
-            candidates: Vec::new(),
-        };
-        if word.contains(char::is_whitespace) || is_prefix(word) {
-            return unchanged;
-        }
-        let matches: Vec<&str> = self
-            .commands()
-            .filter(|c| !is_prefix(c) && c.starts_with(word))
-            .collect();
-        match matches.as_slice() {
-            [] => unchanged,
-            [only] => Completion {
-                line: format!("{before}{only} "),
-                candidates: Vec::new(),
-            },
-            [first, rest @ ..] => {
-                let len = rest
-                    .iter()
-                    .fold(first.len(), |len, m| common_prefix_len(&first[..len], m));
-                Completion {
-                    line: format!("{before}{}", &first[..len]),
-                    candidates: matches.iter().map(|&m| m.to_owned()).collect(),
-                }
-            }
-        }
+        complete::complete(&self.commands, &self.cwd(), line)
     }
 
     /// Starts running a command line on a new thread. If it starts with a
@@ -358,22 +334,6 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> Option<&str> {
         Some(message) => Some(message),
         None => panic.downcast_ref::<String>().map(String::as_str),
     }
-}
-
-/// What [`Interpreter::complete`] made of a line.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Completion {
-    /// The line, completed as far as it's unambiguous.
-    pub line: String,
-    /// The possible completions, if there are several; otherwise empty.
-    pub candidates: Vec<String>,
-}
-
-/// The length in bytes of the longest common prefix of `a` and `b`.
-fn common_prefix_len(a: &str, b: &str) -> usize {
-    a.char_indices()
-        .find(|&(i, c)| !b[i..].starts_with(c))
-        .map_or(a.len(), |(i, _)| i)
 }
 
 /// Why [`Interpreter::run`] couldn't start a command.
