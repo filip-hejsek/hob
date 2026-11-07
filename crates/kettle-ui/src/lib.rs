@@ -10,8 +10,8 @@
 //! - The widget tree is built once and never changes.
 //! - Widgets keep their own interaction state (cursor, focus, scroll), which is
 //!   not accessible from outside.
-//! - Form elements (text fields, checkboxes) have values, which the host gets
-//!   when the user submits the form.
+//! - Form elements (text fields and areas, checkboxes) have values, which the
+//!   host gets when the user submits the form.
 //! - Labels, progress bars and lists can show *named state*. Named state
 //!   either has an initial value ([`IslandBuilder::set_state`]) and can then be
 //!   updated from outside through a [`StateHandle`], or is *derived*: computed
@@ -516,7 +516,7 @@ fn collect_fields(widget: &Widget, fields: &mut Fields) -> Result<(), Error> {
             return children.iter().try_for_each(|c| collect_fields(c, fields));
         }
         Kind::When { child, .. } => return collect_fields(child, fields),
-        Kind::TextField { id, .. } => (id, Field::Text(String::new())),
+        Kind::TextField { id, .. } | Kind::TextArea { id, .. } => (id, Field::Text(String::new())),
         Kind::Checkbox { id, .. } => (id, Field::Bool(false)),
         _ => return Ok(()),
     };
@@ -650,6 +650,10 @@ mod tests {
                 text_field("t", ""),
                 row([submit_button("OK [o]")])
             ])),
+            Err(Error::KeyWithTextField('o'))
+        ));
+        assert!(matches!(
+            keys(column([text_area("t", ""), submit_button("OK [o]")])),
             Err(Error::KeyWithTextField('o'))
         ));
         // Without keys, buttons and text fields go together.
@@ -788,6 +792,20 @@ mod tests {
         let mut ui = IslandBuilder::new(column([]));
         ui.set_text("nope", "x");
         assert!(matches!(check(&ui), Err(Error::UnknownField(n)) if n == "nope"));
+    }
+
+    #[test]
+    fn text_areas_hold_text() {
+        let mut ui = IslandBuilder::new(column([text_area("a", ""), label(state("n"))]));
+        ui.set_text("a", "one\ntwo");
+        ui.derive("n", |i| (i.text("a").lines().count() as f64).into());
+        let frozen = ui.freeze().unwrap();
+        assert_eq!(frozen.fields().text("a"), "one\ntwo");
+        assert_eq!(frozen.state("n"), Some(&2.0.into()));
+
+        let mut ui = IslandBuilder::new(text_area("a", ""));
+        ui.set_checked("a", true);
+        assert!(matches!(check(&ui), Err(Error::NotACheckbox(n)) if n == "a"));
     }
 
     #[test]

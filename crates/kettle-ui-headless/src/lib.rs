@@ -136,13 +136,12 @@ impl Island {
         self.model.state(name)
     }
 
-    /// Replaces the contents of the text field `id`.
+    /// Replaces the contents of the text field or text area `id`.
     pub fn type_text(&mut self, id: &str, text: &str) -> Result<(), ActionError> {
-        let found = find(
-            &self.model,
-            self.model.root(),
-            &mut |w| matches!(w.kind(), Kind::TextField { id: i, .. } if &**i == id),
-        );
+        let found = find(&self.model, self.model.root(), &mut |w| match w.kind() {
+            Kind::TextField { id: i, .. } | Kind::TextArea { id: i, .. } => &**i == id,
+            _ => false,
+        });
         if found.is_none() {
             return Err(ActionError::NoTextField(id.to_owned()));
         }
@@ -322,9 +321,14 @@ fn render(model: &impl Contents, widget: &Widget, depth: usize, out: &mut String
             };
             writeln!(out, "{indent}label {text:?}")
         }
-        Kind::TextField { id, placeholder } => {
+        Kind::TextField { id, placeholder } | Kind::TextArea { id, placeholder } => {
+            let name = match widget.kind() {
+                Kind::TextField { .. } => "text_field",
+                _ => "text_area",
+            };
             let value = fields.text(id);
-            write!(out, "{indent}text_field {id}: {value:?}")?;
+            // Debug formatting keeps a multi-line value on one line.
+            write!(out, "{indent}{name} {id}: {value:?}")?;
             if value.is_empty() && !placeholder.is_empty() {
                 write!(out, " (placeholder {placeholder:?})")?;
             }
@@ -408,6 +412,18 @@ mod tests {
     use kettle_ui::widget::*;
 
     use super::*;
+
+    #[test]
+    fn text_areas_take_typed_text() {
+        let mut island = Island::new(IslandBuilder::new(text_area("a", "Notes"))).unwrap();
+        assert_eq!(
+            island.to_string(),
+            "text_area a: \"\" (placeholder \"Notes\")\n"
+        );
+        island.type_text("a", "one\ntwo").unwrap();
+        assert_eq!(island.fields().text("a"), "one\ntwo");
+        assert_eq!(island.to_string(), "text_area a: \"one\\ntwo\"\n");
+    }
 
     #[test]
     fn actions_on_missing_widgets_are_errors() {

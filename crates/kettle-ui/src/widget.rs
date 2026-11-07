@@ -3,7 +3,7 @@
 //! Build the (fixed) widget tree with the functions in this module:
 //! - layout: [`column()`], [`row`], [`when`]
 //! - display: [`label`] (with [`state`]), [`progress`], [`list`]
-//! - form elements: [`text_field`], [`checkbox`], [`suggestions`]
+//! - form elements: [`text_field`], [`text_area`], [`checkbox`], [`suggestions`]
 //! - buttons: [`submit_button`], [`cancel_button`] (with [`ButtonLabel`])
 //!
 //! Backends read the tree through [`Widget::kind`], and leave out the gaps
@@ -48,6 +48,13 @@ pub enum Kind {
     Label(Text),
     /// [`text_field`]
     TextField {
+        /// The field's id in [`Fields`](crate::Fields).
+        id: Arc<str>,
+        /// Shown while the field is empty.
+        placeholder: String,
+    },
+    /// [`text_area`]
+    TextArea {
         /// The field's id in [`Fields`](crate::Fields).
         id: Arc<str>,
         /// Shown while the field is empty.
@@ -154,6 +161,16 @@ pub fn label(text: impl Into<Text>) -> Widget {
 /// A single-line text input. Its value is read with [`Fields::text`](crate::Fields::text).
 pub fn text_field(id: &str, placeholder: &str) -> Widget {
     Widget(Kind::TextField {
+        id: id.into(),
+        placeholder: placeholder.to_owned(),
+    })
+}
+
+/// A multi-line text input, for longer text. Its value is read with
+/// [`Fields::text`](crate::Fields::text), like a [`text_field`]'s, and it
+/// counts as a text field wherever one is expected.
+pub fn text_area(id: &str, placeholder: &str) -> Widget {
+    Widget(Kind::TextArea {
         id: id.into(),
         placeholder: placeholder.to_owned(),
     })
@@ -277,6 +294,7 @@ pub fn is_visible(contents: &impl Contents, widget: &Widget) -> bool {
             matches!(contents.state(state), Some(Value::List(items)) if !items.is_empty())
         }
         Kind::TextField { .. }
+        | Kind::TextArea { .. }
         | Kind::Checkbox { .. }
         | Kind::Progress { .. }
         | Kind::Button { .. } => true,
@@ -377,6 +395,7 @@ mod tests {
     fn other_widgets_are_visible() {
         let c = contents([]);
         assert!(is_visible(&c, &text_field("f", "")));
+        assert!(is_visible(&c, &text_area("f", "")));
         assert!(is_visible(&c, &checkbox("c", "")));
         assert!(is_visible(&c, &progress("missing")));
         assert!(is_visible(&c, &submit_button("")));

@@ -150,6 +150,19 @@ mod tests {
     }
 
     #[test]
+    fn text_area_grows_with_its_text() {
+        let height = |text: &str| {
+            let mut b = IslandBuilder::new(text_area("t", "Notes"));
+            b.set_text("t", text);
+            render_rgba(&b.freeze().unwrap(), 300, true).0.height
+        };
+        let empty = height("");
+        assert!(empty > 80, "{empty}");
+        assert_eq!(height("1\n2"), empty);
+        assert!(height(&"line\n".repeat(10)) > empty + 80);
+    }
+
+    #[test]
     fn height_fits_content() {
         let (size, rgba) = render_rgba(&island(), 300, false);
         assert_eq!(size.width, 300);

@@ -31,6 +31,8 @@ TODO.md.
 
 ## hob-gui (shell)
 
+- PageUp and PageDown in a text area move its cursor and also scroll the
+  scrollback (the shell's bindings work anywhere).
 - Widget state in the scrollback is matched by position, so when `clear`
   or Ctrl+L removes blocks before a running one, its live island may get
   another widget's state (focus, cursor). A `keyed_column` keyed by block

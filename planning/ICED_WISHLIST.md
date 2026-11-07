@@ -30,6 +30,22 @@ prompt is focused. For islands, a wrapper widget that sees key events
 before the island's widgets, and finds the focused field with an operation
 on its children.
 
+## A text editor that takes its value
+
+**Needed for:** text areas in islands, whose value lives in the kettle-ui
+model as a string, and in frozen islands, which have no editor state.
+
+`text_editor` borrows a `Content` that the app must keep and update with
+every `Action`, unlike `text_input`, which takes the value as a `&str` and
+keeps its cursor in its widget state.
+
+**Workaround:** a wrapper widget (kettle-ui-iced `TextArea`) that keeps the
+`Content` in its own widget state and makes a temporary `text_editor` for
+each call. It applies the editor's actions itself and forwards the rest of
+the editor's shell requests. Since the editor is temporary, it can't keep
+its status (hovered, focused) either, so the wrapper tracks it and passes
+it in through the style.
+
 ## Focusable buttons and checkboxes
 
 **Needed for:** using islands from the keyboard.
@@ -67,7 +83,8 @@ drawing.
 ## Subscriptions and more keys in `iced_test`'s `Emulator`
 
 **Needed for:** end-to-end tests of the shell's key bindings in hob-gui:
-history (Up/Down), completion (Tab), PageUp/PageDown, Ctrl+L.
+history (Up/Down), completion (Tab), PageUp/PageDown, Ctrl+L; and of
+Ctrl+Enter in kettle-ui-iced islands.
 
 The `Emulator` passes interactions only to the widgets, not to
 subscriptions such as `event::listen_with` or `window::close_requests`.
@@ -77,6 +94,16 @@ PageUp/PageDown), and there are no modifiers.
 **Workaround:** history and completion are tested on `History` and
 `Interpreter::complete`, Ctrl+L by calling the shell's `update` directly,
 and all of them checked by hand in a real window (Xvfb).
+
+## Finding a text editor's text in `iced_test`
+
+**Needed for:** checking what was typed into a text area in kettle-ui-iced
+tests.
+
+`Expectation::Text` finds the text of `text` and `text_input` widgets, but
+not of a `text_editor`.
+
+**Workaround:** the tests submit the island and check the submitted value.
 
 ## Waiting for an app to settle in `iced_test`
 

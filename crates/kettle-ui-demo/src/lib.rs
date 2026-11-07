@@ -62,9 +62,10 @@ impl Demo {
     pub fn summary(self, fields: &Fields) -> String {
         match self {
             Demo::Contact => format!(
-                "name {:?}, subscribe {}",
+                "name {:?}, subscribe {}, message {:?}",
                 fields.text("name"),
-                fields.checked("subscribe")
+                fields.checked("subscribe"),
+                fields.text("message")
             ),
             Demo::FruitSearch => format!("fruit {:?}", fields.text("fruit")),
         }
@@ -77,6 +78,8 @@ fn contact() -> IslandBuilder {
         text_field("name", "Your name"),
         label(state("greeting")),
         checkbox("subscribe", "Subscribe to updates"),
+        label("Message"),
+        text_area("message", "Anything you'd like to tell us"),
         row([submit_button("Submit"), cancel_button("Cancel")]),
     ]));
     builder.derive("greeting", |f| match f.text("name") {

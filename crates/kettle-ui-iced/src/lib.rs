@@ -26,6 +26,7 @@
 //! with nothing to show (see [`is_visible`]) get no gaps around them, but
 //! stay in the iced tree for the same reason.
 //!
+//! In this crate, "text fields" include text areas, unless said otherwise.
 //! The text fields of a live island have iced [`Id`]s, made when the island
 //! is created and kept for its whole life, for the host's focus operations
 //! (see [`Island::field_id`] and [`Island::has_focus`]). They are unique, so
@@ -35,7 +36,8 @@
 //!
 //! A live island handles some keys itself, while it has focus: Enter in a
 //! text field focuses the next shown one, and submits in the last one (if
-//! there's a submit button); Escape cancels (if there's a cancel button);
+//! there's a submit button), while in a text area it starts a new line and
+//! Ctrl+Enter does that instead; Escape cancels (if there's a cancel button);
 //! and a button's key (see [`ButtonLabel`](kettle_ui::widget::ButtonLabel))
 //! presses it.
 //!
@@ -44,6 +46,7 @@
 
 mod offscreen;
 mod scope;
+mod text_area;
 
 use std::sync::Arc;
 
@@ -174,7 +177,7 @@ impl Island {
         let mut shown = Shown::default();
         shown.collect(&self.model, self.model.root(), &self.fields);
         match shown.fields.into_iter().next() {
-            Some(id) => operation::focus(id),
+            Some(field) => operation::focus(field.id),
             None => Task::none(),
         }
     }
@@ -252,6 +255,15 @@ fn render<'a>(
             }
             input.into()
         }
+        Kind::TextArea { id, placeholder } => {
+            let mut area = text_area::TextArea::new(fields.text(id), placeholder).on_change_maybe(
+                interactive.then_some(|s| Message(Msg::TextChanged(id.clone(), s))),
+            );
+            if let Some(widget_id) = ids.and_then(|ids| field_id(ids, id)) {
+                area = area.id(widget_id.clone());
+            }
+            area.into()
+        }
         Kind::Checkbox { id, label } => checkbox(fields.checked(id))
             .label(label)
             .on_toggle_maybe(interactive.then_some(|b| Message(Msg::Toggled(id.clone(), b))))
@@ -328,8 +340,8 @@ fn hideable(content: Element<'_, Message>, visible: bool) -> Container<'_, Messa
 /// What a live island shows that its keys act on.
 #[derive(Default)]
 struct Shown {
-    /// The Ids of shown text fields, in tree order.
-    fields: Vec<Id>,
+    /// The shown text fields and areas, in tree order.
+    fields: Vec<scope::Field>,
     /// The keys of shown buttons.
     keys: Vec<(char, Action)>,
     /// Whether a submit button is shown.
@@ -349,7 +361,11 @@ impl Shown {
             Kind::When { state, child } if is_shown(contents, state) => {
                 self.collect(contents, child, ids);
             }
-            Kind::TextField { id, .. } => self.fields.extend(field_id(ids, id).cloned()),
+            Kind::TextField { id, .. } | Kind::TextArea { id, .. } => {
+                let multiline = matches!(widget.kind(), Kind::TextArea { .. });
+                let ids = field_id(ids, id).cloned();
+                (self.fields).extend(ids.map(|id| scope::Field { id, multiline }));
+            }
             Kind::Button { key, action, .. } => {
                 match action {
                     Action::Submit => self.submit = true,
@@ -364,14 +380,14 @@ impl Shown {
     }
 }
 
-/// Collects the ids of the text fields in `widget`, in tree order.
+/// Collects the ids of the text fields and areas in `widget`, in tree order.
 fn text_fields(widget: &Widget, out: &mut Vec<Arc<str>>) {
     match widget.kind() {
         Kind::Column(children) | Kind::Row(children) => {
             children.iter().for_each(|c| text_fields(c, out));
         }
         Kind::When { child, .. } => text_fields(child, out),
-        Kind::TextField { id, .. } => out.push(id.clone()),
+        Kind::TextField { id, .. } | Kind::TextArea { id, .. } => out.push(id.clone()),
         _ => {}
     }
 }
@@ -435,7 +451,7 @@ mod tests {
     use iced_test::instruction::{Expectation, Interaction, Key, Keyboard, Mouse, Target};
     use iced_test::{Instruction, simulator};
     use kettle_ui::widget::{
-        cancel_button, checkbox, column, row, submit_button, text_field, when,
+        cancel_button, checkbox, column, row, submit_button, text_area, text_field, when,
     };
 
     use super::*;
@@ -633,6 +649,59 @@ mod tests {
         ]));
         builder.set_state("hidden", false);
         Island::new(builder).unwrap().0
+    }
+
+    /// A text field and a text area.
+    fn notes() -> Island {
+        let builder = IslandBuilder::new(column([
+            text_field("a", "A"),
+            text_area("b", "B"),
+            submit_button("OK"),
+        ]));
+        Island::new(builder).unwrap().0
+    }
+
+    #[test]
+    fn enter_goes_to_a_text_area_and_starts_new_lines_there() {
+        check(
+            program(notes, Focus::Field("a")),
+            &[
+                expect("focused: Some(true)"),
+                typewrite("1"),
+                press(Key::Enter),
+                typewrite("x"),
+                press(Key::Enter),
+                typewrite("y"),
+                // iced_test can't see the text of a text editor.
+                expect("outcome: None"),
+                Instruction::Interact(Interaction::Mouse(Mouse::Click {
+                    button: mouse::Button::Left,
+                    target: Some(Target::Text("OK".into())),
+                })),
+                expect(r#"outcome: Some("submitted \"1\" \"x\\ny\"")"#),
+            ],
+        );
+    }
+
+    #[test]
+    fn text_area_takes_changes_from_outside() {
+        let mut island = notes();
+        let id = island.field_id("b").unwrap();
+        let _ = island.update(super::Message(super::Msg::TextChanged(
+            "b".into(),
+            "old".into(),
+        )));
+        let messages: Vec<_> = {
+            let mut ui = simulator(island.view());
+            ui.click(id).unwrap();
+            ui.typewrite("!");
+            ui.into_messages().collect()
+        };
+        for message in messages {
+            let _ = island.update(message);
+        }
+        let text = island.freeze().fields().text("b").to_owned();
+        assert!(text.contains("old") && text.contains('!'), "{text:?}");
     }
 
     /// Buttons with keys, and no text fields.

@@ -8,6 +8,11 @@ Known bugs are in BUGS.md.
 
 - The widget tree is fixed once built. kettle-ui is deliberately small:
   options are added only when needed.
+- `text_area` is a multi-line text field. Its value is text, like a text
+  field's (`Fields::text`, `set_text`), so it counts as a text field
+  everywhere: suggestions can target it, and an island with one can't have
+  button keys. Headless clients see `text_area` in the outline, with the
+  value on one line (Debug-escaped).
 - Parts of the tree are hidden with `when(state, widget)`, shown only while
   the named state is `Value::Bool(true)` (missing or another type hides
   it). Showing and hiding doesn't change the tree's shape, and a hidden
@@ -103,6 +108,19 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   focusable widget. It's shown by a thin primary-coloured border around the
   island. `Island::focus` focuses the first shown text field, or the island
   as a whole.
+- A text area is iced's `text_editor` inside our own widget, which keeps the
+  editor's `Content` in its widget state and takes the value as a string,
+  like `text_input`. The `Content` is remade only when the value changes
+  from outside (e.g. a suggestion), so the cursor survives rebuilds. Live,
+  frozen and offscreen islands use the same widget. Rejected: `Content`s
+  kept by the `Island` (frozen and offscreen islands have none, and every
+  change from outside would need syncing); a plain bordered text for frozen
+  islands (another look to keep in step). It's 4 lines high when empty and
+  grows with its text, without its own scrolling, since the scrollback
+  scrolls.
+- In a text area, Enter starts a new line; Ctrl+Enter (Cmd+Enter on macOS)
+  does what Enter does in a text field: focuses the next shown field, or
+  submits in the last one. Ctrl+Enter works in text fields too.
 - Tab doesn't move focus, deliberately unlike desktop conventions: in the
   prompt it completes, and islands move between fields with Enter.
 - The default theme. Styling options are deliberately minimal; global

@@ -14,7 +14,9 @@ use crate::Message;
 
 /// Wraps the UI of a live island, and handles its keys before its widgets
 /// see them:
-/// - Enter in a text field focuses the next one; in the last, it submits.
+/// - Enter in a text field focuses the next field or area; in the last, it
+///   submits. Ctrl+Enter does the same, also in a text area (where Enter
+///   starts a new line).
 /// - Escape, while the island has focus, cancels.
 /// - A button's key presses it, while the island has focus.
 ///
@@ -27,14 +29,21 @@ pub(crate) struct Scope<'a> {
     pub id: Id,
     /// Whether the island can have focus as a whole.
     pub focusable: bool,
-    /// The Ids of the shown text fields, in tree order.
-    pub fields: Vec<Id>,
+    /// The shown text fields and areas, in tree order.
+    pub fields: Vec<Field>,
     /// The keys of shown buttons, and what pressing them sends.
     pub keys: Vec<(char, Message)>,
     /// What a shown submit button sends, if there is one.
     pub submit: Option<Message>,
     /// What a shown cancel button sends, if there is one.
     pub cancel: Option<Message>,
+}
+
+/// A shown text field or area.
+pub(crate) struct Field {
+    pub id: Id,
+    /// Whether it's a text area, where Enter starts a new line.
+    pub multiline: bool,
 }
 
 /// Whether the island has focus as a whole.
@@ -64,14 +73,19 @@ enum KeyAction {
 }
 
 impl Scope<'_> {
-    /// What pressing `key` (without modifiers) does, if anything.
+    /// What pressing `key` with `modifiers` does, if anything.
     fn key_action(
         &mut self,
         tree: &mut Tree,
         key: &keyboard::Key,
+        modifiers: keyboard::Modifiers,
         layout: Layout<'_>,
         renderer: &Renderer,
     ) -> Option<KeyAction> {
+        let plain = modifiers.is_empty();
+        if !plain && modifiers != keyboard::Modifiers::COMMAND {
+            return None;
+        }
         let whole = tree.state.downcast_ref::<State>().focused;
         let field = if self.fields.is_empty() {
             None
@@ -89,14 +103,20 @@ impl Scope<'_> {
             find.focused
         };
         match key.as_ref() {
-            keyboard::Key::Named(key::Named::Escape) if whole || field.is_some() => {
+            keyboard::Key::Named(key::Named::Escape) if plain && (whole || field.is_some()) => {
                 self.cancel.clone().map(KeyAction::Send)
             }
-            keyboard::Key::Named(key::Named::Enter) => match self.fields.get(field? + 1) {
-                Some(next) => Some(KeyAction::Focus(next.clone())),
-                None => self.submit.clone().map(KeyAction::Send),
-            },
-            keyboard::Key::Character(c) if whole => {
+            keyboard::Key::Named(key::Named::Enter) => {
+                let field = field?;
+                if plain && self.fields[field].multiline {
+                    return None;
+                }
+                match self.fields.get(field + 1) {
+                    Some(next) => Some(KeyAction::Focus(next.id.clone())),
+                    None => self.submit.clone().map(KeyAction::Send),
+                }
+            }
+            keyboard::Key::Character(c) if plain && whole => {
                 let mut chars = c.chars().map(|c| c.to_ascii_lowercase());
                 let (Some(c), None) = (chars.next(), chars.next()) else {
                     return None;
@@ -222,10 +242,10 @@ impl Widget<Message, Theme, Renderer> for Scope<'_> {
                     shell.request_redraw();
                 }
             }
-            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. })
-                if modifiers.is_empty() =>
-            {
-                if let Some(action) = self.key_action(tree, key, child(layout), renderer) {
+            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                if let Some(action) =
+                    self.key_action(tree, key, *modifiers, child(layout), renderer)
+                {
                     match action {
                         KeyAction::Send(message) => shell.publish(message),
                         KeyAction::Focus(id) => {
@@ -306,7 +326,7 @@ fn child(layout: Layout<'_>) -> Layout<'_> {
 
 /// Finds which of `fields` has focus.
 struct FindField<'a> {
-    fields: &'a [Id],
+    fields: &'a [Field],
     focused: Option<usize>,
 }
 
@@ -315,7 +335,11 @@ impl Operation for FindField<'_> {
         if state.is_focused()
             && let Some(id) = id
         {
-            self.focused = self.fields.iter().position(|f| f == id).or(self.focused);
+            self.focused = self
+                .fields
+                .iter()
+                .position(|f| f.id == *id)
+                .or(self.focused);
         }
     }
 

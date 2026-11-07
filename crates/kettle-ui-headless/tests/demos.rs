@@ -11,6 +11,7 @@ fn contact() {
     let mut island = Island::new(Demo::Contact.builder()).unwrap();
     island.type_text("name", "Ada").unwrap();
     island.set_checked("subscribe", true).unwrap();
+    island.type_text("message", "Hi!\nBye.").unwrap();
     assert_eq!(
         island.to_string(),
         r#"column
@@ -18,6 +19,8 @@ fn contact() {
   text_field name: "Ada"
   label "Hello, Ada!"
   checkbox subscribe: [x] "Subscribe to updates"
+  label "Message"
+  text_area message: "Hi!\nBye."
   row
     button "Submit"
     button "Cancel"
@@ -29,7 +32,7 @@ fn contact() {
     };
     assert_eq!(
         Demo::Contact.summary(&fields),
-        r#"name "Ada", subscribe true"#
+        r#"name "Ada", subscribe true, message "Hi!\nBye.""#
     );
     assert!(matches!(island.press("Cancel"), Ok(Outcome::Cancelled)));
 }
