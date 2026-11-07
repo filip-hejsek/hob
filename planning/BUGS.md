@@ -24,6 +24,12 @@ TODO.md.
 - Derived state is computed on the server thread, so a slow computation
   holds up everything else (see kettle-ui-headless in DECISIONS.md).
 
+## hob-mcp
+
+- The `reports_crashes` test is flaky (failed once in about ten runs): the
+  result after `crash` lacked "[2] was interrupted" (the `crash` command
+  itself). Not investigated.
+
 ## Logging
 
 - A dependency that logs many different messages (e.g. with a changing

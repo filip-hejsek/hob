@@ -240,8 +240,25 @@ and renders the island as an indented text outline.
   descriptions; `help COMMAND` shows one. Commands see the registered
   commands through `ctx.commands()`.
 - Command names must start with a letter or digit (`char::is_alphanumeric`;
-  `register` panics otherwise). Lines starting with other characters
-  (`!`, `@`, `#`, `_`, ...) are reserved for features other than commands.
+  `register` panics otherwise). Names starting with other characters
+  (`!`, `@`, `#`, `_`, ...) are reserved for prefix commands and other
+  features.
+- Prefix commands (`register_prefix`) are registered by a prefix that starts
+  with a special character and has no whitespace, and run for any line
+  starting with it (after leading whitespace), getting the rest of the line
+  unsplit. The longest matching prefix wins. They share the name table with
+  other commands, so `help` lists them and `help !` describes one, but Tab
+  doesn't complete them: completing `!` to `! ` would only get in the way.
+- `!COMMAND` (a builtin) runs a shell command with `sh -c`, not `$SHELL`, so
+  the syntax is the same whatever the user's login shell. It runs in the
+  interpreter's working directory, with pipes for stdio and no pty. Nothing
+  is written to stdin, which is closed at once, so a program reading input
+  gets end of file instead of hanging. Stdout and stderr are both printed
+  (as in a terminal), as they arrive, in chunks of whole lines, so fast
+  output doesn't make one entry per line; non-UTF-8 bytes are replaced.
+  Output is limited to 1 MiB, like `cat`, with a warning; the rest is read
+  and dropped, so the program isn't blocked on a full pipe. A failing exit
+  status is the command's error.
 - The interpreter has a working directory, simulated: the process's own
   is never changed, since commands run concurrently in one process. It
   starts as the process's. Each command gets a snapshot when it starts

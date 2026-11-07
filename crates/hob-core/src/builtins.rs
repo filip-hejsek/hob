@@ -1,5 +1,7 @@
 //! Commands that work with any frontend. Register them with [`register`].
 //!
+//! - `!COMMAND`: runs a shell command with `sh -c`, in the working directory,
+//!   printing its output (stdout and stderr) as it comes.
 //! - `clear`: clears the scrollback.
 //! - `exit`: exits hob; if other commands are running, asks first, listing
 //!   them.
@@ -9,6 +11,11 @@
 //! - `messages [LEVEL]`: lists the log records the frontend has, oldest
 //!   first, from `LEVEL` up (`info` by default, so `messages debug` lists
 //!   all).
+
+use std::io::Read;
+use std::process::Stdio;
+use std::sync::mpsc;
+use std::thread;
 
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, Zoned};
@@ -20,6 +27,7 @@ use crate::{CommandResult, Context, Interpreter, Level, LogRecord};
 
 /// Registers all built-in commands.
 pub fn register(interpreter: &mut Interpreter) {
+    interpreter.register_prefix("!", "Run a shell command: !COMMAND", shell);
     interpreter.register("clear", "Clear the scrollback", clear);
     interpreter.register("exit", "Exit hob", exit);
     interpreter.register("help", "List the commands, or describe one", help);
@@ -29,6 +37,117 @@ pub fn register(interpreter: &mut Interpreter) {
         "List log messages, from LEVEL up (info by default)",
         messages,
     );
+}
+
+/// The most output of a shell command that's shown. The scrollback isn't
+/// made for more, and it's saved with the session.
+const SHELL_OUTPUT_LIMIT: usize = 1024 * 1024;
+
+/// Runs `command` with `sh -c`, with pipes for stdio. Nothing is written to
+/// its stdin, which is closed right away. Its stdout and stderr are printed
+/// as they come, a chunk of whole lines at a time, up to
+/// [`SHELL_OUTPUT_LIMIT`]; the rest is read but dropped. Exiting with a
+/// failure is an error.
+fn shell(ctx: &mut Context, command: &str) -> CommandResult {
+    if command.trim().is_empty() {
+        return Err("usage: !COMMAND".into());
+    }
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(ctx.cwd())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("couldn't run sh: {e}"))?;
+    drop(child.stdin.take());
+    let pipes: [Box<dyn Read + Send>; 2] = [
+        Box::new(child.stdout.take().expect("stdout is piped")),
+        Box::new(child.stderr.take().expect("stderr is piped")),
+    ];
+    let (sender, receiver) = mpsc::channel();
+    thread::scope(|scope| {
+        for (index, mut pipe) in pipes.into_iter().enumerate() {
+            let sender = sender.clone();
+            scope.spawn(move || {
+                let mut buffer = vec![0; 64 * 1024];
+                // A read error is treated like the end of the output.
+                while let Ok(n @ 1..) = pipe.read(&mut buffer) {
+                    let _ = sender.send((index, buffer[..n].to_vec()));
+                }
+            });
+        }
+        drop(sender);
+        let mut output = ShellOutput::default();
+        for (index, chunk) in receiver {
+            output.add(ctx, index, &chunk);
+        }
+        output.finish(ctx);
+    });
+    let status = child.wait()?;
+    match status.code() {
+        _ if status.success() => Ok(()),
+        Some(code) => Err(format!("exited with status {code}").into()),
+        None => Err("was killed by a signal".into()),
+    }
+}
+
+/// Prints a shell command's output: whole lines, each stream's own.
+#[derive(Default)]
+struct ShellOutput {
+    /// The incomplete last line of stdout and of stderr.
+    partial: [Vec<u8>; 2],
+    /// How many bytes were printed.
+    printed: usize,
+    /// Whether output was dropped over the limit.
+    truncated: bool,
+}
+
+impl ShellOutput {
+    /// Adds a chunk read from stream `index`, printing its whole lines.
+    fn add(&mut self, ctx: &Context, index: usize, chunk: &[u8]) {
+        if self.truncated {
+            return;
+        }
+        let partial = &mut self.partial[index];
+        partial.extend_from_slice(chunk);
+        if partial.len() > SHELL_OUTPUT_LIMIT {
+            // A line too long to show whole.
+            let line = std::mem::take(partial);
+            self.print(ctx, &line);
+        } else if let Some(end) = partial.iter().rposition(|&b| b == b'\n') {
+            let rest = partial.split_off(end + 1);
+            let lines = std::mem::replace(partial, rest);
+            self.print(ctx, &lines);
+        }
+    }
+
+    /// Prints the incomplete last lines.
+    fn finish(mut self, ctx: &Context) {
+        for partial in std::mem::take(&mut self.partial) {
+            self.print(ctx, &partial);
+        }
+    }
+
+    /// Prints `bytes` (without a final line break), as far as the limit
+    /// allows; warns once when it's reached.
+    fn print(&mut self, ctx: &Context, bytes: &[u8]) {
+        if bytes.is_empty() || self.truncated {
+            return;
+        }
+        let left = SHELL_OUTPUT_LIMIT - self.printed;
+        let shown = &bytes[..bytes.len().min(left)];
+        self.printed += shown.len();
+        let shown = shown.strip_suffix(b"\n").unwrap_or(shown);
+        if !shown.is_empty() {
+            ctx.print(String::from_utf8_lossy(shown));
+        }
+        if bytes.len() > left {
+            self.truncated = true;
+            ctx.warn("output truncated at 1 MiB");
+        }
+    }
 }
 
 fn clear(ctx: &mut Context, args: &[String]) -> CommandResult {
@@ -237,7 +356,8 @@ mod tests {
     fn help_lists_commands() {
         assert_eq!(
             run("help", vec![]),
-            ["clear — Clear the scrollback\n\
+            ["! — Run a shell command: !COMMAND\n\
+              clear — Clear the scrollback\n\
               exit — Exit hob\n\
               help — List the commands, or describe one\n\
               jobs — List the other running commands\n\
@@ -285,6 +405,68 @@ mod tests {
             run_with("exit", vec![], running(), Some(Outcome::Cancelled)),
             ["<island>", "Not exiting."]
         );
+    }
+
+    /// What a shell command prints or logs, as one string.
+    fn shell(line: &str) -> String {
+        run(line, vec![]).join("\n")
+    }
+
+    #[test]
+    fn shell_commands_print_their_output() {
+        assert_eq!(shell("!echo a; echo b"), "a\nb");
+        assert_eq!(shell("! printf 'no newline'"), "no newline");
+        assert_eq!(shell("!echo oops >&2"), "oops");
+        assert_eq!(shell("!true"), "");
+    }
+
+    #[test]
+    fn shell_commands_run_in_the_working_directory() {
+        let mut interpreter = Interpreter::new();
+        register(&mut interpreter);
+        interpreter.set_cwd("/");
+        let mut requests = interpreter.run("!pwd").unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let message = loop {
+            match std::pin::Pin::new(&mut requests).poll_next(&mut cx) {
+                std::task::Poll::Ready(Some(Request::Print(message))) => break message,
+                std::task::Poll::Ready(_) => panic!("expected Print"),
+                std::task::Poll::Pending => std::thread::sleep(Duration::from_millis(1)),
+            }
+        };
+        assert_eq!(message, "/");
+    }
+
+    #[test]
+    fn shell_commands_get_an_empty_stdin() {
+        assert_eq!(shell("!cat; echo done"), "done");
+    }
+
+    #[test]
+    fn failing_shell_commands_are_errors() {
+        assert_eq!(shell("!exit 3"), "error: exited with status 3");
+        assert_eq!(shell("!kill -9 $$"), "error: was killed by a signal");
+        assert_eq!(shell("!"), "error: usage: !COMMAND");
+    }
+
+    #[test]
+    fn shell_output_is_limited() {
+        let limit = SHELL_OUTPUT_LIMIT;
+        // Lines are printed without their line breaks.
+        let lines = |output: &[String]| output.iter().map(|p| p.len() + 1).sum::<usize>();
+        let output = run(&format!("!yes | head -c {limit}"), vec![]);
+        assert_eq!(lines(&output), limit, "all of it, without a warning");
+        let output = run(&format!("!yes | head -c {}", 3 * limit), vec![]);
+        let (warning, printed) = output.split_last().unwrap();
+        assert_eq!(warning, "warning: output truncated at 1 MiB");
+        assert_eq!(lines(printed), limit);
+        let output = run(
+            &format!("!yes | tr -d '\\n' | head -c {}", 3 * limit),
+            vec![],
+        );
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0].len(), limit, "one long line");
     }
 
     #[test]

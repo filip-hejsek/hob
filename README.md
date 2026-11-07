@@ -48,6 +48,9 @@ the platform's state directory (e.g. `~/.local/state/hob/session.json`); set
 `hob --preview [FILE]` shows a saved session (by default, the current one)
 read-only: nothing runs, and the file isn't changed.
 
+A line starting with `!` runs a shell command (with `sh -c`), e.g.
+`!git status`. Its output is shown as it comes; it can't read input yet.
+
 Errors and warnings are shown in the scrollback (warnings from libraries only
 on stderr); the `messages` command lists all messages. Set `HOB_LOG=debug` to
 also show debug messages.

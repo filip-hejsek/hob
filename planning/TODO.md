@@ -106,6 +106,10 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   also drive argument completion?) and what `help COMMAND` shows. For now it
   shows the one-line description.
 
+- `!COMMAND`: there's no way to stop a shell command, or to give it input,
+  and it's left running when hob exits. A pty would give programs colours
+  and progress output, but would need a terminal emulator to show it.
+
 - The working directory isn't saved with the session, and isn't shown
   anywhere but by `pwd`. The prompt, or each block's command line, could
   show it.

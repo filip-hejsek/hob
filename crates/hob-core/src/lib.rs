@@ -1,7 +1,9 @@
 //! The hob command interpreter, independent of any GUI toolkit.
 //!
 //! Commands are registered on an [`Interpreter`] by name, with a one-line
-//! description. Running a command
+//! description. A command can instead be registered by a prefix that starts
+//! with a special character, such as `!`: it then gets the rest of the line
+//! ([`Interpreter::register_prefix`]). Running a command
 //! line ([`Interpreter::run`]) starts the command on its own thread. The
 //! command talks to the user through a [`Context`], in the style of a terminal
 //! program: [`Context::print`] shows a message, [`Context::print_island`] shows
@@ -64,17 +66,27 @@ pub use session::{Block, Entry, Item, Session, SessionError};
 /// What a command returns: any error is shown to the user.
 pub type CommandResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
-type CommandFn = Arc<dyn Fn(&mut Context, &[String]) -> CommandResult + Send + Sync>;
+/// A command's function, given its arguments.
+type CommandFn<Args> = Arc<dyn Fn(&mut Context, &Args) -> CommandResult + Send + Sync>;
+
+/// How a command is run.
+#[derive(Clone)]
+enum Run {
+    /// With the words after its name.
+    Words(CommandFn<[String]>),
+    /// With the rest of the line after its prefix.
+    Rest(CommandFn<str>),
+}
 
 /// A registered command.
 #[derive(Clone)]
 struct Command {
     description: String,
-    run: CommandFn,
+    run: Run,
 }
 
-/// The registered commands, by name. Shared with running commands, see
-/// [`Context::commands`].
+/// The registered commands, by name (or prefix). Shared with running
+/// commands, see [`Context::commands`].
 type Commands = Arc<BTreeMap<String, Command>>;
 
 /// The interpreter's working directory, shared with running commands so
@@ -137,20 +149,44 @@ impl Interpreter {
             name.starts_with(char::is_alphanumeric),
             "the name {name:?} must start with a letter or digit"
         );
-        let description = description.into();
+        self.insert(name, description.into(), Run::Words(Arc::new(run)));
+    }
+
+    /// Registers a command that's run for every line starting with `prefix`,
+    /// e.g. `!` for `!ls -l`. It gets the rest of the line, unsplit (`ls -l`).
+    /// If several prefixes match, the longest wins. `help` lists it like
+    /// other commands; Tab doesn't complete it.
+    ///
+    /// # Panics
+    ///
+    /// If a command with this prefix is already registered, the prefix
+    /// doesn't start with a special character (one that isn't a letter, digit
+    /// or whitespace) or contains whitespace, or the description is empty or
+    /// has more than one line.
+    pub fn register_prefix(
+        &mut self,
+        prefix: &str,
+        description: impl Into<String>,
+        run: impl Fn(&mut Context, &str) -> CommandResult + Send + Sync + 'static,
+    ) {
+        assert!(
+            is_prefix(prefix) && !prefix.contains(char::is_whitespace),
+            "the prefix {prefix:?} must start with a special character and have no whitespace"
+        );
+        self.insert(prefix, description.into(), Run::Rest(Arc::new(run)));
+    }
+
+    fn insert(&mut self, name: &str, description: String, run: Run) {
         assert!(
             !description.trim().is_empty() && !description.contains('\n'),
             "the description of {name:?} must be one non-empty line"
         );
-        let command = Command {
-            description,
-            run: Arc::new(run),
-        };
+        let command = Command { description, run };
         let previous = Arc::make_mut(&mut self.commands).insert(name.to_owned(), command);
         assert!(previous.is_none(), "command {name:?} is already registered");
     }
 
-    /// The names of all commands, sorted.
+    /// The names (or prefixes) of all commands, sorted.
     pub fn commands(&self) -> impl Iterator<Item = &str> {
         self.commands.keys().map(String::as_str)
     }
@@ -165,10 +201,13 @@ impl Interpreter {
             line: line.to_owned(),
             candidates: Vec::new(),
         };
-        if word.contains(char::is_whitespace) {
+        if word.contains(char::is_whitespace) || is_prefix(word) {
             return unchanged;
         }
-        let matches: Vec<&str> = self.commands().filter(|c| c.starts_with(word)).collect();
+        let matches: Vec<&str> = self
+            .commands()
+            .filter(|c| !is_prefix(c) && c.starts_with(word))
+            .collect();
         match matches.as_slice() {
             [] => unchanged,
             [only] => Completion {
@@ -187,22 +226,44 @@ impl Interpreter {
         }
     }
 
-    /// Starts running a command line on a new thread. The line is split into
-    /// words at whitespace; the first is the command name.
+    /// Starts running a command line on a new thread. If it starts with a
+    /// special character (after any whitespace), it runs the command with the
+    /// longest matching prefix. Otherwise it's split into words at whitespace;
+    /// the first is the command name.
     ///
     /// Returns the command's requests, which the frontend must carry out. The
     /// stream ends when the command finishes. If the command fails or panics,
     /// its last request is a [`Request::Log`] of the error.
     pub fn run(&self, line: &str) -> Result<Requests, Error> {
-        let mut words = line.split_whitespace().map(str::to_owned);
-        let name = words.next().ok_or(Error::Empty)?;
-        let Some(command) = self.commands.get(&name).map(|c| c.run.clone()) else {
+        let line = line.trim_start();
+        let found = match is_prefix(line) {
+            true => (self.commands.iter())
+                .filter(|(prefix, _)| is_prefix(prefix) && line.starts_with(prefix.as_str()))
+                .max_by_key(|(prefix, _)| prefix.len())
+                .map(|(prefix, command)| (prefix.clone(), command.run.clone())),
+            false => {
+                let name = line.split_whitespace().next().ok_or(Error::Empty)?;
+                (self.commands.get(name)).map(|command| (name.to_owned(), command.run.clone()))
+            }
+        };
+        let Some((name, run)) = found else {
+            let name = line.split_whitespace().next().unwrap_or_default();
             return Err(Error::UnknownCommand {
-                name,
+                name: name.to_owned(),
                 known: self.commands.keys().cloned().collect(),
             });
         };
-        let args: Vec<String> = words.collect();
+        let command: Box<dyn FnOnce(&mut Context) -> CommandResult + Send> = match run {
+            Run::Words(run) => {
+                let args: Vec<String> =
+                    line.split_whitespace().skip(1).map(str::to_owned).collect();
+                Box::new(move |ctx| run(ctx, &args))
+            }
+            Run::Rest(run) => {
+                let rest = line[name.len()..].to_owned();
+                Box::new(move |ctx| run(ctx, &rest))
+            }
+        };
         let (sender, receiver) = mpsc::unbounded();
         let mut ctx = Context {
             name: name.clone(),
@@ -214,8 +275,7 @@ impl Interpreter {
         thread::Builder::new()
             .name(format!("hob command {name}"))
             .spawn(move || {
-                let error = match panic::catch_unwind(AssertUnwindSafe(|| command(&mut ctx, &args)))
-                {
+                let error = match panic::catch_unwind(AssertUnwindSafe(|| command(&mut ctx))) {
                     Ok(Ok(())) => return,
                     Ok(Err(e)) => e.to_string(),
                     Err(panic) => match panic_message(&*panic) {
@@ -228,6 +288,11 @@ impl Interpreter {
             .map_err(Error::Spawn)?;
         Ok(Requests(receiver))
     }
+}
+
+/// Whether a command name is a prefix: it starts with a special character.
+fn is_prefix(name: &str) -> bool {
+    name.starts_with(|c: char| !c.is_alphanumeric() && !c.is_whitespace())
 }
 
 /// Locks the working directory. Nothing can panic while it's locked, but
@@ -318,8 +383,8 @@ pub struct Context {
 }
 
 impl Context {
-    /// All registered commands, sorted by name: their names and
-    /// descriptions.
+    /// All registered commands, sorted by name: their names (or prefixes)
+    /// and descriptions.
     pub fn commands(&self) -> impl Iterator<Item = (&str, &str)> {
         (self.commands.iter()).map(|(name, command)| (name.as_str(), command.description.as_str()))
     }
@@ -823,6 +888,65 @@ mod tests {
     #[should_panic(expected = "must start with a letter or digit")]
     fn names_must_not_be_empty() {
         Interpreter::new().register("", "Test", |_, _| Ok(()));
+    }
+
+    fn prefixed() -> Interpreter {
+        let mut i = Interpreter::new();
+        i.register("echo", "Test", |ctx, args| {
+            ctx.print(args.join(" "));
+            Ok(())
+        });
+        i.register_prefix("!", "Test", |ctx, rest| {
+            ctx.print(format!("1:{rest}"));
+            Ok(())
+        });
+        i.register_prefix("!!", "Test", |ctx, rest| {
+            ctx.print(format!("2:{rest}"));
+            Ok(())
+        });
+        i
+    }
+
+    #[test]
+    fn prefix_commands_get_the_rest_of_the_line() {
+        let i = prefixed();
+        assert_eq!(printed(&mut i.run("!ls  -l").unwrap()), "1:ls  -l");
+        assert_eq!(printed(&mut i.run("  ! ls").unwrap()), "1: ls");
+        assert_eq!(printed(&mut i.run("!").unwrap()), "1:");
+        assert_eq!(printed(&mut i.run("echo !x").unwrap()), "!x");
+    }
+
+    #[test]
+    fn the_longest_prefix_wins() {
+        let i = prefixed();
+        assert_eq!(printed(&mut i.run("!!x").unwrap()), "2:x");
+    }
+
+    #[test]
+    fn unmatched_prefixes_are_unknown_commands() {
+        let Err(Error::UnknownCommand { name, .. }) = prefixed().run("@x y") else {
+            panic!("expected UnknownCommand");
+        };
+        assert_eq!(name, "@x");
+    }
+
+    #[test]
+    fn prefix_commands_are_not_completed() {
+        let i = prefixed();
+        assert_eq!(i.complete("").line, "echo ");
+        assert_eq!(i.complete("!").line, "!");
+    }
+
+    #[test]
+    #[should_panic(expected = "must start with a special character")]
+    fn prefixes_must_start_with_a_special_character() {
+        Interpreter::new().register_prefix("x", "Test", |_, _| Ok(()));
+    }
+
+    #[test]
+    #[should_panic(expected = "must start with a special character")]
+    fn prefixes_must_not_contain_whitespace() {
+        Interpreter::new().register_prefix("! ", "Test", |_, _| Ok(()));
     }
 
     #[test]
