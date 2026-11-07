@@ -13,18 +13,60 @@ use gix::diff::blob::{Algorithm, InternedInput, UnifiedDiff};
 use gix::status::index_worktree::Item as WorktreeItem;
 use gix::status::index_worktree::iter::Summary;
 use gix::status::{Item, UntrackedFiles};
+use hob_core::args::{CompletionContext, Kind, Matches, Spec};
 use hob_core::{CommandResult, Context, Interpreter};
 
 /// Registers the `git` command.
 pub fn register(interpreter: &mut Interpreter) {
-    interpreter.register(
+    let spec = Spec::new()
+        .subcommand("status", "Show the changes in the worktree", Spec::new())
+        .subcommand(
+            "log",
+            "Show commits, newest first",
+            Spec::new()
+                .option(
+                    "max-count",
+                    "N",
+                    Kind::Text,
+                    "Show N commits (20 by default)",
+                )
+                .short('n')
+                .arg("REV", Kind::custom(revisions))
+                .optional(),
+        )
+        .subcommand("branch", "List the branches", Spec::new())
+        .subcommand(
+            "diff",
+            "Show unstaged changes",
+            Spec::new()
+                .flag("cached", "Show staged changes instead")
+                .flag("staged", "The same as --cached"),
+        );
+    interpreter.register_spec(
         "git",
         "Inspect a Git repository: git status, log, branch or diff",
+        spec,
         git,
     );
 }
 
-const USAGE: &str = "usage: git status | log [-n N] [REV] | branch | diff [--cached]";
+/// `HEAD` and the names of the local branches and tags, for completion.
+fn revisions(ctx: &CompletionContext) -> Vec<String> {
+    let Ok(repo) = gix::discover(ctx.cwd()) else {
+        return Vec::new();
+    };
+    let Ok(references) = repo.references() else {
+        return Vec::new();
+    };
+    let mut names = vec!["HEAD".to_owned()];
+    for iter in [references.local_branches(), references.tags()] {
+        let Ok(iter) = iter else { continue };
+        for reference in iter.flatten() {
+            names.push(reference.name().shorten().to_str_lossy().into_owned());
+        }
+    }
+    names
+}
 
 /// How many commits `git log` shows unless `-n` says otherwise. The
 /// scrollback isn't made for a whole history, and it's saved with the session.
@@ -33,16 +75,14 @@ const LOG_LIMIT: usize = 20;
 /// The most `git diff` prints, in bytes, like `cat`'s limit.
 const DIFF_LIMIT: usize = 1024 * 1024;
 
-fn git(ctx: &mut Context, args: &[String]) -> CommandResult {
-    let Some((subcommand, args)) = args.split_first() else {
-        return Err(USAGE.into());
-    };
-    let result = match subcommand.as_str() {
-        "status" => status(ctx, args),
+fn git(ctx: &mut Context, args: &Matches) -> CommandResult {
+    let (subcommand, args) = args.subcommand().expect("git has subcommands");
+    let result = match subcommand {
+        "status" => status(ctx),
         "log" => log(ctx, args),
-        "branch" => branch(ctx, args),
+        "branch" => branch(ctx),
         "diff" => diff(ctx, args),
-        _ => return Err(format!("unknown subcommand {subcommand:?}; {USAGE}").into()),
+        _ => unreachable!("subcommands are declared"),
     };
     Ok(result?)
 }
@@ -139,10 +179,7 @@ fn relative(path: &str, dir: &Path) -> String {
 
 /// Prints the current branch, then the changes staged for commit, those not
 /// staged, and untracked files, like a short `git status`.
-fn status(ctx: &mut Context, args: &[String]) -> Result<()> {
-    if !args.is_empty() {
-        return Err("usage: git status".into());
-    }
+fn status(ctx: &mut Context) -> Result<()> {
     let repo = Repo::discover(ctx)?;
     repo.workdir()?;
     ctx.print(head_description(&repo.repo)?);
@@ -254,28 +291,9 @@ fn head_description(repo: &gix::Repository) -> Result<String> {
 /// Prints commits reachable from `REV` (by default `HEAD`), newest first, one
 /// line each like `git log --oneline`: at most `N` (by default
 /// [`LOG_LIMIT`]).
-fn log(ctx: &mut Context, args: &[String]) -> Result<()> {
-    const USAGE: &str = "usage: git log [-n N] [REV]";
-    let mut limit = LOG_LIMIT;
-    let mut rev = None;
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
-        let number = match arg.as_str() {
-            "-n" => args.next().ok_or(USAGE)?.as_str(),
-            arg if arg.starts_with("-n") => &arg[2..],
-            arg if arg.starts_with('-') && arg != "-" => {
-                return Err(format!("unknown option {arg}; {USAGE}").into());
-            }
-            arg if rev.is_none() => {
-                rev = Some(arg);
-                continue;
-            }
-            _ => return Err(USAGE.into()),
-        };
-        limit = number
-            .parse()
-            .map_err(|_| format!("not a number: {number:?}"))?;
-    }
+fn log(ctx: &mut Context, args: &Matches) -> Result<()> {
+    let limit = args.parse("max-count")?.unwrap_or(LOG_LIMIT);
+    let rev = args.value("REV");
     let repo = Repo::discover(ctx)?;
     let rev = rev.unwrap_or("HEAD");
     let tip = match repo.repo.rev_parse_single(rev) {
@@ -313,10 +331,7 @@ fn log(ctx: &mut Context, args: &[String]) -> Result<()> {
 }
 
 /// Lists local branches, marking the current one with `*`.
-fn branch(ctx: &mut Context, args: &[String]) -> Result<()> {
-    if !args.is_empty() {
-        return Err("usage: git branch".into());
-    }
+fn branch(ctx: &mut Context) -> Result<()> {
     let repo = Repo::discover(ctx)?;
     let head = repo.repo.head_name()?;
     let mut lines = Vec::new();
@@ -364,12 +379,8 @@ enum Side {
 ///
 /// Files are compared as they are stored, without git's filters (such as
 /// line ending conversion) or diff drivers.
-fn diff(ctx: &mut Context, args: &[String]) -> Result<()> {
-    let cached = match args {
-        [] => false,
-        [flag] if flag == "--cached" || flag == "--staged" => true,
-        _ => return Err("usage: git diff [--cached]".into()),
-    };
+fn diff(ctx: &mut Context, args: &Matches) -> Result<()> {
+    let cached = args.flag("cached") || args.flag("staged");
     let repo = Repo::discover(ctx)?;
     let workdir = repo.workdir()?.to_owned();
     let mut changes = Vec::new();

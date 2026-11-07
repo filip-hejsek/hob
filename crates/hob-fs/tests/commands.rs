@@ -59,7 +59,10 @@ fn ls() {
             "a.txt".to_owned(),
         ]
     );
-    assert_eq!(run(&i, "ls -x"), ["error: unknown option -x"]);
+    assert_eq!(
+        run(&i, "ls -x"),
+        ["error: unknown option -x; usage: ls [-a] [PATH...]"]
+    );
 }
 
 #[test]
@@ -84,7 +87,7 @@ fn cat() {
             format!("error: {}: Is a directory", path(&dir, "sub")),
         ]
     );
-    assert_eq!(run(&i, "cat"), ["error: usage: cat FILE..."]);
+    assert_eq!(run(&i, "cat"), ["error: missing FILE; usage: cat FILE..."]);
 }
 
 #[test]
@@ -148,6 +151,9 @@ fn cd_checks_the_directory() {
             path(&dir, "nope")
         )]
     );
-    assert_eq!(run(&i, "cd a b"), ["error: usage: cd [DIR]"]);
+    assert_eq!(
+        run(&i, "cd a b"),
+        [r#"error: unexpected argument "b"; usage: cd [DIR]"#]
+    );
     assert_eq!(i.cwd(), Path::new(dir.path()));
 }

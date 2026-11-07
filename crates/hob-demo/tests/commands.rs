@@ -47,15 +47,21 @@ fn echo() {
 #[test]
 fn count() {
     assert_eq!(rest(run("count 3")), ["1", "2", "3"]);
-    assert_eq!(rest(run("count x")), [r#"error: not a number: "x""#]);
-    assert_eq!(rest(run("count 1 2")), ["error: usage: count [N]"]);
+    assert_eq!(rest(run("count x")), [r#"error: invalid N: "x""#]);
+    assert_eq!(
+        rest(run("count 1 2")),
+        [r#"error: unexpected argument "2"; usage: count [N]"#]
+    );
 }
 
 #[test]
 fn errors() {
     assert_eq!(rest(run("fail oh no")), ["About to fail…", "error: oh no"]);
     assert_eq!(rest(run("panic")), ["error: panicked: the demo panicked"]);
-    assert_eq!(rest(run("contact x")), ["error: takes no arguments"]);
+    assert_eq!(
+        rest(run("contact x")),
+        [r#"error: unexpected argument "x"; usage: contact"#]
+    );
 }
 
 #[test]

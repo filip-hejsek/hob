@@ -242,12 +242,28 @@ and renders the island as an indented text outline.
   doesn't split (an unclosed quote, a trailing `\`) is an error. Rejected:
   only double quotes, which would surprise shell users typing `'a b'` or
   `a\ b`.
+- Commands declare their arguments with a small spec (`hob_core::args`,
+  `register_spec`): options (flags, or with a value), then positional
+  arguments (optional, repeated) or subcommands. hob-core parses them
+  into `Matches`, and the spec gives the usage line in parse errors
+  (`unknown option -x; usage: ls [-a] [PATH...]`) and the full help that
+  `help COMMAND` shows. Options are parsed like `getopt`: before the first
+  operand, `--` ends them, `-al` combines flags, `-n5`/`-n 5`/`--max-count=5`;
+  every option has a long name, a short one is optional. Each argument
+  has a kind (text, path, directory, a choice of words, or a custom
+  completer) for completion. Kept small on purpose: no defaults, value
+  types or validators beyond choices (commands parse values with
+  `Matches::parse`). Plain `register` stays for commands that take free
+  text (`echo`, `confirm`). Rejected: clap (a big dependency with its own
+  help style, made for process arguments), and only a completion callback
+  per command (no shared parsing, usage or help).
 - Commands that work with any frontend (such as `help` and `messages`) are
   built into hob-core (`hob_core::builtins`), and registered by `hob`.
 - Every command is registered with a one-line description (required, so
   `help` never has gaps), written as an imperative without a full stop:
   "Print the arguments". Bare `help` lists all commands with their
-  descriptions; `help COMMAND` shows one. Commands see the registered
+  descriptions; `help COMMAND` shows one, with its usage and options if
+  it declared its arguments. Commands see the registered
   commands through `ctx.commands()`.
 - Command names must start with a letter or digit (`char::is_alphanumeric`;
   `register` panics otherwise). Names starting with other characters
@@ -287,8 +303,8 @@ and renders the island as an indented text outline.
 ## Filesystem commands (hob-fs)
 
 `pwd`, `cd`, `ls` and `cat`, behaving like their Unix namesakes where
-there's no reason to differ. Options are parsed like `getopt` (flags before
-operands, `--` ends them); unknown ones are errors.
+there's no reason to differ. Their arguments are declared (see hob-core),
+so options are parsed like `getopt` and unknown ones are errors.
 
 - `cd` resolves `..` lexically, like bash's default (`cd -L`), so
   `cd link/..` comes back. It checks that the target is a directory. No

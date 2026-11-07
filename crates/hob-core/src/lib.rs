@@ -1,7 +1,9 @@
 //! The hob command interpreter, independent of any GUI toolkit.
 //!
 //! Commands are registered on an [`Interpreter`] by name, with a one-line
-//! description. A command can instead be registered by a prefix that starts
+//! description. A command can declare its arguments with an [`args::Spec`]
+//! ([`Interpreter::register_spec`]), which parses them and gives its usage
+//! and help. A command can instead be registered by a prefix that starts
 //! with a special character, such as `!`: it then gets the rest of the line
 //! ([`Interpreter::register_prefix`]). Running a command
 //! line ([`Interpreter::run`]) starts the command on its own thread. The
@@ -40,6 +42,7 @@
 //! let requests = interpreter.run("hello world").unwrap();
 //! ```
 
+pub mod args;
 pub mod builtins;
 mod history;
 mod line;
@@ -56,6 +59,7 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc as std_mpsc};
 use std::task::{Context as TaskContext, Poll};
 use std::thread;
 
+use args::{Matches, Spec};
 use futures_channel::mpsc;
 use futures_core::Stream;
 use kettle_ui::{FrozenIsland, IslandBuilder, Outcome};
@@ -81,6 +85,8 @@ enum Run {
     Words(CommandFn<[String]>),
     /// With the rest of the line after its prefix.
     Rest(CommandFn<str>),
+    /// With the words after its name, parsed by a spec.
+    Parsed(Arc<Spec>, CommandFn<Matches>),
 }
 
 /// A registered command.
@@ -155,6 +161,28 @@ impl Interpreter {
             "the name {name:?} must start with a letter or digit"
         );
         self.insert(name, description.into(), Run::Words(Arc::new(run)));
+    }
+
+    /// Registers a command that declares its arguments: it gets them parsed by
+    /// `spec`, which also gives its usage, `help`, and completion. Parse
+    /// errors are the command's errors, with its usage.
+    ///
+    /// # Panics
+    ///
+    /// Like [`register`](Interpreter::register).
+    pub fn register_spec(
+        &mut self,
+        name: &str,
+        description: impl Into<String>,
+        spec: Spec,
+        run: impl Fn(&mut Context, &Matches) -> CommandResult + Send + Sync + 'static,
+    ) {
+        assert!(
+            name.starts_with(char::is_alphanumeric),
+            "the name {name:?} must start with a letter or digit"
+        );
+        let run = Run::Parsed(Arc::new(spec), Arc::new(run));
+        self.insert(name, description.into(), run);
     }
 
     /// Registers a command that's run for every line starting with `prefix`,
@@ -267,11 +295,16 @@ impl Interpreter {
             let command = (self.commands.get(&name))
                 .filter(|_| !is_prefix(&name))
                 .ok_or_else(|| unknown(&name))?;
-            let Run::Words(run) = command.run.clone() else {
-                unreachable!("names are registered with Run::Words");
-            };
             let args: Vec<String> = words.collect();
-            (name, Box::new(move |ctx| run(ctx, &args)))
+            let job: Job = match command.run.clone() {
+                Run::Words(run) => Box::new(move |ctx| run(ctx, &args)),
+                Run::Parsed(spec, run) => {
+                    let path = name.clone();
+                    Box::new(move |ctx| run(ctx, &spec.parse(&args, &path)?))
+                }
+                Run::Rest(_) => unreachable!("prefixes aren't looked up by name"),
+            };
+            (name, job)
         };
         let (sender, receiver) = mpsc::unbounded();
         let mut ctx = Context {
@@ -399,6 +432,18 @@ impl Context {
     /// and descriptions.
     pub fn commands(&self) -> impl Iterator<Item = (&str, &str)> {
         (self.commands.iter()).map(|(name, command)| (name.as_str(), command.description.as_str()))
+    }
+
+    /// Help for a command (or prefix): its description, and its usage and
+    /// options if it declared its arguments ([`Interpreter::register_spec`]).
+    /// `None` if there's no such command.
+    pub fn help(&self, name: &str) -> Option<String> {
+        let command = self.commands.get(name)?;
+        let summary = format!("{name} — {}", command.description);
+        Some(match &command.run {
+            Run::Parsed(spec, _) => format!("{summary}\n{}", spec.help(name)),
+            _ => summary,
+        })
     }
 
     /// The working directory: the interpreter's when the command started,

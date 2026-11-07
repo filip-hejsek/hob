@@ -4,6 +4,7 @@
 use std::thread;
 use std::time::Duration;
 
+use hob_core::args::{Kind, Matches, Spec};
 use hob_core::{CommandResult, Context, Interpreter};
 use kettle_ui::widget::*;
 use kettle_ui::{Image, IslandBuilder, Outcome, Value};
@@ -13,12 +14,20 @@ use kettle_ui_demo::Demo;
 pub fn register(interpreter: &mut Interpreter) {
     register_islands(interpreter);
     interpreter.register("echo", "Print the arguments", echo);
-    interpreter.register("count", "Count to N (5 by default), slowly", count);
+    interpreter.register_spec(
+        "count",
+        "Count to N (5 by default), slowly",
+        Spec::new().arg("N", Kind::Text).optional(),
+        count,
+    );
     interpreter.register("fail", "Fail with the arguments as the error", fail);
-    interpreter.register("panic", "Panic", |_, _| panic!("the demo panicked"));
-    interpreter.register(
+    interpreter.register_spec("panic", "Panic", Spec::new(), |_, _| {
+        panic!("the demo panicked")
+    });
+    interpreter.register_spec(
         "invalid",
         "Show an island that refers to missing state",
+        Spec::new(),
         invalid,
     );
     interpreter.register(
@@ -26,15 +35,21 @@ pub fn register(interpreter: &mut Interpreter) {
         "Order a pizza; the arguments fill in the name",
         pizza,
     );
-    interpreter.register("levels", "Log a message at each level", levels);
-    interpreter.register(
+    interpreter.register_spec("levels", "Log a message at each level", Spec::new(), levels);
+    interpreter.register_spec(
         "view",
         "Show image files (with -e, they aren't saved in the session)",
+        Spec::new()
+            .flag("ephemeral", "Don't save the images in the session")
+            .short('e')
+            .arg("FILE", Kind::Path)
+            .repeated(),
         view,
     );
-    interpreter.register(
+    interpreter.register_spec(
         "swatch",
         "Show a field for a color, like #ff8800, and a swatch of it",
+        Spec::new(),
         swatch,
     );
     interpreter.register(
@@ -53,8 +68,7 @@ fn register_islands(interpreter: &mut Interpreter) {
             Demo::FruitSearch => "fruit-search",
         };
         let description = format!("Show the {} demo island", demo.title().to_lowercase());
-        interpreter.register(name, description, move |ctx, args| {
-            no_args(args)?;
+        interpreter.register_spec(name, description, Spec::new(), move |ctx, _| {
             let title = demo.title();
             let message = match ctx.show(demo.builder())? {
                 Outcome::Submitted(fields) => format!("{title}: {}", demo.summary(&fields)),
@@ -67,13 +81,6 @@ fn register_islands(interpreter: &mut Interpreter) {
     }
 }
 
-fn no_args(args: &[String]) -> CommandResult {
-    match args {
-        [] => Ok(()),
-        _ => Err("takes no arguments".into()),
-    }
-}
-
 /// Prints its arguments.
 fn echo(ctx: &mut Context, args: &[String]) -> CommandResult {
     ctx.print(args.join(" "));
@@ -82,12 +89,8 @@ fn echo(ctx: &mut Context, args: &[String]) -> CommandResult {
 
 /// Counts to N (5 by default), slowly. Shows output arriving while a command
 /// runs, and several commands running at once.
-fn count(ctx: &mut Context, args: &[String]) -> CommandResult {
-    let n: u32 = match args {
-        [] => 5,
-        [n] => n.parse().map_err(|_| format!("not a number: {n:?}"))?,
-        _ => return Err("usage: count [N]".into()),
-    };
+fn count(ctx: &mut Context, args: &Matches) -> CommandResult {
+    let n: u32 = args.parse("N")?.unwrap_or(5);
     for i in 1..=n {
         if i > 1 {
             thread::sleep(Duration::from_millis(500));
@@ -107,8 +110,7 @@ fn fail(ctx: &mut Context, args: &[String]) -> CommandResult {
 }
 
 /// Logs a message at each level.
-fn levels(ctx: &mut Context, args: &[String]) -> CommandResult {
-    no_args(args)?;
+fn levels(ctx: &mut Context, _: &Matches) -> CommandResult {
     ctx.error("an error");
     ctx.warn("a warning");
     ctx.info("some information");
@@ -135,8 +137,7 @@ fn confirm(ctx: &mut Context, args: &[String]) -> CommandResult {
     Ok(())
 }
 
-fn invalid(ctx: &mut Context, args: &[String]) -> CommandResult {
-    no_args(args)?;
+fn invalid(ctx: &mut Context, _: &Matches) -> CommandResult {
     ctx.show(IslandBuilder::new(label(state("nonexistent"))))?;
     Ok(())
 }
@@ -233,15 +234,9 @@ fn price(cents: u32) -> String {
 /// Prints the image files given (relative to the working directory), each
 /// with its name. With `-e`, the images are ephemeral: not saved in the
 /// session.
-fn view(ctx: &mut Context, args: &[String]) -> CommandResult {
-    let (ephemeral, files) = match args {
-        [flag, files @ ..] if flag == "-e" => (true, files),
-        files => (false, files),
-    };
-    if files.is_empty() {
-        return Err("usage: view [-e] FILE...".into());
-    }
-    for file in files {
+fn view(ctx: &mut Context, args: &Matches) -> CommandResult {
+    let ephemeral = args.flag("ephemeral");
+    for file in args.values("FILE") {
         let picture = match Image::from_file(ctx.resolve(file), file.as_str()) {
             Ok(picture) if ephemeral => picture.ephemeral(),
             Ok(picture) => picture,
@@ -259,8 +254,7 @@ fn view(ctx: &mut Context, args: &[String]) -> CommandResult {
 
 /// Shows a swatch of the color typed, made as the user types: an image in
 /// derived state.
-fn swatch(ctx: &mut Context, args: &[String]) -> CommandResult {
-    no_args(args)?;
+fn swatch(ctx: &mut Context, _: &Matches) -> CommandResult {
     let mut b = IslandBuilder::new(column([
         text_field("color", "A color, like #ff8800"),
         image("swatch"),

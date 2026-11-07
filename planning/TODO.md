@@ -100,10 +100,8 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 
 ## hob-core (command interpreter)
 
-- Full help for a command (usage, arguments, examples): where it's written
-  (a longer text at registration? a declared argument list, which could
-  also drive argument completion?) and what `help COMMAND` shows. For now it
-  shows the one-line description.
+- Longer help for a command (a paragraph, examples), beyond the usage and
+  options that `help COMMAND` shows from its declared arguments.
 
 - `!COMMAND`: there's no way to stop a shell command, or to give it input,
   and it's left running when hob exits. A pty would give programs colours

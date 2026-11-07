@@ -6,7 +6,7 @@
 //! - `exit`: exits hob; if other commands are running, asks first, listing
 //!   them.
 //! - `help [COMMAND]`: lists all commands with their descriptions, or shows
-//!   the description of one.
+//!   the full help of one.
 //! - `jobs`: lists the other commands still running, oldest first.
 //! - `messages [LEVEL]`: lists the log records the frontend has, oldest
 //!   first, from `LEVEL` up (`info` by default, so `messages debug` lists
@@ -23,18 +23,30 @@ use jiff::{Timestamp, Zoned};
 use kettle_ui::widget::{button_danger, cancel_button, column, label, row};
 use kettle_ui::{IslandBuilder, Outcome};
 
+use crate::args::{Kind, Matches, Spec};
 use crate::{CommandResult, Context, Interpreter, Level, LogRecord};
 
 /// Registers all built-in commands.
 pub fn register(interpreter: &mut Interpreter) {
     interpreter.register_prefix("!", "Run a shell command: !COMMAND", shell);
-    interpreter.register("clear", "Clear the scrollback", clear);
-    interpreter.register("exit", "Exit hob", exit);
-    interpreter.register("help", "List the commands, or describe one", help);
-    interpreter.register("jobs", "List the other running commands", jobs);
-    interpreter.register(
+    interpreter.register_spec("clear", "Clear the scrollback", Spec::new(), clear);
+    interpreter.register_spec("exit", "Exit hob", Spec::new(), exit);
+    let commands = Kind::custom(|ctx| ctx.commands().iter().map(|&c| c.to_owned()).collect());
+    interpreter.register_spec(
+        "help",
+        "List the commands, or describe one",
+        Spec::new().arg("COMMAND", commands).optional(),
+        help,
+    );
+    interpreter.register_spec("jobs", "List the other running commands", Spec::new(), jobs);
+    let levels = Kind::custom(|_| {
+        let levels = ["error", "warn", "info", "debug"];
+        levels.map(str::to_owned).to_vec()
+    });
+    interpreter.register_spec(
         "messages",
         "List log messages, from LEVEL up (info by default)",
+        Spec::new().arg("LEVEL", levels).optional(),
         messages,
     );
 }
@@ -150,18 +162,12 @@ impl ShellOutput {
     }
 }
 
-fn clear(ctx: &mut Context, args: &[String]) -> CommandResult {
-    if !args.is_empty() {
-        return Err("usage: clear".into());
-    }
+fn clear(ctx: &mut Context, _: &Matches) -> CommandResult {
     ctx.clear();
     Ok(())
 }
 
-fn exit(ctx: &mut Context, args: &[String]) -> CommandResult {
-    if !args.is_empty() {
-        return Err("usage: exit".into());
-    }
+fn exit(ctx: &mut Context, _: &Matches) -> CommandResult {
     let running = ctx.running_commands()?;
     if !running.is_empty() {
         // "Yes" isn't a submit button, so Enter can't confirm by accident.
@@ -183,26 +189,23 @@ fn exit(ctx: &mut Context, args: &[String]) -> CommandResult {
     Ok(())
 }
 
-fn help(ctx: &mut Context, args: &[String]) -> CommandResult {
-    let line = |(name, description)| format!("{name} — {description}");
-    match args {
-        [] => {
-            let lines: Vec<String> = ctx.commands().map(line).collect();
+fn help(ctx: &mut Context, args: &Matches) -> CommandResult {
+    match args.value("COMMAND") {
+        None => {
+            let lines: Vec<String> = (ctx.commands())
+                .map(|(name, description)| format!("{name} — {description}"))
+                .collect();
             ctx.print(lines.join("\n"));
         }
-        [name] => match ctx.commands().find(|(n, _)| n == name) {
-            Some(command) => ctx.print(line(command)),
+        Some(name) => match ctx.help(name) {
+            Some(help) => ctx.print(help),
             None => return Err(format!("no command {name:?}").into()),
         },
-        _ => return Err("usage: help [COMMAND]".into()),
     }
     Ok(())
 }
 
-fn jobs(ctx: &mut Context, args: &[String]) -> CommandResult {
-    if !args.is_empty() {
-        return Err("usage: jobs".into());
-    }
+fn jobs(ctx: &mut Context, _: &Matches) -> CommandResult {
     let running = ctx.running_commands()?;
     match running.is_empty() {
         true => ctx.print("No other commands are running."),
@@ -211,11 +214,10 @@ fn jobs(ctx: &mut Context, args: &[String]) -> CommandResult {
     Ok(())
 }
 
-fn messages(ctx: &mut Context, args: &[String]) -> CommandResult {
-    let level = match args {
-        [] => Level::Info,
-        [level] => level.parse()?,
-        _ => return Err("usage: messages [LEVEL]".into()),
+fn messages(ctx: &mut Context, args: &Matches) -> CommandResult {
+    let level = match args.value("LEVEL") {
+        None => Level::Info,
+        Some(level) => level.parse()?,
     };
     let now = Timestamp::now().to_zoned(TimeZone::system());
     let lines: Vec<String> = (ctx.log_records()?.iter())
@@ -365,7 +367,7 @@ mod tests {
         );
         assert_eq!(
             run("help help", vec![]),
-            ["help — List the commands, or describe one"]
+            ["help — List the commands, or describe one\nusage: help [COMMAND]"]
         );
         assert_eq!(run("help nope", vec![]), [r#"error: no command "nope""#]);
     }
@@ -373,13 +375,19 @@ mod tests {
     #[test]
     fn clear_asks_to_clear() {
         assert_eq!(run("clear", vec![]), ["<clear>"]);
-        assert_eq!(run("clear x", vec![]), ["error: usage: clear"]);
+        assert_eq!(
+            run("clear x", vec![]),
+            [r#"error: unexpected argument "x"; usage: clear"#]
+        );
     }
 
     #[test]
     fn exit_asks_to_exit() {
         assert_eq!(run("exit", vec![]), ["<exit>"]);
-        assert_eq!(run("exit now", vec![]), ["error: usage: exit"]);
+        assert_eq!(
+            run("exit now", vec![]),
+            [r#"error: unexpected argument "now"; usage: exit"#]
+        );
     }
 
     #[test]
@@ -390,7 +398,10 @@ mod tests {
             ["count 9\nconfirm"]
         );
         assert_eq!(run("jobs", vec![]), ["No other commands are running."]);
-        assert_eq!(run("jobs x", vec![]), ["error: usage: jobs"]);
+        assert_eq!(
+            run("jobs x", vec![]),
+            [r#"error: unexpected argument "x"; usage: jobs"#]
+        );
     }
 
     #[test]
@@ -478,7 +489,7 @@ mod tests {
         );
         assert_eq!(
             run("messages a b", vec![]),
-            ["error: usage: messages [LEVEL]"]
+            [r#"error: unexpected argument "b"; usage: messages [LEVEL]"#]
         );
     }
 }

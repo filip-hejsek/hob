@@ -7,32 +7,42 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
+use hob_core::args::{Kind, Matches, Spec};
 use hob_core::{CommandResult, Context, Interpreter};
 
 /// Registers all filesystem commands.
 pub fn register(interpreter: &mut Interpreter) {
-    interpreter.register("pwd", "Print the working directory", pwd);
-    interpreter.register(
+    interpreter.register_spec("pwd", "Print the working directory", Spec::new(), pwd);
+    interpreter.register_spec(
         "cd",
         "Change the working directory (to the home directory by default)",
+        Spec::new().arg("DIR", Kind::Dir).optional(),
         cd,
     );
-    interpreter.register(
+    interpreter.register_spec(
         "ls",
         "List directories (the working directory by default); -a shows hidden files",
+        Spec::new()
+            .flag("all", "Show hidden files (starting with .)")
+            .short('a')
+            .arg("PATH", Kind::Path)
+            .optional()
+            .repeated(),
         ls,
     );
-    interpreter.register("cat", "Print the contents of files", cat);
+    interpreter.register_spec(
+        "cat",
+        "Print the contents of files",
+        Spec::new().arg("FILE", Kind::Path).repeated(),
+        cat,
+    );
 }
 
 /// The most `cat` prints of a file. The scrollback isn't made for more, and
 /// it's saved with the session.
 const CAT_LIMIT: u64 = 1024 * 1024;
 
-fn pwd(ctx: &mut Context, args: &[String]) -> CommandResult {
-    let (_, []) = options(args, "")? else {
-        return Err("usage: pwd".into());
-    };
+fn pwd(ctx: &mut Context, _: &Matches) -> CommandResult {
     ctx.print(ctx.cwd().display().to_string());
     Ok(())
 }
@@ -40,11 +50,10 @@ fn pwd(ctx: &mut Context, args: &[String]) -> CommandResult {
 /// Changes the working directory. `..` is resolved lexically, like a shell's
 /// `cd` does by default: `cd link/..` goes back to where it started, even
 /// if `link` is a symlink to a directory elsewhere.
-fn cd(ctx: &mut Context, args: &[String]) -> CommandResult {
-    let path = match options(args, "")? {
-        (_, []) => std::env::home_dir().ok_or("the home directory is unknown")?,
-        (_, [path]) => normalize(&ctx.resolve(path)),
-        _ => return Err("usage: cd [DIR]".into()),
+fn cd(ctx: &mut Context, args: &Matches) -> CommandResult {
+    let path = match args.value("DIR") {
+        None => std::env::home_dir().ok_or("the home directory is unknown")?,
+        Some(path) => normalize(&ctx.resolve(path)),
     };
     match fs::metadata(&path) {
         Ok(metadata) if metadata.is_dir() => {
@@ -74,10 +83,9 @@ fn normalize(path: &Path) -> PathBuf {
 
 /// Lists each directory given (by default the working directory), or names
 /// each file given, like `ls -F`: directories end in `/`.
-fn ls(ctx: &mut Context, args: &[String]) -> CommandResult {
-    let (flags, paths) = options(args, "a")?;
-    let all = flags.contains('a');
-    let paths = match paths {
+fn ls(ctx: &mut Context, args: &Matches) -> CommandResult {
+    let all = args.flag("all");
+    let paths = match args.values("PATH") {
         [] => &[".".to_owned()][..],
         paths => paths,
     };
@@ -129,12 +137,8 @@ fn list(dir: &Path, all: bool) -> io::Result<Vec<String>> {
 
 /// Prints the contents of each file given. Files that aren't text, or are too
 /// big to show, are reported as errors.
-fn cat(ctx: &mut Context, args: &[String]) -> CommandResult {
-    let (_, paths) = options(args, "")?;
-    if paths.is_empty() {
-        return Err("usage: cat FILE...".into());
-    }
-    for path in paths {
+fn cat(ctx: &mut Context, args: &Matches) -> CommandResult {
+    for path in args.values("FILE") {
         let path = ctx.resolve(path);
         match read_text(&path) {
             // Lines are printed without their line break.
@@ -162,29 +166,6 @@ fn read_text(path: &Path) -> Result<String, String> {
         return Err(format!("{path}: not a text file"));
     }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-/// Splits arguments into flags and operands, like `getopt`: arguments
-/// starting with `-` before the first operand (or `--`) are flags, each
-/// letter separately. `allowed` lists the letters the command takes. A lone
-/// `-` is an operand.
-fn options<'a>(args: &'a [String], allowed: &str) -> Result<(String, &'a [String]), String> {
-    let mut flags = String::new();
-    for (i, arg) in args.iter().enumerate() {
-        if arg == "--" {
-            return Ok((flags, &args[i + 1..]));
-        }
-        let Some(letters) = arg.strip_prefix('-').filter(|l| !l.is_empty()) else {
-            return Ok((flags, &args[i..]));
-        };
-        for letter in letters.chars() {
-            if !allowed.contains(letter) {
-                return Err(format!("unknown option -{letter}"));
-            }
-            flags.push(letter);
-        }
-    }
-    Ok((flags, &[]))
 }
 
 /// An I/O error about a path, without the OS error number that Rust adds.

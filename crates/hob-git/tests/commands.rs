@@ -102,7 +102,13 @@ fn run_without_ids(interpreter: &Interpreter, line: &str) -> Vec<String> {
 #[test]
 fn usage() {
     let (i, _dir) = setup();
-    assert!(run(&i, "git")[0].starts_with("error: usage: git status"));
+    assert_eq!(
+        run(&i, "git"),
+        [
+            "error: missing subcommand; usage: git status | log [-n N] [REV] | branch \
+          | diff [--cached] [--staged]"
+        ]
+    );
     assert!(run(&i, "git frob")[0].starts_with("error: unknown subcommand \"frob\""));
 }
 
@@ -221,7 +227,7 @@ fn log() {
         run(&i, "git log -x"),
         ["error: unknown option -x; usage: git log [-n N] [REV]"]
     );
-    assert_eq!(run(&i, "git log -n x"), ["error: not a number: \"x\""]);
+    assert_eq!(run(&i, "git log -n x"), ["error: invalid N: \"x\""]);
     assert!(run(&i, "git log nope")[0].starts_with("error: nope: "));
 }
 
