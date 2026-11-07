@@ -19,9 +19,9 @@
 //!
 //! The prompt works like a shell's: Up and Down browse the history, and Tab
 //! completes command names. Tab doesn't move focus. Anywhere, PageUp and
-//! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). The
-//! bindings are a table (see the `keys` module), to make them configurable
-//! later.
+//! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). Ctrl+D
+//! in the empty prompt exits (like `exit`). The bindings are a table (see the
+//! `keys` module), to make them configurable later.
 //!
 //! A newly shown island gets focus, unless the user is busy elsewhere
 //! (something other than the empty prompt has focus). When an island
@@ -465,6 +465,8 @@ impl Shell {
                 self.save();
                 return Task::none();
             }
+            Action::Exit if self.prompt.is_empty() => return self.exit(),
+            Action::Exit => return Task::none(),
         };
         match line {
             Some(line) => {

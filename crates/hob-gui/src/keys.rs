@@ -18,13 +18,15 @@ pub(crate) enum Action {
     PageDown,
     /// Clears the scrollback, like the `clear` command.
     Clear,
+    /// Exits, like the `exit` command, if the prompt is empty.
+    Exit,
 }
 
 impl Action {
     /// Whether it only works while the prompt has focus.
     pub(crate) fn needs_prompt(self) -> bool {
         match self {
-            Action::HistoryBack | Action::HistoryForward | Action::Complete => true,
+            Action::HistoryBack | Action::HistoryForward | Action::Complete | Action::Exit => true,
             Action::PageUp | Action::PageDown | Action::Clear => false,
         }
     }
@@ -59,6 +61,7 @@ pub(crate) fn defaults() -> Vec<Binding> {
         named(Named::PageUp, Action::PageUp),
         named(Named::PageDown, Action::PageDown),
         ctrl("l", Action::Clear),
+        ctrl("d", Action::Exit),
     ]
 }
 
@@ -92,6 +95,10 @@ mod tests {
             Some(Action::Clear)
         );
         assert_eq!(lookup(&bindings, l(), Modifiers::empty()), None);
+        assert_eq!(
+            lookup(&bindings, Key::Character("d".into()), Modifiers::CTRL),
+            Some(Action::Exit)
+        );
         assert_eq!(
             lookup(&bindings, l(), Modifiers::CTRL | Modifiers::SHIFT),
             None

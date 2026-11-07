@@ -313,6 +313,8 @@ Works like a terminal: a scrollback with the prompt below it.
   completion work only while the prompt has focus; the others anywhere:
   PageUp/PageDown scroll the scrollback by a bit less than a page, and
   Ctrl+L clears it like `clear`, keeping the blocks of running commands.
+  Ctrl+D exits like `exit`, but only in the focused, empty prompt, as in
+  a terminal; otherwise it does nothing.
   Escape has no binding.
 - A newly shown island gets focus, unless something other than the empty
   prompt has it, so an island that appears later doesn't take keys meant
