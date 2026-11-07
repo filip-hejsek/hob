@@ -142,6 +142,8 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 
 ## hob-gui (shell)
 
+- An icon, for the desktop file (`Icon=`) and the window.
+
 - More prompt shortcuts: Ctrl+W, Ctrl+U and Ctrl+K (delete the word before
   the cursor, or to the start or end of the line). They need the cursor
   position, which iced doesn't expose (see ICED_WISHLIST.md); the plan is

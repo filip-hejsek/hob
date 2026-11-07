@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=hob
+GenericName=Command Shell
+Comment=Run commands that talk to you with simple forms
+Exec=hob
+Terminal=false
+Categories=Utility;
+Keywords=shell;terminal;command;prompt;
+StartupNotify=true
+StartupWMClass=io.github.filip_hejsek.hob

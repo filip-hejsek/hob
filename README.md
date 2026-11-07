@@ -43,6 +43,14 @@ Run it with:
 cargo run
 ```
 
+To add hob to the desktop's application menu, install it and its desktop
+file:
+
+```sh
+cargo install --path crates/hob
+desktop-file-install --dir ~/.local/share/applications data/io.github.filip_hejsek.hob.desktop
+```
+
 The history and scrollback are restored on the next start. They're saved in
 the platform's state directory (e.g. `~/.local/state/hob/session.json`); set
 `HOB_SESSION` to use another file.

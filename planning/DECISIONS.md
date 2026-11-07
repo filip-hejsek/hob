@@ -500,6 +500,14 @@ named like git's so they're familiar; `!git ...` still runs the real one.
 
 Works like a terminal: a scrollback with the prompt below it.
 
+- The application ID is `io.github.filip_hejsek.hob`: reverse DNS from the
+  GitHub repository, with the hyphen made an underscore (as Flathub does,
+  since D-Bus names can't have hyphens). It's the window's Wayland app ID
+  and X11 class, and the name of the desktop file
+  (`data/io.github.filip_hejsek.hob.desktop`), so desktops can match the
+  two. The desktop file runs `hob` from `PATH`. Rejected: a plain `hob`,
+  which could clash with other programs' IDs.
+
 - Each command line gets a block in the scrollback, with what the command
   printed and the islands it showed, in order. Concurrent commands each add
   to their own block.

@@ -133,7 +133,23 @@ fn application(
     // Save the session before exiting.
     .exit_on_close_request(false)
     .title("hob")
-    .window_size((640.0, 560.0))
+    .window(window_settings())
+}
+
+/// The application ID: the window's Wayland app ID and X11 class, which
+/// must match the name of the desktop file (`data/<APP_ID>.desktop`).
+pub const APP_ID: &str = "io.github.filip_hejsek.hob";
+
+fn window_settings() -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(640.0, 560.0),
+        #[cfg(target_os = "linux")]
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: APP_ID.to_owned(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
 }
 
 const PROMPT: &str = "prompt";
