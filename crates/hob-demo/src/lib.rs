@@ -115,7 +115,7 @@ fn confirm(ctx: &mut Context, args: &[String]) -> CommandResult {
     };
     let island = IslandBuilder::new(column([
         label(question),
-        row([button("yes", "Yes [y]"), cancel_button("No [n]")]),
+        row([button_danger("yes", "Yes [y]"), cancel_button("No [n]")]),
     ]));
     let answer = match ctx.show(island)? {
         Outcome::Pressed(..) => "yes",

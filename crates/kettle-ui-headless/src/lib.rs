@@ -354,10 +354,15 @@ fn render(model: &impl Contents, widget: &Widget, depth: usize, out: &mut String
             writeln!(out, "{indent}suggestions for {field}")?;
             lines(out, state)
         }
-        Kind::Button { label, key, .. } => {
+        Kind::Button {
+            label, key, danger, ..
+        } => {
             write!(out, "{indent}button {label:?}")?;
             if let Some(key) = key {
                 write!(out, " [{key}]")?;
+            }
+            if *danger {
+                write!(out, " (danger)")?;
             }
             writeln!(out)
         }
@@ -464,6 +469,12 @@ mod tests {
             island.to_string(),
             "row\n  button \"Yes\" [y]\n  button \"No\"\n"
         );
+    }
+
+    #[test]
+    fn danger_buttons_are_marked_in_the_outline() {
+        let island = Island::new(IslandBuilder::new(button_danger("del", "Delete [d]"))).unwrap();
+        assert_eq!(island.to_string(), "button \"Delete\" [d] (danger)\n");
     }
 
     #[test]

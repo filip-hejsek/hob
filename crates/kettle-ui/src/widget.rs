@@ -4,8 +4,8 @@
 //! - layout: [`column()`], [`row`], [`when`]
 //! - display: [`label`] (with [`state`]), [`progress`], [`list`]
 //! - form elements: [`text_field`], [`text_area`], [`checkbox`], [`suggestions`]
-//! - buttons: [`submit_button`], [`cancel_button`], [`button`] (with
-//!   [`ButtonLabel`])
+//! - buttons: [`submit_button`], [`cancel_button`], [`button`],
+//!   [`button_danger`] (with [`ButtonLabel`])
 //!
 //! Backends read the tree through [`Widget::kind`], and leave out the gaps
 //! around widgets that have nothing to show (see [`is_visible`]).
@@ -85,7 +85,7 @@ pub enum Kind {
         /// The id of the text field a clicked line goes into.
         field: Arc<str>,
     },
-    /// [`submit_button`], [`cancel_button`] or [`button`]
+    /// [`submit_button`], [`cancel_button`], [`button`] or [`button_danger`]
     Button {
         /// Shown on the button.
         label: String,
@@ -94,6 +94,9 @@ pub enum Kind {
         key: Option<char>,
         /// What clicking it does.
         action: Action,
+        /// Shown in red, as for a dangerous action (see [`button_danger`]).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        danger: bool,
     },
 }
 
@@ -262,12 +265,12 @@ impl From<&'static str> for ButtonLabel {
 /// entered values. Enter presses it, so don't use it to confirm a dangerous
 /// action; use [`button`] instead.
 pub fn submit_button(label: impl Into<ButtonLabel>) -> Widget {
-    make_button(label.into(), Action::Submit)
+    make_button(label.into(), Action::Submit, false)
 }
 
 /// The island reports [`Outcome::Cancelled`](crate::Outcome::Cancelled).
 pub fn cancel_button(label: impl Into<ButtonLabel>) -> Widget {
-    make_button(label.into(), Action::Cancel)
+    make_button(label.into(), Action::Cancel, false)
 }
 
 /// A button that's neither submit nor cancel: the island reports
@@ -276,14 +279,20 @@ pub fn cancel_button(label: impl Into<ButtonLabel>) -> Widget {
 /// it for answers that must be chosen on purpose, such as confirming a
 /// dangerous action.
 pub fn button(id: &str, label: impl Into<ButtonLabel>) -> Widget {
-    make_button(label.into(), Action::Press(id.into()))
+    make_button(label.into(), Action::Press(id.into()), false)
 }
 
-fn make_button(label: ButtonLabel, action: Action) -> Widget {
+/// Like [`button`], but red, for a dangerous action such as deleting.
+pub fn button_danger(id: &str, label: impl Into<ButtonLabel>) -> Widget {
+    make_button(label.into(), Action::Press(id.into()), true)
+}
+
+fn make_button(label: ButtonLabel, action: Action, danger: bool) -> Widget {
     Widget(Kind::Button {
         label: label.text,
         key: label.key,
         action,
+        danger,
     })
 }
 

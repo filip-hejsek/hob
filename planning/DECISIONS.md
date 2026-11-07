@@ -36,6 +36,10 @@ Known bugs are in BUGS.md.
   use it rather than a submit button, which Enter would press by accident
   (the `confirm` demo does). Buttons with the same id are allowed; they do
   the same thing. In frozen-island JSON its action is `{"press": id}`.
+- `button_danger(id, label)` is a `button` shown in red (iced's
+  `button::danger` style). It's a `danger` flag on the button in the tree
+  (left out of JSON when false), and the outline adds `(danger)`. Only
+  plain buttons get it: a dangerous action shouldn't be a submit button.
 
 ### Dependency tracking for derived state
 

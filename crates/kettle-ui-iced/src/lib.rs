@@ -300,11 +300,21 @@ fn render<'a>(
                 .into()
         }))
         .into(),
-        Kind::Button { label, key, action } => button(text(match key {
+        Kind::Button {
+            label,
+            key,
+            action,
+            danger,
+        } => button(text(match key {
             Some(key) if label.is_empty() => format!("[{key}]"),
             Some(key) => format!("{label} [{key}]"),
             None => label.clone(),
         }))
+        .style(if *danger {
+            button::danger
+        } else {
+            button::primary
+        })
         .on_press_maybe(send(action_msg(action.clone())))
         .into(),
     }

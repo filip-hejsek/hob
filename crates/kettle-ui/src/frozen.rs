@@ -124,7 +124,11 @@ mod tests {
             label(state("hi")),
             list("items"),
             progress("p"),
-            row([submit_button("OK"), button("del", "Delete")]),
+            row([
+                submit_button("OK"),
+                button("del", "Delete"),
+                button_danger("rm", "Remove"),
+            ]),
         ]));
         b.set_text("name", "Ada");
         b.set_checked("sub", true);
@@ -161,6 +165,10 @@ mod tests {
         assert_eq!(
             json["root"]["column"][5]["row"][1],
             json!({"button": {"label": "Delete", "action": {"press": "del"}}})
+        );
+        assert_eq!(
+            json["root"]["column"][5]["row"][2],
+            json!({"button": {"label": "Remove", "action": {"press": "rm"}, "danger": true}})
         );
     }
 
