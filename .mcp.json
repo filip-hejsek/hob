@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "hob": {
+      "type": "stdio",
+      "command": ".bin/hob-mcp",
+      "args": ["--agent-spawns"]
+    }
+  }
+}

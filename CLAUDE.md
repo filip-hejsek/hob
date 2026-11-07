@@ -37,6 +37,28 @@ with the workaround used.
   spacing is fixed and styling options are minimal (see
   planning/DECISIONS.md). Don't add options without a need.
 
+## Trying hob
+
+The `hob` MCP server (hob-mcp, configured in `.mcp.json`) is mainly for
+trying commands while developing them: start hob with its `start` tool
+(e.g. `["target/debug/hob", "--headless"]`; rebuild first, then start
+again after changes).
+
+It runs `.bin/hob-mcp`, a release build kept apart from work in progress and
+`cargo clean`. If it's missing or out of date, run `scripts/install-hob-mcp`,
+then ask the user to reconnect it (`/mcp reconnect hob`).
+
+Don't use it:
+
+- for anything scripted or repeated: its tools can only be called one at
+  a time, by hand. Write a test (hob-mcp's tests show how to drive hob),
+  or pipe lines to `target/debug/hob-cli`. That works only for commands
+  without islands: it doesn't wait for an island before running the next
+  line, so `/type` and `/press` fail with "no live island".
+- when changing the headless protocol or hob-mcp itself: the installed
+  server won't have your changes. Test them with their tests or hob-cli,
+  and install the server again once they're committed.
+
 ## Checks
 
 Before committing, all of these must pass without warnings:

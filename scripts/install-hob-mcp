@@ -1,0 +1,12 @@
+#!/bin/sh
+# Builds hob-mcp in release mode and installs it to .bin/, where .mcp.json
+# expects it. A copy there isn't touched by work in progress or
+# `cargo clean`. Reconnect the MCP server (/mcp in Claude Code) afterwards.
+set -eu
+cd "$(dirname "$0")/.."
+cargo build --release -p hob-mcp
+mkdir -p .bin
+# Replace it by renaming, so a running server keeps its old binary.
+cp target/release/hob-mcp .bin/hob-mcp.new
+mv .bin/hob-mcp.new .bin/hob-mcp
+echo "Installed .bin/hob-mcp"

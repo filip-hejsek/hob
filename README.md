@@ -73,6 +73,10 @@ implies `--allow-restart`), hob-mcp starts nothing; the agent starts hob
 itself with `start`, giving the command (e.g. `target/debug/hob
 --headless`). This suits an agent working on hob, which rebuilds it.
 
+This repository's `.mcp.json` sets that up for Claude Code, with a release
+build kept apart from work in progress; install it with
+`scripts/install-hob-mcp`.
+
 The headless frontend sends images without the paths of the files they came
 from, unless `HOB_IMAGE_PATHS=1` is set.
 

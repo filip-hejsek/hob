@@ -1,5 +1,8 @@
 /target
 
+# hob-mcp as installed by scripts/install-hob-mcp
+/.bin/
+
 # Claude Code: agent worktrees and personal settings
 /.claude/worktrees/
 /.claude/settings.local.json

@@ -82,6 +82,9 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   full, which is a lot of text for small changes (e.g. a progress bar).
 - No completion or history over the protocol yet, and hob-cli has no line
   editing.
+- hob-cli runs piped lines without waiting, so a script can't act on an
+  island (`/type` before it's shown fails with "no live island"). It could
+  wait for a live island before a `/` line, or have a `/wait`.
 - hob-cli's `/type` takes one line, so it can't put several lines into a
   text area.
 - hob-cli prints changed lines of an island only if no lines were added or
