@@ -28,9 +28,11 @@
 
 use std::sync::Arc;
 
-use iced::widget::{button, checkbox, column, container, progress_bar, row, text, text_input};
+use iced::widget::{
+    Container, button, checkbox, column, container, progress_bar, row, text, text_input,
+};
 use iced::{Element, Padding, Task, task};
-use kettle_ui::widget::{Action, Kind, Text, Widget, is_visible};
+use kettle_ui::widget::{Action, Kind, Text, Widget, is_shown, is_visible};
 use kettle_ui::{
     Built, Contents, Error, FrozenIsland, IslandBuilder, Job, JobResult, Model, Outcome,
     StateUpdate, Value,
@@ -143,6 +145,11 @@ fn render<'a>(
             Padding::ZERO.left(g)
         }))
         .into(),
+        Kind::When { state, child } => {
+            // Disabled while hidden, so a focused text field stops taking input.
+            let shown = is_shown(contents, state);
+            hideable(render(contents, child, interactive && shown), shown).into()
+        }
         Kind::Label(Text::Static(s)) => text(s).into(),
         Kind::Label(Text::State(name)) => text(
             contents
@@ -205,14 +212,21 @@ fn spaced<'a>(
             Padding::ZERO
         };
         first &= !visible;
-        let max = if visible { f32::INFINITY } else { 0.0 };
-        container(render(contents, child, interactive))
+        hideable(render(contents, child, interactive), visible)
             .padding(padding)
-            .max_width(max)
-            .max_height(max)
-            .clip(!visible)
             .into()
     })
+}
+
+/// Wraps `content` in a container that shrinks it to nothing unless
+/// `visible`. Always the same wrapper, so the tree's shape doesn't depend on
+/// visibility.
+fn hideable(content: Element<'_, Message>, visible: bool) -> Container<'_, Message> {
+    let max = if visible { f32::INFINITY } else { 0.0 };
+    container(content)
+        .max_width(max)
+        .max_height(max)
+        .clip(!visible)
 }
 
 /// Named state as a list; empty if it's not a list (or not computed yet).

@@ -93,7 +93,7 @@ fn fruit_search() -> IslandBuilder {
         label("Favourite fruit"),
         text_field("fruit", "Start typing…"),
         suggestions("matches", "fruit"),
-        label(state("no_matches")),
+        when("no_matches", label("No matching fruit")),
         row([submit_button("Choose"), cancel_button("Cancel")]),
     ]));
 
@@ -114,11 +114,9 @@ fn fruit_search() -> IslandBuilder {
     });
 
     // Waits for "matches" to be up to date, so it never disagrees with it.
-    builder.derive_with_state("no_matches", &["matches"], |i| match i.state("matches") {
-        Some(Value::List(m)) if m.is_empty() && !i.text("fruit").is_empty() => {
-            "No matching fruit".into()
-        }
-        _ => "".into(),
+    builder.derive_with_state("no_matches", &["matches"], |i| {
+        let none = matches!(i.state("matches"), Some(Value::List(m)) if m.is_empty());
+        (none && !i.text("fruit").is_empty()).into()
     });
 
     // Pretend the fruit list is loaded in the background.

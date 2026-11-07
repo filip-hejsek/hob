@@ -42,7 +42,7 @@ use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 use futures_core::Stream;
-use kettle_ui::widget::{Action, Kind, Text, Widget};
+use kettle_ui::widget::{Action, Kind, Text, Widget, is_shown};
 use kettle_ui::{
     Built, Contents, Error, Fields, FrozenIsland, IslandBuilder, Job, Model, Outcome, Updates,
     Value,
@@ -139,6 +139,7 @@ impl Island {
     /// Replaces the contents of the text field `id`.
     pub fn type_text(&mut self, id: &str, text: &str) -> Result<(), ActionError> {
         let found = find(
+            &self.model,
             self.model.root(),
             &mut |w| matches!(w.kind(), Kind::TextField { id: i, .. } if &**i == id),
         );
@@ -153,6 +154,7 @@ impl Island {
     /// Checks or unchecks the checkbox `id`.
     pub fn set_checked(&mut self, id: &str, checked: bool) -> Result<(), ActionError> {
         let found = find(
+            &self.model,
             self.model.root(),
             &mut |w| matches!(w.kind(), Kind::Checkbox { id: i, .. } if &**i == id),
         );
@@ -168,7 +170,7 @@ impl Island {
     /// which puts it into the field. The line must currently be shown.
     pub fn pick(&mut self, field: &str, line: &str) -> Result<(), ActionError> {
         let model = &self.model;
-        let found = find(model.root(), &mut |w| match w.kind() {
+        let found = find(model, model.root(), &mut |w| match w.kind() {
             Kind::Suggestions { state, field: f } => {
                 &**f == field && list_items(model, state).iter().any(|l| l == line)
             }
@@ -189,7 +191,7 @@ impl Island {
     /// with the island. Like in other backends, the island stays usable.
     pub fn press(&mut self, label: &str) -> Result<Outcome, ActionError> {
         let mut actions = Vec::new();
-        find(self.model.root(), &mut |w| {
+        find(&self.model, self.model.root(), &mut |w| {
             if let Kind::Button { label: l, action } = w.kind()
                 && l == label
             {
@@ -308,6 +310,9 @@ fn render(model: &impl Contents, widget: &Widget, depth: usize, out: &mut String
             }
             Ok(())
         }
+        // A shown child appears as if it weren't wrapped; a hidden one not at all.
+        Kind::When { state, child } if is_shown(model, state) => render(model, child, depth, out),
+        Kind::When { .. } => Ok(()),
         Kind::Label(text) => {
             let text = match text {
                 Text::Static(s) => s.clone(),
@@ -354,13 +359,22 @@ fn list_items<'a>(model: &'a impl Contents, name: &str) -> &'a [String] {
     }
 }
 
-/// The first widget in the tree that `pred` matches, depth first.
-fn find<'a>(widget: &'a Widget, pred: &mut impl FnMut(&Widget) -> bool) -> Option<&'a Widget> {
+/// The first widget in the tree that `pred` matches, depth first. Skips
+/// widgets hidden by [`when`](kettle_ui::widget::when), since a user can't
+/// use them.
+fn find<'a>(
+    model: &impl Contents,
+    widget: &'a Widget,
+    pred: &mut impl FnMut(&Widget) -> bool,
+) -> Option<&'a Widget> {
     if pred(widget) {
         return Some(widget);
     }
     match widget.kind() {
-        Kind::Column(children) | Kind::Row(children) => children.iter().find_map(|c| find(c, pred)),
+        Kind::Column(children) | Kind::Row(children) => {
+            children.iter().find_map(|c| find(model, c, pred))
+        }
+        Kind::When { state, child } if is_shown(model, state) => find(model, child, pred),
         _ => None,
     }
 }
@@ -419,6 +433,33 @@ mod tests {
             island.press("OK"),
             Err(ActionError::AmbiguousButton(l)) if l == "OK"
         ));
+    }
+
+    #[test]
+    fn hidden_widgets_are_left_out() {
+        let mut builder = IslandBuilder::new(column([
+            checkbox("more", "More"),
+            when("more", column([text_field("t", ""), submit_button("OK")])),
+        ]));
+        builder.derive("more", |f| f.checked("more").into());
+        let mut island = Island::new(builder).unwrap();
+        assert_eq!(
+            island.to_string(),
+            "column\n  checkbox more: [ ] \"More\"\n"
+        );
+        assert_eq!(
+            island.type_text("t", "x"),
+            Err(ActionError::NoTextField("t".into()))
+        );
+        assert!(matches!(island.press("OK"), Err(ActionError::NoButton(_))));
+
+        island.set_checked("more", true).unwrap();
+        assert_eq!(
+            island.to_string(),
+            "column\n  checkbox more: [x] \"More\"\n  column\n    text_field t: \"\"\n    button \"OK\"\n"
+        );
+        island.type_text("t", "x").unwrap();
+        assert!(island.press("OK").is_ok());
     }
 
     #[test]

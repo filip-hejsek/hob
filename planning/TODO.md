@@ -30,8 +30,6 @@ come later.
 
 The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 
-- **`when(state, widget)`:** hide a widget while bool state is false
-  (e.g. the fruit demo's "no matches" label, with `no_matches` a bool).
 - **`suggestions()`:** make it a full-featured autocomplete widget, with
   suggestions selectable by keyboard like in an IDE. (Currently it only
   supports clicking.)

@@ -126,7 +126,7 @@ pub enum Value {
     Number(f64),
     /// Lines, e.g. for a [`list`](widget::list).
     List(Vec<String>),
-    /// A flag, e.g. for showing or hiding widgets (planned).
+    /// A flag, e.g. for [`when`](widget::when).
     Bool(bool),
 }
 
@@ -449,6 +449,10 @@ impl IslandBuilder {
                     .iter()
                     .try_for_each(|c| self.check_references(c, fields));
             }
+            Kind::When { state, child } => {
+                self.check_references(child, fields)?;
+                state
+            }
             Kind::Label(Text::State(state)) | Kind::Progress { state } | Kind::List { state } => {
                 state
             }
@@ -475,6 +479,7 @@ fn collect_fields(widget: &Widget, fields: &mut Fields) -> Result<(), Error> {
         Kind::Column(children) | Kind::Row(children) => {
             return children.iter().try_for_each(|c| collect_fields(c, fields));
         }
+        Kind::When { child, .. } => return collect_fields(child, fields),
         Kind::TextField { id, .. } => (id, Field::Text(String::new())),
         Kind::Checkbox { id, .. } => (id, Field::Bool(false)),
         _ => return Ok(()),
@@ -664,6 +669,16 @@ mod tests {
         WARNINGS.with(|w| w.borrow_mut().clear());
         f();
         WARNINGS.with(|w| w.take())
+    }
+
+    #[test]
+    fn when_is_checked_like_other_widgets() {
+        let ui = IslandBuilder::new(when("nope", label("")));
+        assert!(matches!(check(&ui), Err(Error::UnknownState(n)) if n == "nope"));
+
+        let mut ui = IslandBuilder::new(when("show", text_field("t", "")));
+        ui.set_state("show", false);
+        assert!(ui.build().unwrap().model.fields().text("t").is_empty());
     }
 
     #[test]

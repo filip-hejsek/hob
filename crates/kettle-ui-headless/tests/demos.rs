@@ -43,10 +43,8 @@ fn fruit_search() {
 
     island.type_text("fruit", "xyz").unwrap();
     assert_eq!(island.state("matches"), Some(&Value::List(Vec::new())));
-    assert_eq!(
-        island.state("no_matches"),
-        Some(&Value::from("No matching fruit"))
-    );
+    assert_eq!(island.state("no_matches"), Some(&Value::Bool(true)));
+    assert!(island.to_string().contains("label \"No matching fruit\""));
 
     island.type_text("fruit", "ap").unwrap();
     // Wait for the pretend loading to finish, so the snapshot is stable.
@@ -65,7 +63,6 @@ fn fruit_search() {
     - "grape"
     - "grapefruit"
     - "pineapple"
-  label ""
   row
     button "Choose"
     button "Cancel"

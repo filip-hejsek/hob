@@ -7,6 +7,11 @@ they're worth remembering. Open questions and plans are in TODO.md.
 
 - The widget tree is fixed once built. kettle-ui is deliberately small:
   options are added only when needed.
+- Parts of the tree are hidden with `when(state, widget)`, shown only while
+  the named state is `Value::Bool(true)` (missing or another type hides
+  it). Showing and hiding doesn't change the tree's shape, and a hidden
+  field keeps its value. Rejected: hiding labels by setting them to `""`
+  (still works, but implicit and only for labels).
 
 ### Dependency tracking for derived state
 
@@ -46,20 +51,20 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   stable. Deserializing checks the field values against the tree. JSON has
   no NaN or infinity: they're saved as `null`, which is restored as NaN.
 - `Value` includes bools (`Value::Bool`), saved as JSON booleans and shown
-  as `true`/`false`; for the planned `when` (see TODO.md).
+  as `true`/`false`; used by `when`.
 
 ## kettle-ui-iced
 
 - Spacing is fixed at 10 px.
 - A widget with nothing to show (empty label, list or suggestions with no
   items, a column or row of such widgets) gets no gaps around it. The check
-  is `kettle_ui::widget::is_visible`, so other backends can share it. A
-  `when(...)` wrapper that hides any widget may be added later, through the
-  same check.
+  is `kettle_ui::widget::is_visible`, so other backends can share it; it
+  also covers `when`.
 - Hidden widgets stay in the iced tree, at zero size: iced matches widget
   state (focus, cursor) to children by position, so removing one could reset
   the widgets after it. Columns and rows use spacing 0, and every child is
-  wrapped in a container whose padding adds the gap before it.
+  wrapped in a container whose padding adds the gap before it. A hidden
+  `when` child is also disabled, so a focused text field stops taking input.
 - The default theme. Styling options are deliberately minimal; global
   customization, if any, will be set by the host application, not the
   island.
@@ -76,6 +81,9 @@ and renders the island as an indented text outline.
   implicitly.
 - Buttons are addressed by label; several buttons with the same label are
   fine if they do the same thing.
+- Widgets hidden by `when` are left out of the outline and can't be acted
+  on, like for a user. A shown `when` is transparent in the outline. Empty
+  labels and lists are still listed.
 
 ## hob-core (command interpreter)
 

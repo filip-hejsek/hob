@@ -1,7 +1,7 @@
 //! The widgets an island is built from.
 //!
 //! Build the (fixed) widget tree with the functions in this module:
-//! - layout: [`column()`], [`row`]
+//! - layout: [`column()`], [`row`], [`when`]
 //! - display: [`label`] (with [`state`]), [`progress`], [`list`]
 //! - form elements: [`text_field`], [`checkbox`], [`suggestions`]
 //! - buttons: [`submit_button`], [`cancel_button`]
@@ -37,6 +37,13 @@ pub enum Kind {
     Column(Vec<Widget>),
     /// [`row`]
     Row(Vec<Widget>),
+    /// [`when`]
+    When {
+        /// The named state that decides whether `child` is shown.
+        state: String,
+        /// The widget shown while `state` is true.
+        child: Box<Widget>,
+    },
     /// [`label`]
     Label(Text),
     /// [`text_field`]
@@ -126,6 +133,16 @@ pub fn row(children: impl IntoIterator<Item = Widget>) -> Widget {
     Widget(Kind::Row(children.into_iter().collect()))
 }
 
+/// Shows `child` only while the named state `state` is
+/// [`Value::Bool`]`(true)`. A hidden widget can't be used and takes no space,
+/// but keeps its field value.
+pub fn when(state: &str, child: Widget) -> Widget {
+    Widget(Kind::When {
+        state: state.to_owned(),
+        child: Box::new(child),
+    })
+}
+
 /// Shows fixed text, or the value of named state (see [`state`]).
 pub fn label(text: impl Into<Text>) -> Widget {
     Widget(Kind::Label(text.into()))
@@ -191,14 +208,15 @@ pub fn cancel_button(label: &str) -> Widget {
 /// gaps around it.
 ///
 /// Hidden are: a label with empty text (missing state counts as empty), a
-/// list or suggestions with no items (or whose state isn't a list), and a
-/// column or row whose children are all hidden. Other widgets are always
-/// visible.
+/// list or suggestions with no items (or whose state isn't a list), a column
+/// or row whose children are all hidden, and a [`when`] whose state isn't
+/// true or whose child is hidden. Other widgets are always visible.
 pub fn is_visible(contents: &impl Contents, widget: &Widget) -> bool {
     match widget.kind() {
         Kind::Column(children) | Kind::Row(children) => {
             children.iter().any(|c| is_visible(contents, c))
         }
+        Kind::When { state, child } => is_shown(contents, state) && is_visible(contents, child),
         Kind::Label(Text::Static(s)) => !s.is_empty(),
         Kind::Label(Text::State(name)) => contents
             .state(name)
@@ -211,6 +229,11 @@ pub fn is_visible(contents: &impl Contents, widget: &Widget) -> bool {
         | Kind::Progress { .. }
         | Kind::Button { .. } => true,
     }
+}
+
+/// Whether a [`when`] with this state shows its child.
+pub fn is_shown(contents: &impl Contents, state: &str) -> bool {
+    contents.state(state) == Some(&Value::Bool(true))
 }
 
 #[cfg(test)]
@@ -300,5 +323,19 @@ mod tests {
         ));
         assert!(is_visible(&c, &column([label(""), row([list("items")])])));
         assert!(is_visible(&c, &row([column([]), text_field("f", "")])));
+    }
+
+    #[test]
+    fn when_shows_its_child_only_while_true() {
+        let c = contents([
+            ("yes", true.into()),
+            ("no", false.into()),
+            ("text", "true".into()),
+        ]);
+        assert!(is_visible(&c, &when("yes", text_field("f", ""))));
+        assert!(!is_visible(&c, &when("yes", label(""))));
+        for name in ["no", "text", "missing"] {
+            assert!(!is_visible(&c, &when(name, text_field("f", ""))));
+        }
     }
 }
