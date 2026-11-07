@@ -28,6 +28,8 @@ The project is split into these parts:
   images as JPEG XL.
 - **hob-demo** — demo commands.
 - **hob-fs** — filesystem commands: `pwd`, `cd`, `ls`, `cat`.
+- **hob-git** — Git commands, using gitoxide rather than the `git` program:
+  `git status`, `git log`, `git branch`, `git diff`.
 - **hob** — the application: registers the commands and starts the shell
   (or, with `--headless`, the headless frontend; with `--preview`, a
   read-only view of a saved session).

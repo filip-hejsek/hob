@@ -123,6 +123,20 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - Path completion, once commands can say what arguments they take.
 - `cat` could show big files in parts, or a binary file as hex.
 
+## Git commands (hob-git)
+
+- Commands that change the repository, as islands: `git commit` with a
+  checkbox per changed file (staging) and a text area for the message;
+  `git switch` picking a branch with suggestions. Note that gix runs no
+  hooks and doesn't sign commits; decide whether that's acceptable or
+  whether those should run the `git` program.
+- `log` with more than one line per commit (author, date, body), and
+  decorations (branch names); `show`.
+- `diff` of particular paths or commits; colours (needs styled text,
+  which kettle-ui doesn't have).
+- `branch` doesn't show upstreams or ahead/behind counts.
+- Long operations (`status` in a huge repository) can't be interrupted.
+
 ## Logging
 
 - `log` records from a command's thread could go into its block.

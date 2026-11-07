@@ -293,6 +293,33 @@ operands, `--` ends them); unknown ones are errors.
   session. Invalid UTF-8 is replaced.
 - I/O errors are shown as `PATH: message`, without Rust's `(os error N)`.
 
+## Git commands (hob-git)
+
+One `git` command with subcommands (`status`, `log`, `branch`, `diff`),
+named like git's so they're familiar; `!git ...` still runs the real one.
+
+- They use gitoxide (`gix`), not the `git` program: a library gives
+  structured results to build islands from, and needs no `git` installed.
+  Rejected: git2 (libgit2, a C library to build or find). gix's default
+  features are off; only what's used is on (status, revisions, blob
+  diffs), so no network code is built.
+- The repository is found from the interpreter's working directory, like
+  git. `status` shows paths relative to it; `diff` names files from the top
+  of the worktree, as git does.
+- `status` is git's long format without the hints, one message per section
+  (staged, not staged, untracked; conflicts first), each sorted by path.
+  Untracked directories are collapsed (`dir/`).
+- `log` is like `git log --oneline`, newest first by commit time, and shows
+  20 commits unless `-n N` says otherwise (with an info record saying there
+  are more): the scrollback isn't made for a whole history.
+- `diff` (worktree against index) and `diff --cached` (index against
+  `HEAD`) print one message per file, in git's unified format with 3 lines
+  of context, capped at 1 MiB like `cat`. Files are compared as stored:
+  no filters (line endings), diff drivers, or function names in hunk
+  headers. A file with a NUL byte is reported as binary.
+- Tests build repositories with the `git` program, ignoring the user's
+  config (`GIT_CONFIG_GLOBAL=/dev/null`), with fixed commit times.
+
 ## Logging
 
 - Commands log with `ctx.error/warn/info/debug`; the records go into the

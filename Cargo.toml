@@ -22,6 +22,7 @@ dbg_macro = "warn"
 hob-core = { path = "crates/hob-core" }
 hob-demo = { path = "crates/hob-demo" }
 hob-fs = { path = "crates/hob-fs" }
+hob-git = { path = "crates/hob-git" }
 hob-gui = { path = "crates/hob-gui" }
 hob-headless = { path = "crates/hob-headless" }
 hob-mcp = { path = "crates/hob-mcp" }
@@ -37,6 +38,7 @@ dirs = "7"
 futures-channel = "0.3"
 futures-core = "0.3"
 futures-executor = "0.3"
+gix = { version = "0.90", default-features = false, features = ["max-performance", "sha1", "status", "revision", "blob-diff"] }
 iced = "0.14"
 image = { version = "0.25", default-features = false }
 jiff = "0.2"

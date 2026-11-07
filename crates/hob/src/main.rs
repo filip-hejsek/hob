@@ -55,6 +55,7 @@ fn interpreter() -> Interpreter {
     hob_core::builtins::register(&mut interpreter);
     hob_demo::register(&mut interpreter);
     hob_fs::register(&mut interpreter);
+    hob_git::register(&mut interpreter);
     interpreter
 }
 
