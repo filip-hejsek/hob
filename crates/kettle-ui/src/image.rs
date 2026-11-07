@@ -24,18 +24,33 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// available (e.g. an [ephemeral](Image::ephemeral) image in a restored
 /// session).
 ///
+/// A frontend that saves images (e.g. in a session) saves a copy of the
+/// data by default; an image can instead be [linked](Image::linked) to its
+/// file, or [ephemeral](Image::ephemeral).
+///
 /// Serialized as an object with the [`key`](Image::key), the alt text,
-/// the [`ImageData`] fields if the data is there, and the path if the image
-/// is from a file.
+/// the [`ImageData`] fields if the data is there, the path if the image
+/// is from a file, and `linked: true` if it's linked.
 #[derive(Clone)]
 pub struct Image(Arc<Inner>);
+
+/// How a frontend saves an image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Saving {
+    /// With a copy of its data.
+    Copy,
+    /// See [`Image::linked`].
+    Link,
+    /// See [`Image::ephemeral`].
+    Ephemeral,
+}
 
 struct Inner {
     key: ImageKey,
     alt: String,
     data: Option<ImageData>,
     path: Option<PathBuf>,
-    ephemeral: bool,
+    saving: Saving,
     /// See [`Image::backend_cache`].
     cache: OnceLock<Box<dyn Any + Send + Sync>>,
 }
@@ -84,7 +99,7 @@ impl Image {
             alt,
             data,
             path,
-            ephemeral: false,
+            saving: Saving::Copy,
             cache: OnceLock::new(),
         }))
     }
@@ -96,7 +111,7 @@ impl Image {
             alt: self.0.alt.clone(),
             data: self.0.data.clone(),
             path: self.0.path.clone(),
-            ephemeral: self.0.ephemeral,
+            saving: self.0.saving,
             cache: OnceLock::new(),
         };
         change(&mut inner);
@@ -106,13 +121,42 @@ impl Image {
     /// Marks the image as not to be saved: a frontend leaves it out of what
     /// it saves to disk (e.g. a session), so after a restart only the alt
     /// text is shown. It's still shown, and sent to clients, as usual.
+    /// Replaces [`Image::linked`].
     pub fn ephemeral(self) -> Image {
-        self.with(|i| i.ephemeral = true)
+        self.with(|i| i.saving = Saving::Ephemeral)
     }
 
     /// Whether the image is [ephemeral](Image::ephemeral).
     pub fn is_ephemeral(&self) -> bool {
-        self.0.ephemeral
+        self.0.saving == Saving::Ephemeral
+    }
+
+    /// Marks the image as linked to its file: a frontend saves only its
+    /// path and key, and reads the file again when restoring it (see
+    /// [`Image::reread`]), so it's shown only if the file hasn't changed.
+    /// For an image that isn't from a file, that's like
+    /// [ephemeral](Image::ephemeral). Replaces [`Image::ephemeral`].
+    pub fn linked(self) -> Image {
+        self.with(|i| i.saving = Saving::Link)
+    }
+
+    /// Whether the image is [linked](Image::linked).
+    pub fn is_linked(&self) -> bool {
+        self.0.saving == Saving::Link
+    }
+
+    /// A copy with the data read again from the image's file, if the file
+    /// still has the contents the image was made from (the same
+    /// [`key`](Image::key)). The contents are kept as they are, not
+    /// recompressed, so this is quick.
+    pub fn reread(&self) -> Result<Image, ImageError> {
+        let path = self.path().ok_or(ImageError::NoFile)?;
+        let bytes = std::fs::read(path).map_err(ImageError::Io)?;
+        if ImageKey::of_encoded(&bytes) != self.key() {
+            return Err(ImageError::Changed);
+        }
+        let data = codec::take(bytes)?;
+        Ok(self.with_data(data))
     }
 
     /// Identifies the data the image was made from, before compression.
@@ -169,7 +213,7 @@ impl Image {
 }
 
 /// Equal if made from the same data, with the same alt text, path, and
-/// whether the data is there and the image ephemeral.
+/// whether the data is there, and how it's saved.
 impl PartialEq for Image {
     fn eq(&self, other: &Self) -> bool {
         let (a, b) = (&self.0, &other.0);
@@ -177,7 +221,7 @@ impl PartialEq for Image {
             || (a.key == b.key
                 && a.alt == b.alt
                 && a.path == b.path
-                && a.ephemeral == b.ephemeral
+                && a.saving == b.saving
                 && a.data.is_some() == b.data.is_some())
     }
 }
@@ -189,7 +233,7 @@ impl fmt::Debug for Image {
             .field("alt", &self.0.alt)
             .field("data", &self.0.data)
             .field("path", &self.0.path)
-            .field("ephemeral", &self.0.ephemeral)
+            .field("saving", &self.0.saving)
             .finish()
     }
 }
@@ -204,6 +248,8 @@ struct ImageRepr {
     /// Left out if the path isn't valid Unicode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     path: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    linked: bool,
 }
 
 impl Serialize for Image {
@@ -213,6 +259,7 @@ impl Serialize for Image {
             alt: self.0.alt.clone(),
             data: self.0.data.clone(),
             path: self.path().and_then(Path::to_str).map(str::to_owned),
+            linked: self.is_linked(),
         }
         .serialize(serializer)
     }
@@ -221,7 +268,8 @@ impl Serialize for Image {
 impl<'de> Deserialize<'de> for Image {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let r = ImageRepr::deserialize(deserializer)?;
-        Ok(Image::new(r.key, r.alt, r.data, r.path.map(PathBuf::from)))
+        let image = Image::new(r.key, r.alt, r.data, r.path.map(PathBuf::from));
+        Ok(if r.linked { image.linked() } else { image })
     }
 }
 
@@ -409,6 +457,10 @@ pub enum ImageError {
     WrongSize,
     /// The image is broken.
     Invalid(String),
+    /// The image isn't from a file, so it can't be read again.
+    NoFile,
+    /// The image's file has changed since the image was made from it.
+    Changed,
 }
 
 impl fmt::Display for ImageError {
@@ -420,6 +472,8 @@ impl fmt::Display for ImageError {
             }
             ImageError::WrongSize => f.write_str("the pixels don't match the image size"),
             ImageError::Invalid(e) => write!(f, "invalid image: {e}"),
+            ImageError::NoFile => f.write_str("the image isn't from a file"),
+            ImageError::Changed => f.write_str("the image file has changed"),
         }
     }
 }

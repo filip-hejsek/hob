@@ -133,3 +133,29 @@ fn pizza_can_be_cancelled() {
     answer(&mut requests, |island| island.press("Cancel").unwrap());
     assert_eq!(rest(requests), ["Order cancelled."]);
 }
+
+#[test]
+fn view_saves_images_as_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("red.png");
+    let red = kettle_ui::Image::from_rgba(1, 1, &[255, 0, 0, 255], "").unwrap();
+    std::fs::write(&path, red.data().unwrap().bytes()).unwrap();
+    let image = |flags: &str| {
+        let line = format!("view {flags} {}", path.display());
+        let Some(Request::PrintIsland(island)) = run(&line).next() else {
+            panic!("expected an island");
+        };
+        match island.state("image") {
+            Some(kettle_ui::Value::Image(image)) => image.clone(),
+            other => panic!("not an image: {other:?}"),
+        }
+    };
+    let copied = image("");
+    assert!(!copied.is_linked() && !copied.is_ephemeral());
+    assert!(image("-l").is_linked());
+    assert!(image("-e").is_ephemeral());
+    assert_eq!(
+        rest(run("view -e -l x")),
+        ["error: -e and -l can't be used together"]
+    );
+}

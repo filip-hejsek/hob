@@ -20,9 +20,11 @@ const VERSION: u32 = 3;
 /// the scrollback. Saved as JSON, without ephemeral log records.
 ///
 /// Images are saved once each, in a table by [`ImageKey`] at the end of the
-/// file, and islands refer to them by key. Ephemeral images
-/// ([`Image::ephemeral`]) aren't saved, nor their paths: they're restored
-/// without data, so only their alt text is shown.
+/// file, and islands refer to them by key. Linked images
+/// ([`Image::linked`]) are saved as their path and key: they're read from
+/// the file again when loaded, if it hasn't changed. Ephemeral images
+/// ([`Image::ephemeral`]) aren't saved, nor their paths. Images restored
+/// without data show only their alt text.
 #[derive(Default, Serialize, Deserialize)]
 pub struct Session {
     /// Entered command lines, oldest first.
@@ -101,7 +103,8 @@ impl Serialize for Entry {
 }
 
 /// An image as saved in an island: without data, which is saved in the
-/// table, and without the path if it's ephemeral.
+/// table (or not saved, if it's linked), and without the path if it's
+/// ephemeral.
 fn saved_image(image: &Image) -> Image {
     let image = image.without_data();
     if image.is_ephemeral() {
@@ -256,7 +259,7 @@ impl Session {
             .flatten()
     }
 
-    /// The data of the islands' images that are saved.
+    /// The data of the islands' images that are saved with their data.
     fn image_table(&self) -> BTreeMap<ImageKey, ImageData> {
         (self.entries())
             .filter_map(|entry| match entry {
@@ -264,13 +267,14 @@ impl Session {
                 _ => None,
             })
             .flatten()
-            .filter(|image| !image.is_ephemeral())
+            .filter(|image| !image.is_ephemeral() && !image.is_linked())
             .filter_map(|image| Some((image.key(), image.data()?.clone())))
             .collect()
     }
 
-    /// Gives the loaded islands' images their data from the table. Images
-    /// of unreadable islands get it inline, so it's saved with them.
+    /// Gives the loaded islands' images their data from the table, or for
+    /// linked images, from their files if unchanged. Images of unreadable
+    /// islands get it inline from the table, so it's saved with them.
     fn attach_images(&mut self, images: &BTreeMap<ImageKey, ImageData>) {
         let entries = (self.scrollback.iter_mut())
             .filter_map(|item| match item {
@@ -283,6 +287,9 @@ impl Session {
                 Entry::Island(island) => {
                     *island = island.map_images(|image| match images.get(&image.key()) {
                         Some(data) => image.with_data(data.clone()),
+                        None if image.is_linked() => {
+                            image.reread().unwrap_or_else(|_| image.clone())
+                        }
                         None => image.clone(),
                     });
                 }
@@ -526,6 +533,44 @@ mod tests {
         assert!(secret.data().is_none());
         let again = image_state(&block.entries[1], "x");
         assert_eq!((again.alt(), again.data()), ("a again", a.data()));
+    }
+
+    #[test]
+    fn linked_images_are_read_again_if_unchanged() {
+        let dir = temp_dir("linked");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.json");
+        let file = |name: &str, shade: u8| {
+            let file = dir.join(name);
+            fs::write(&file, red(shade, "").data().unwrap().bytes()).unwrap();
+            Image::from_file(&file, name).unwrap().linked()
+        };
+        let (kept, changed) = (file("kept.png", 10), file("changed.png", 20));
+        let mut s = session();
+        let Item::Block(block) = &mut s.scrollback[0] else {
+            unreachable!()
+        };
+        block.entries = vec![image_island(&[("x", kept.clone()), ("y", changed)])];
+        s.save(&path).unwrap();
+
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(json["images"].as_object().unwrap().is_empty());
+        let x = &json["scrollback"][0]["block"]["entries"][0]["island"]["state"]["x"];
+        assert_eq!(x["path"], dir.join("kept.png").to_str().unwrap());
+        assert_eq!(x["linked"], true);
+
+        file("changed.png", 30);
+        let loaded = Session::load(&path).unwrap().unwrap();
+        let block = only_block(&loaded);
+        let x = image_state(&block.entries[0], "x");
+        assert!(x.is_linked());
+        assert_eq!(
+            x.data().unwrap().bytes(),
+            fs::read(kept.path().unwrap()).unwrap()
+        );
+        let y = image_state(&block.entries[0], "y");
+        assert!(y.is_linked() && y.path().is_some() && y.data().is_none());
     }
 
     #[test]

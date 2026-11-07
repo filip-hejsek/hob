@@ -84,7 +84,7 @@ Known bugs are in BUGS.md.
   XL for display; other formats are decoded by the `image` crate.
 - An image serializes as an object (the only `Value` that does): `key`,
   `alt`, then `format`, `width`, `height` and `data` (base64) if the data is
-  there, and `path` if it's from a file. An image without data is shown as
+  there, `path` if it's from a file, and `linked: true` if it's linked. An image without data is shown as
   "Image not available" with its alt text; one that can't be decoded, as
   "Image can't be shown". Elsewhere (e.g. a label of the same state) an
   image shows as its alt text.
@@ -92,8 +92,16 @@ Known bugs are in BUGS.md.
   table by key at the end; islands keep the rest. An island can mark an
   image ephemeral (`Image::ephemeral`): it's left out of the table, and its
   path isn't saved either, so after a restart only its alt text is shown.
-  Ephemeral affects only what's saved to disk, not what's shown or sent to
-  clients. An unreadable island's images get their data inline when
+  Or it can mark it linked (`Image::linked`): it's left out of the table
+  too, but its path is saved, and when loading, the file is read again and
+  used if its contents still have the image's key (a hash of them, as for
+  any image from a file). Rejected: a separate hash (the key already is
+  one), or using a changed file anyway (the session should show what the
+  command showed). A file read again isn't recompressed, so loading stays
+  quick; it's kept as it is, since it isn't saved. Ephemeral and linked
+  affect only what's saved to disk, not what's shown or sent to clients
+  (though `linked` is in the serialized image). Linking didn't need a new
+  session version: an older hob ignores `linked`, showing the alt text. An unreadable island's images get their data inline when
   loaded, so it isn't lost.
 - hob-headless sends images with their data, but without their paths
   unless asked (`Options::image_paths`, set by `HOB_IMAGE_PATHS=1` in `hob

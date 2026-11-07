@@ -211,8 +211,9 @@ pub fn list(state: &str) -> Widget {
 
 /// Shows named state that's an [`Image`](crate::Image), at its natural
 /// size or scaled down to fit. If the image's data is missing (e.g. it was
-/// [ephemeral](crate::Image::ephemeral) and the island was restored), its
-/// alt text is shown with a notice.
+/// [ephemeral](crate::Image::ephemeral) and the island was restored, or
+/// [linked](crate::Image::linked) and its file changed), its alt text is
+/// shown with a notice.
 pub fn image(state: &str) -> Widget {
     Widget(Kind::Image {
         state: state.to_owned(),

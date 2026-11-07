@@ -38,10 +38,15 @@ pub fn register(interpreter: &mut Interpreter) {
     interpreter.register_spec("levels", "Log a message at each level", Spec::new(), levels);
     interpreter.register_spec(
         "view",
-        "Show image files (with -e, they aren't saved in the session)",
+        "Show image files (-e: not saved in the session; -l: only their paths saved)",
         Spec::new()
             .flag("ephemeral", "Don't save the images in the session")
             .short('e')
+            .flag(
+                "link",
+                "Save only the files' paths in the session, and show them if unchanged",
+            )
+            .short('l')
             .arg("FILE", Kind::Path)
             .repeated(),
         view,
@@ -233,12 +238,16 @@ fn price(cents: u32) -> String {
 
 /// Prints the image files given (relative to the working directory), each
 /// with its name. With `-e`, the images are ephemeral: not saved in the
-/// session.
+/// session. With `-l`, they're linked: only their paths are saved.
 fn view(ctx: &mut Context, args: &Matches) -> CommandResult {
-    let ephemeral = args.flag("ephemeral");
+    let (ephemeral, link) = (args.flag("ephemeral"), args.flag("link"));
+    if ephemeral && link {
+        return Err("-e and -l can't be used together".into());
+    }
     for file in args.values("FILE") {
         let picture = match Image::from_file(ctx.resolve(file), file.as_str()) {
             Ok(picture) if ephemeral => picture.ephemeral(),
+            Ok(picture) if link => picture.linked(),
             Ok(picture) => picture,
             Err(e) => {
                 ctx.error(format!("{file}: {e}"));

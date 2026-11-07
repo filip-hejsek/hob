@@ -69,8 +69,9 @@ on stderr); the `messages` command lists all messages. Set `HOB_LOG=debug` to
 also show debug messages.
 
 Images are saved once each, however often they're shown, compressed as
-JPEG XL where that's smaller; commands can mark an image as ephemeral, so
-it isn't saved at all.
+JPEG XL where that's smaller. Commands can instead mark an image as linked,
+so only its file's path is saved and the file is shown again if unchanged,
+or as ephemeral, so it isn't saved at all (try `view -l` and `view -e`).
 
 To try the headless frontend, run the demo client, which starts
 `hob --headless` from the same directory:

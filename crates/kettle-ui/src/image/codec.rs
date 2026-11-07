@@ -57,6 +57,13 @@ pub(super) fn compress(bytes: Vec<u8>) -> Result<ImageData, ImageError> {
     Ok(smaller(data(format, width, height, bytes), jxl))
 }
 
+/// Takes an image file's contents as they are.
+pub(super) fn take(bytes: Vec<u8>) -> Result<ImageData, ImageError> {
+    let format = sniff(&bytes).ok_or(ImageError::UnknownFormat)?;
+    let (width, height) = dimensions(format, &bytes)?;
+    Ok(data(format, width, height, bytes))
+}
+
 fn data(format: ImageFormat, width: u32, height: u32, bytes: Vec<u8>) -> ImageData {
     ImageData {
         format,
@@ -327,6 +334,27 @@ mod tests {
         assert_eq!(image.path(), Some(path.as_path()));
         assert_eq!(image.key(), Image::from_bytes(png, "").unwrap().key());
         assert_eq!(image.without_path().path(), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn linked_images_are_reread_if_unchanged() {
+        let dir = std::env::temp_dir().join(format!("kettle-ui-reread-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.png");
+        let original = png(4, 4, &gradient(4, 4));
+        std::fs::write(&path, &original).unwrap();
+        let image = Image::from_file(&path, "a").unwrap().linked();
+        let reread = image.without_data().reread().unwrap();
+        assert!(reread.is_linked());
+        assert_eq!(reread.data().unwrap().bytes(), original);
+
+        std::fs::write(&path, png(4, 4, &[0; 64])).unwrap();
+        assert!(matches!(image.reread(), Err(ImageError::Changed)));
+        assert!(matches!(
+            Image::from_bytes(original, "").unwrap().reread(),
+            Err(ImageError::NoFile)
+        ));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -18,3 +18,4 @@ kettle-ui-demo.workspace = true
 [dev-dependencies]
 futures-executor.workspace = true
 kettle-ui-headless.workspace = true
+tempfile.workspace = true
