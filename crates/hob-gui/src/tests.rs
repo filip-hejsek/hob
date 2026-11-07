@@ -92,6 +92,66 @@ fn clearing_keeps_the_focus_of_a_live_island() {
 }
 
 #[test]
+fn typing_while_nothing_has_focus_types_into_the_prompt() {
+    let mut shell = start(None);
+    shell.run("say hi");
+    shell.expect("hi");
+    // A click on the output unfocuses the prompt.
+    shell.step(click("> say hi"));
+    shell.settle();
+    // The emulator doesn't pass events to subscriptions, so this sends
+    // what `key_message` makes of the first key.
+    shell.update(Message::Typed("s".into()));
+    // The prompt has focus now, and takes the rest.
+    shell.step(typewrite("ay again"));
+    shell.step(press(Key::Enter));
+    shell.expect("again");
+}
+
+#[test]
+fn only_printable_text_no_widget_took_is_typed() {
+    let press = |key: keyboard::Key, modifiers, text: Option<&str>| {
+        iced::Event::Keyboard(keyboard::Event::KeyPressed {
+            modified_key: key.clone(),
+            key,
+            physical_key: keyboard::key::Physical::Unidentified(
+                keyboard::key::NativeCode::Unidentified,
+            ),
+            location: keyboard::Location::Standard,
+            modifiers,
+            text: text.map(Into::into),
+            repeat: false,
+        })
+    };
+    let a = || keyboard::Key::Character("a".into());
+    let ignored = event::Status::Ignored;
+    let typed = key_message(press(a(), Modifiers::SHIFT, Some("A")), ignored);
+    assert!(matches!(typed, Some(Message::Typed(t)) if t == "A"));
+    // A widget took it.
+    let captured = event::Status::Captured;
+    assert!(key_message(press(a(), Modifiers::empty(), Some("a")), captured).is_none());
+    // Not text, but maybe bound.
+    let ctrl_a = key_message(press(a(), Modifiers::CTRL, Some("\u{1}")), ignored);
+    assert!(matches!(ctrl_a, Some(Message::Key(..))));
+    let tab = keyboard::Key::Named(keyboard::key::Named::Tab);
+    let tab = key_message(press(tab, Modifiers::empty(), Some("\t")), ignored);
+    assert!(matches!(tab, Some(Message::Key(..))));
+}
+
+#[test]
+fn ctrl_d_works_while_nothing_has_focus() {
+    let mut shell = start(None);
+    shell.run("greet");
+    shell.expect("OK");
+    shell.settle();
+    shell.step(click("> greet"));
+    shell.settle();
+    let ctrl_d = Message::Key(keyboard::Key::Character("d".into()), Modifiers::CTRL);
+    shell.update(ctrl_d);
+    shell.expect("warning: Not exiting: greet is running");
+}
+
+#[test]
 fn escape_cancels_an_island() {
     let mut shell = start(None);
     shell.run("greet");

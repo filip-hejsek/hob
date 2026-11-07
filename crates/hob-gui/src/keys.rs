@@ -22,12 +22,24 @@ pub(crate) enum Action {
     Exit,
 }
 
+/// Where focus must be for an [`Action`] to work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Scope {
+    /// Anywhere.
+    Anywhere,
+    /// In the prompt.
+    Prompt,
+    /// In the prompt, or nowhere.
+    PromptOrNothing,
+}
+
 impl Action {
-    /// Whether it only works while the prompt has focus.
-    pub(crate) fn needs_prompt(self) -> bool {
+    /// Where focus must be for it to work.
+    pub(crate) fn scope(self) -> Scope {
         match self {
-            Action::HistoryBack | Action::HistoryForward | Action::Complete | Action::Exit => true,
-            Action::PageUp | Action::PageDown | Action::Clear => false,
+            Action::HistoryBack | Action::HistoryForward | Action::Complete => Scope::Prompt,
+            Action::Exit => Scope::PromptOrNothing,
+            Action::PageUp | Action::PageDown | Action::Clear => Scope::Anywhere,
         }
     }
 }

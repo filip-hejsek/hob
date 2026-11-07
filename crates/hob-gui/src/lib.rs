@@ -20,8 +20,9 @@
 //! The prompt works like a shell's: Up and Down browse the history, and Tab
 //! completes command names and arguments. Tab doesn't move focus. Anywhere, PageUp and
 //! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). Ctrl+D
-//! in the empty prompt exits (like `exit`), unless commands are running: then
-//! it says so, and focuses an island waiting for input. The bindings are a table (see the
+//! in the empty prompt, or while nothing has focus, exits (like `exit`), unless
+//! commands are running: then it says so, and focuses an island waiting for
+//! input. Typing while nothing has focus types into the prompt. The bindings are a table (see the
 //! `keys` module), to make them configurable later.
 //!
 //! Command lines and output can be selected with the mouse and copied with
@@ -60,7 +61,7 @@ use kettle_ui::FrozenIsland;
 use kettle_ui_iced::{Island, spacing, view_frozen};
 
 use keyed::keyed;
-use keys::{Action, Binding};
+use keys::{Action, Binding, Scope};
 use selectable::selectable;
 
 mod keyed;
@@ -224,6 +225,10 @@ enum Message {
     PromptSubmitted,
     /// A key was pressed (the shell's bindings decide what it does).
     Key(keyboard::Key, Modifiers),
+    /// Text was typed, and no widget took it.
+    Typed(String),
+    /// Text was typed while nothing had focus; it goes to the prompt.
+    TypedUnfocused(String),
     /// Performs a bound action; for one that needs the prompt, it has
     /// focus.
     Action(Action),
@@ -419,18 +424,35 @@ impl Shell {
                 task
             }
             Message::Key(key, modifiers) => match keys::lookup(&self.bindings, key, modifiers) {
-                Some(action) if action.needs_prompt() => operation::is_focused(Id::new(PROMPT))
-                    .then(move |focused| {
-                        if focused {
-                            Task::done(Message::Action(action))
-                        } else {
-                            Task::none()
-                        }
-                    }),
-                Some(action) => self.perform(action),
+                Some(action) if action.scope() == Scope::Anywhere => self.perform(action),
+                Some(action) => focused().then(move |focused| {
+                    let works = match (action.scope(), focused) {
+                        (_, Some(id)) => id == Id::new(PROMPT),
+                        (scope, None) => scope == Scope::PromptOrNothing,
+                    };
+                    if works {
+                        Task::done(Message::Action(action))
+                    } else {
+                        Task::none()
+                    }
+                }),
                 None => Task::none(),
             },
             Message::Action(action) => self.perform(action),
+            Message::Typed(text) if !self.is_preview() => {
+                focused().then(move |focused| match focused {
+                    None => Task::done(Message::TypedUnfocused(text.clone())),
+                    Some(_) => Task::none(),
+                })
+            }
+            Message::Typed(_) => Task::none(),
+            Message::TypedUnfocused(text) => {
+                self.prompt.push_str(&text);
+                self.history.stop_browsing();
+                self.candidates.clear();
+                let prompt = Id::new(PROMPT);
+                operation::focus(prompt.clone()).chain(operation::move_cursor_to_end(prompt))
+            }
             Message::Refocus(target, focused) => self.refocus(target, focused),
             Message::Request(block, request) => match request.take() {
                 Some(request) => {
@@ -550,12 +572,7 @@ impl Shell {
 
     fn subscription(&self) -> Subscription<Message> {
         let close = window::close_requests().map(|_| Message::CloseRequested);
-        let keys = event::listen_with(|event, _status, _window| match event {
-            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
-                Some(Message::Key(key, modifiers))
-            }
-            _ => None,
-        });
+        let keys = event::listen_with(|event, status, _window| key_message(event, status));
         Subscription::batch([close, keys])
     }
 
@@ -882,6 +899,28 @@ fn log_records(items: &[Item]) -> Vec<LogRecord> {
             Item::Notice(record) => vec![record.clone()],
         })
         .collect()
+}
+
+/// The message for a key press that reached the shell: [`Message::Typed`]
+/// for printable text no widget took, [`Message::Key`] for other keys.
+/// Printable text is never looked up in the bindings.
+fn key_message(event: Event, status: event::Status) -> Option<Message> {
+    let Event::Keyboard(keyboard::Event::KeyPressed {
+        key,
+        modifiers,
+        text,
+        ..
+    }) = event
+    else {
+        return None;
+    };
+    let command = modifiers.control() || modifiers.alt() || modifiers.logo();
+    match text {
+        Some(text) if !command && !text.chars().any(char::is_control) => {
+            (status == event::Status::Ignored).then(|| Message::Typed(text.into()))
+        }
+        _ => Some(Message::Key(key, modifiers)),
+    }
 }
 
 /// Finds out which widget has focus, if any (its Id; `None` also if it has

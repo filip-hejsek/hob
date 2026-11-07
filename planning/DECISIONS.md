@@ -588,8 +588,8 @@ Works like a terminal: a scrollback with the prompt below it.
   completion work only while the prompt has focus; the others anywhere:
   PageUp/PageDown scroll the scrollback by a bit less than a page, and
   Ctrl+L clears it like `clear`, keeping the blocks of running commands.
-  Ctrl+D exits like `exit`, but only in the focused, empty prompt, as in
-  a terminal; otherwise it does nothing. It never asks: while commands are
+  Ctrl+D exits like `exit`, but only when the prompt is empty, and it or
+  nothing has focus, as in a terminal; otherwise it does nothing. It never asks: while commands are
   running, it doesn't exit, but adds an ephemeral warning ("Not exiting:
   LINE [and N other commands] are running"), naming the newest command
   waiting for input, else the newest running one, and moves focus to that
@@ -598,6 +598,15 @@ Works like a terminal: a scrollback with the prompt below it.
   (it's a focusable with the island's Id), then a second one scrolls.
   Closing the window still exits without asking.
   Escape has no binding.
+- Typing while nothing has focus (e.g. after a click on the scrollback)
+  focuses the prompt and adds the text at its end. The shell gets key
+  presses through a subscription, after the widgets: printable text
+  (without Ctrl, Alt or Super) that no widget took becomes `Typed`, other
+  keys go to the bindings, so a plain printable key can't be bound. Since
+  the subscription can't tell what has focus, `Typed` then asks, and only
+  types into the prompt if nothing has it (an island as a whole may have
+  focus and ignore letters). The emulator doesn't pass events to
+  subscriptions, so tests send `Typed` themselves.
 - A newly shown island gets focus, unless something other than the empty
   prompt has it, so an island that appears later doesn't take keys meant
   for something else. When an island freezes and nothing has focus, the
