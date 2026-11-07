@@ -1,23 +1,30 @@
 //! The hob desktop application. With `--headless`, it runs without a window
 //! instead, for a client program that talks JSON-RPC over stdin and stdout
 //! (see `hob-headless`). With `--preview`, it shows a saved session
-//! read-only, without running commands.
+//! read-only, without running commands. Built without the `gui` feature, it
+//! runs only with `--headless`.
 
+#[cfg(feature = "gui")]
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use hob_core::Interpreter;
 
+#[cfg(feature = "gui")]
 const USAGE: &str = "usage: hob [--headless | --preview [SESSION]]";
+#[cfg(not(feature = "gui"))]
+const USAGE: &str = "usage: hob --headless (built without the gui feature)";
 
 fn main() -> ExitCode {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let result = match args.as_slice() {
+        #[cfg(feature = "gui")]
         [] => {
             let placeholder = "Type a command, or help";
             hob_gui::run(interpreter(), session_path(), placeholder).map_err(|e| e.to_string())
         }
         // No interpreter: a preview runs nothing.
+        #[cfg(feature = "gui")]
         [flag, path @ ..] if flag == "--preview" && path.len() <= 1 => {
             let path = match path {
                 [path] => Some(PathBuf::from(path)),
@@ -59,6 +66,7 @@ fn interpreter() -> Interpreter {
     interpreter
 }
 
+#[cfg(feature = "gui")]
 /// Where the session is saved: `HOB_SESSION` if set, otherwise in the
 /// platform's state (or local data) directory.
 fn session_path() -> Option<PathBuf> {

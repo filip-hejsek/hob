@@ -68,6 +68,9 @@ To try the headless frontend, run the demo client, which starts
 cargo build && target/debug/hob-cli
 ```
 
+To build hob without the window and iced (only `--headless` works then),
+turn off its `gui` feature: `cargo build -p hob --no-default-features`.
+
 To let an agent use hob, add `hob-mcp` as an MCP server (it also starts
 `hob --headless` from its directory), e.g. for Claude Code:
 

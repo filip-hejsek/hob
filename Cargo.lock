@@ -2354,7 +2354,6 @@ dependencies = [
  "hob-git",
  "hob-gui",
  "hob-headless",
- "iced",
 ]
 
 [[package]]

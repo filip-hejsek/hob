@@ -369,6 +369,10 @@ named like git's so they're familiar; `!git ...` still runs the real one.
   cancelled. Clients render them; hob-cli prints the text outline.
 - `hob` is the binary, with a `--headless` flag, so both frontends get the
   same commands. hob-headless itself doesn't know about specific commands.
+- The window is the `hob` crate's `gui` feature, on by default; without it
+  (`--no-default-features`), hob only runs with `--headless` and doesn't
+  build iced. Rejected: a separate headless binary, which would need the
+  command registration shared between two binaries.
 - Updates of live islands from `StateHandle`s wake the server through a
   waker (`Island::poll_waking`); no polling on a timer.
 - Nothing is saved; there's no session. The client owns the scrollback
