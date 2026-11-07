@@ -2,6 +2,7 @@
 
 Design decisions made so far, by area, with rejected alternatives where
 they're worth remembering. Open questions and plans are in TODO.md.
+Known bugs are in BUGS.md.
 
 ## kettle-ui core
 

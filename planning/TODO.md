@@ -1,6 +1,7 @@
 # TODO
 
-Plans and open questions. Decisions already made are in DECISIONS.md.
+Plans and open questions. Decisions already made are in DECISIONS.md;
+known bugs are in BUGS.md.
 
 What's most important is to get the core primitives right. UI polish can
 come later.
@@ -20,11 +21,7 @@ come later.
 
 ### Frozen islands
 
-- Infinities are restored as NaN too, which isn't ideal. They could be saved
-  as strings or tagged numbers instead.
-- Styling: iced's disabled style makes text fields low-contrast, which isn't
-  ideal for reading a result. Also, should buttons of a frozen island be
-  shown at all?
+- Should buttons of a frozen island be shown at all?
 
 ## Widgets
 
@@ -69,16 +66,8 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   of text for small changes (e.g. a progress bar).
 - No completion or history over the protocol yet, and hob-cli has no line
   editing.
-- Output in hob-cli interferes with the prompt and with what the user is
-  typing. Stopgap: the prompt is shown only after output has paused for
-  50 ms (and not at all if stdin isn't a terminal), and output overwrites
-  it. A real fix needs line editing that redraws the input line.
-- Log records are kept in memory without limit (for `messages`), like in
-  the GUI.
 - hob-cli prints changed lines of an island only if no lines were added or
   removed; otherwise it prints the whole island again.
-- Derived state is computed on the server thread, so a slow computation
-  holds up everything else (see kettle-ui-headless in DECISIONS.md).
 
 ## hob-core (command interpreter)
 
@@ -91,8 +80,6 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 ## Logging
 
 - `log` records from a command's thread could go into its block.
-- A dependency that logs many different messages (e.g. with a changing
-  number in them) still adds them all; they may need a limit.
 - Record times are only shown by `messages`, in local time (UTC if the
   system time zone can't be found).
 - `messages` could filter by source, or colour its output.
@@ -105,16 +92,6 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   to contribute that upstream, then pin iced to a git version.
 - Ctrl+R history search. Needs a UI design: a bash-style search in the
   prompt line, or a list of matches?
-- Widget state in the scrollback is matched by position, so when `clear`
-  or Ctrl+L removes blocks before a running one, its live island may get
-  another widget's state (focus, cursor). A `keyed_column` keyed by block
-  id would fix it.
-- Log records cleared by `clear` are kept only in memory, so `messages`
-  no longer lists them after a restart.
-- The scrollback grows without limit, and so does the session file, which
-  is rewritten in full on every change.
-- Edits in a live island are only saved on close (or with the next
-  scrollback change), so a crash loses them.
 - Completion works only at the end of the line (iced doesn't tell the app
   where the cursor is; see ICED_WISHLIST.md), and doesn't complete
   arguments: commands would need a way to say what they accept.

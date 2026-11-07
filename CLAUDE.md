@@ -2,9 +2,10 @@
 
 See README.md for what the project is. Decisions already made, with
 rejected alternatives, are in planning/DECISIONS.md; plans and open
-questions are in planning/TODO.md. Check both before proposing design
-changes, and keep them up to date: when something is done, remove it from
-TODO.md and record the decisions it involved in DECISIONS.md.
+questions are in planning/TODO.md, and known bugs in planning/BUGS.md.
+Check them before proposing design changes, and keep them up to date: when
+something is done or fixed, remove it from TODO.md or BUGS.md and record
+the decisions it involved in DECISIONS.md.
 
 When iced lacks something we need, add it to planning/ICED_WISHLIST.md,
 with the workaround used.
