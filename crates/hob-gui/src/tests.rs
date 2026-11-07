@@ -102,6 +102,19 @@ fn session_is_restored_and_saved() {
     assert_eq!(lines, ["old", "say new"]);
 }
 
+#[test]
+fn private_lines_are_not_saved() {
+    let file = ScratchFile::new("private");
+    let mut shell = start(Some(file.0.clone()));
+    shell.run("say public");
+    shell.run(" say secret");
+    shell.expect("secret");
+    shell.expect(PRIVATE_NOTE);
+    let saved = Session::load(&file.0).unwrap().unwrap();
+    assert_eq!(saved.history, ["say public"]);
+    assert_eq!(saved.scrollback.len(), 1);
+}
+
 /// Shown in the empty prompt.
 const PLACEHOLDER: &str = "Type a command";
 

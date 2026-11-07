@@ -22,7 +22,9 @@
 //!
 //! The history and scrollback are saved as a [`Session`] after every change
 //! and on exit, and restored on the next start. Commands still running on
-//! exit are marked as interrupted.
+//! exit are marked as interrupted. A command line starting with a space is
+//! private: neither it nor its output is saved. It stays in the history
+//! while its block is in the scrollback.
 
 use std::fmt;
 use std::mem;
@@ -280,7 +282,7 @@ impl Shell {
     }
 
     /// Saves the history and scrollback, with live islands frozen as they are
-    /// now, and without ephemeral log records.
+    /// now, and without ephemeral log records or private blocks.
     ///
     /// An error is shown once, as an ephemeral notice: it can't be saved,
     /// and saving it mustn't cause another save.
@@ -289,8 +291,11 @@ impl Shell {
             return;
         };
         let session = Session {
-            history: self.history.lines().to_vec(),
-            scrollback: self.scrollback.iter().map(Item::to_saved).collect(),
+            history: self.history.saved_lines(),
+            scrollback: (self.scrollback.iter())
+                .filter(|item| !matches!(item, Item::Block(b) if History::is_private(&b.line)))
+                .map(Item::to_saved)
+                .collect(),
         };
         let notice = match session.save(path) {
             Ok(()) => match self.save_error.take() {
@@ -512,12 +517,20 @@ impl Shell {
 
     /// Clears the scrollback, except for blocks of commands still running
     /// other than `caller`'s. Their log records are kept for `messages`.
+    /// Private lines of cleared blocks are forgotten from the history.
     fn clear(&mut self, caller: BlockId) {
-        let (kept, cleared) = mem::take(&mut self.scrollback)
+        let (kept, cleared): (Vec<_>, Vec<_>) = mem::take(&mut self.scrollback)
             .into_iter()
             .partition(|item| matches!(item, Item::Block(b) if b.running && b.id != caller));
         self.scrollback = kept;
         self.cleared_records.extend(log_records(&cleared));
+        let shown: Vec<&str> = (self.scrollback.iter())
+            .filter_map(|item| match item {
+                Item::Block(block) => Some(block.line.as_str()),
+                Item::Notice(_) => None,
+            })
+            .collect();
+        self.history.retain_private(|line| shown.contains(&line));
     }
 
     /// All log records, oldest first: of cleared items, then of the
@@ -671,6 +684,9 @@ fn shows_notice(record: &LogRecord, level: Level) -> bool {
     record.level <= lowest.min(level)
 }
 
+/// Shown in a private block.
+const PRIVATE_NOTE: &str = "Not saved: the command line starts with a space.";
+
 /// The font of command lines, and of the prompt's `>`.
 const BOLD: Font = Font {
     weight: font::Weight::Bold,
@@ -694,15 +710,18 @@ fn prompt_style(theme: &Theme, status: text_input::Status) -> text_input::Style 
 
 /// Shows a block; log records below `level` are hidden.
 fn view_block(block: &Block, level: Level) -> Element<'_, Message> {
-    let note = block.interrupted.then(|| {
+    let interrupted = block.interrupted.then(|| {
         text("Interrupted: hob exited while this command was running.")
             .style(text::secondary)
             .into()
     });
+    let private =
+        History::is_private(&block.line).then(|| text(PRIVATE_NOTE).style(text::secondary).into());
     let entries = (block.entries.iter())
         .filter(|entry| !matches!(entry, Entry::Log(r) if r.level > level))
         .map(view_entry)
-        .chain(note);
+        .chain(interrupted)
+        .chain(private);
     column([
         text(format!("> {}", block.line)).font(BOLD).into(),
         container(column(entries).spacing(spacing()))

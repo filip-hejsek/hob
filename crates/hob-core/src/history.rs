@@ -2,6 +2,10 @@
 
 /// The command lines entered so far, browsable like in a shell: going back
 /// from the line being typed, and forward again to it.
+///
+/// A line starting with whitespace is private, like with bash's
+/// `ignorespace`: it can be browsed, but isn't saved (see
+/// [`saved_lines`](History::saved_lines)).
 #[derive(Debug, Default)]
 pub struct History {
     lines: Vec<String>,
@@ -17,9 +21,26 @@ impl History {
         Self::default()
     }
 
-    /// The entered lines, oldest first.
-    pub fn lines(&self) -> &[String] {
-        &self.lines
+    /// Whether `line` is private: it starts with whitespace. A private line
+    /// and its output aren't saved.
+    pub fn is_private(line: &str) -> bool {
+        line.starts_with(char::is_whitespace)
+    }
+
+    /// The entered lines to save, oldest first: those that aren't private.
+    pub fn saved_lines(&self) -> Vec<String> {
+        (self.lines.iter())
+            .filter(|line| !Self::is_private(line))
+            .cloned()
+            .collect()
+    }
+
+    /// Forgets the private lines for which `keep` returns false, e.g. once
+    /// they're cleared from the scrollback. Stops browsing.
+    pub fn retain_private(&mut self, mut keep: impl FnMut(&str) -> bool) {
+        self.position = None;
+        self.lines
+            .retain(|line| !Self::is_private(line) || keep(line));
     }
 
     /// Adds an entered line, and stops browsing. Blank lines and repeats of
@@ -111,6 +132,18 @@ mod tests {
         let mut h = history(&["a", " ", "a", "b", "a"]);
         assert_eq!(h.back(""), Some("a"));
         assert_eq!(h.back(""), Some("b"));
+        assert_eq!(h.back(""), Some("a"));
+        assert_eq!(h.back(""), None);
+    }
+
+    #[test]
+    fn private_lines_are_browsed_but_not_saved() {
+        let mut h = history(&["a", " b", "c", " d"]);
+        assert_eq!(h.back(""), Some(" d"));
+        assert_eq!(h.saved_lines(), ["a", "c"]);
+        h.retain_private(|line| line == " d");
+        assert_eq!(h.back(""), Some(" d"));
+        assert_eq!(h.back(""), Some("c"));
         assert_eq!(h.back(""), Some("a"));
         assert_eq!(h.back(""), None);
     }

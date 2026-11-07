@@ -224,6 +224,12 @@ Works like a terminal: a scrollback with the prompt below it.
 - Trailing whitespace is trimmed from a submitted line, so the space that
   completion adds doesn't reach the command or the history. It's invisible,
   and words are split at whitespace anyway, so it can't mean anything.
+- A line starting with whitespace is private, like bash's `ignorespace`:
+  neither it nor its output is saved, and its block says so. Unlike bash,
+  Up/Down still offer it while its block is in the scrollback; `clear`
+  forgets it. The leading space stays in the history line, so a recalled
+  private line stays private when run again. Privacy is read from the line,
+  so `History` and the blocks need no flag.
 - The prompt has no box: a bold `>` (the text input's icon) like the command
   lines in the scrollback, with the typed text aligned with theirs. Focus is
   shown by the `>`'s colour (primary when focused, dim otherwise); as the
