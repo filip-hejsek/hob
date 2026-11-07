@@ -56,10 +56,12 @@ To let an agent use hob, add `hob-mcp` as an MCP server (it also starts
 cargo build && claude mcp add hob -- "$PWD/target/debug/hob-mcp"
 ```
 
-With `--agent-spawns`, hob-mcp starts nothing; the agent starts hob itself
-with the `start` tool, giving the command (e.g. `target/debug/hob
---headless`), and can start it again after it exits, crashes, or is
-closed. This suits an agent working on hob, which rebuilds it.
+If hob exits (e.g. it crashes), hob-mcp exits too. With `--allow-restart`,
+the agent can instead start it again with the `start` tool, and close it
+with `close`; `exit` then really exits hob. With `--agent-spawns` (which
+implies `--allow-restart`), hob-mcp starts nothing; the agent starts hob
+itself with `start`, giving the command (e.g. `target/debug/hob
+--headless`). This suits an agent working on hob, which rebuilds it.
 
 To see an island without starting the GUI, render it to a PNG with
 `kettle-render` (`--frozen` gives the disabled look of the scrollback,

@@ -8,9 +8,9 @@
 //! never misses anything. The `wait` tool waits for more.
 //!
 //! Hob runs as a child process, which the bridge starts with a command: a
-//! fixed one, or one the agent gives (see [`Launch`]). When it exits (a
-//! command asks it to, the agent closes it, or it crashes), the agent can
-//! start it again.
+//! fixed one, or one the agent gives (see [`Launch`]). If restarting is
+//! allowed, hob ends when a command asks it to or the agent closes it, and
+//! after it ends (or crashes) the agent can start it again.
 
 pub mod mcp;
 mod process;
@@ -38,10 +38,17 @@ const MAX_SETTLE: Duration = Duration::from_millis(500);
 /// How hob is started.
 #[derive(Clone, Debug)]
 pub enum Launch {
-    /// With this command (the program and its arguments), whenever the agent
-    /// starts it; the agent can't give another.
-    Command(Vec<OsString>),
-    /// With the command the agent gives.
+    /// With this command (the program and its arguments); the agent can't
+    /// give another.
+    Command {
+        /// The program and its arguments.
+        command: Vec<OsString>,
+        /// Whether the agent can start hob again, and end it. Otherwise, a
+        /// command's request to exit does nothing, and once hob has exited,
+        /// it's over (see [`Bridge::is_over`]).
+        restart: bool,
+    },
+    /// With the command the agent gives, as often as it likes.
     ByAgent,
 }
 
@@ -132,14 +139,27 @@ impl Bridge {
         }
     }
 
+    /// Whether the agent can start hob again, and end it.
+    pub fn can_restart(&self) -> bool {
+        match self.launch {
+            Launch::Command { restart, .. } => restart,
+            Launch::ByAgent => true,
+        }
+    }
+
+    /// Whether hob isn't running, and the agent can't start it again.
+    pub fn is_over(&self) -> bool {
+        self.hob.is_none() && !self.can_restart()
+    }
+
     /// Starts hob, with `command` if it's started [by the
     /// agent](Launch::ByAgent), otherwise with the fixed command. Fails if
     /// it's running.
     pub fn start(&mut self, command: Option<Vec<OsString>>) -> ToolResult {
         self.apply_arrived();
         let command = match (&self.launch, command) {
-            (Launch::Command(command), None) => command.clone(),
-            (Launch::Command(_), Some(_)) => {
+            (Launch::Command { command, .. }, None) => command.clone(),
+            (Launch::Command { .. }, Some(_)) => {
                 let message = "error: hob-mcp starts hob with a fixed command; give none";
                 return Err(self.report_with(message));
             }
@@ -387,6 +407,9 @@ impl Bridge {
                 let _ = write!(text, "\n    {line}");
             }
         }
+        if !self.can_restart() {
+            text += "\nhob-mcp exits, since it can't start hob again";
+        }
         self.event(None, text);
     }
 
@@ -524,8 +547,14 @@ impl Bridge {
                 self.event(Some(block), format!("[{block}] cleared the scrollback"));
             }
             Notification::ExitRequested { block } => {
-                self.event(Some(block), format!("[{block}] asked hob to exit"));
-                self.end(Why::Exit(block));
+                if self.can_restart() {
+                    self.event(Some(block), format!("[{block}] asked hob to exit"));
+                    self.end(Why::Exit(block));
+                } else {
+                    // Then the agent couldn't start it again.
+                    let text = format!("[{block}] asked to exit, which does nothing here");
+                    self.event(Some(block), text);
+                }
             }
             Notification::Finished { block } => {
                 if let Some(b) = self.blocks.get_mut(&block) {

@@ -1,41 +1,64 @@
 //! `hob-mcp`: an MCP server over stdio that lets an agent use hob.
 //!
 //! It starts `hob --headless` from the same directory, or the command given
-//! as arguments. With `--agent-spawns`, it starts nothing: the agent starts
-//! hob with a command it gives.
+//! as arguments. With `--allow-restart`, the agent can close hob and start
+//! it again; otherwise, once hob has exited, so does hob-mcp. With
+//! `--agent-spawns` (which implies `--allow-restart`), it starts nothing:
+//! the agent starts hob with a command it gives.
 
 use std::ffi::OsString;
 use std::process::ExitCode;
 
 use hob_mcp::{Bridge, Launch, Limits};
 
-const USAGE: &str = "usage: hob-mcp [--agent-spawns | COMMAND [ARG]...]";
+const USAGE: &str = "usage: hob-mcp [--allow-restart] [--agent-spawns | COMMAND [ARG]...]";
 
 fn main() -> ExitCode {
-    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let launch = match args.first() {
-        Some(flag) if flag == "--agent-spawns" && args.len() == 1 => Launch::ByAgent,
-        Some(flag) if flag.to_string_lossy().starts_with("--") => {
+    let mut args = std::env::args_os().skip(1).peekable();
+    let (mut restart, mut by_agent) = (false, false);
+    while let Some(flag) = args.next_if(|a| a.to_string_lossy().starts_with("--")) {
+        match flag.to_str() {
+            Some("--allow-restart") => restart = true,
+            Some("--agent-spawns") => by_agent = true,
+            _ => {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let command: Vec<OsString> = args.collect();
+    let launch = if by_agent {
+        if !command.is_empty() {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
         }
-        Some(_) => Launch::Command(args),
-        None => match std::env::current_exe() {
-            Ok(exe) => Launch::Command(vec![exe.with_file_name("hob").into(), "--headless".into()]),
+        Launch::ByAgent
+    } else if !command.is_empty() {
+        Launch::Command { command, restart }
+    } else {
+        match std::env::current_exe() {
+            Ok(exe) => {
+                let command = vec![exe.with_file_name("hob").into(), "--headless".into()];
+                Launch::Command { command, restart }
+            }
             Err(e) => {
                 eprintln!("hob-mcp: can't find hob: {e}");
                 return ExitCode::FAILURE;
             }
-        },
+        }
     };
     let mut bridge = Bridge::new(launch.clone(), Limits::default());
-    if let Launch::Command(_) = launch
+    if let Launch::Command { .. } = launch
         && let Err(report) = bridge.start(None)
     {
         eprint!("hob-mcp: {report}");
         return ExitCode::FAILURE;
     }
     match hob_mcp::mcp::serve(&mut bridge, std::io::stdin(), std::io::stdout()) {
+        Ok(()) if bridge.is_over() => {
+            eprintln!("hob-mcp: hob has exited");
+            ExitCode::FAILURE
+        }
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("hob-mcp: {e}");

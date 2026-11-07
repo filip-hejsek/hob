@@ -278,16 +278,22 @@ and renders the island as an indented text outline.
   gives to the `start` tool. The agent can't give a command in the fixed
   mode, so adding the server doesn't let it run arbitrary programs. One
   hob at a time; `start` reports its PID.
-- Hob may end: a command asks it to exit (`exit_requested`), the agent
-  uses `close` (like the window's close button: running commands are
-  interrupted, without asking), or it crashes or is killed (its stdout
-  ends). Either way its input is ended, it gets 3 s to exit, then its
-  process group is killed (a group, so `cargo run` wrappers die too). The
-  result reports the exit status, running commands as interrupted, and,
-  if it failed, the last 20 lines of its stderr (its stderr is passed on
-  to hob-mcp's own throughout; reporting it all would repeat log records).
-  `start` then starts a new one, in both modes; block and island numbers
-  start over.
+- Restarting is opt-in (`--allow-restart`, implied by `--agent-spawns`).
+  Without it there are no `start` and `close` tools, a command's request
+  to exit only gets reported (the agent couldn't get hob back), and when
+  hob crashes, the tool result reports it and hob-mcp then exits, with a
+  failure status: the MCP client sees the server is gone, and reconnecting
+  starts a new hob. Rejected: staying up and failing every tool call.
+- Hob may end: it crashes or is killed (its stdout ends), or, with
+  restarting allowed, a command asks it to exit (`exit_requested`) or the
+  agent uses `close` (like the window's close button: running commands
+  are interrupted, without asking). Either way its input is ended, it gets
+  3 s to exit, then its process group is killed (a group, so `cargo run`
+  wrappers die too). The result reports the exit status, running commands
+  as interrupted, and, if it failed, the last 20 lines of its stderr (its
+  stderr is passed on to hob-mcp's own throughout; reporting it all would
+  repeat log records). With restarting allowed, `start` then starts a new
+  one; block and island numbers start over.
 - Calls to hob time out after 10 s, and its stdin is written on a thread,
   so a hob that hangs can't block the server; the agent can `close` it.
 - Its tests run the test program itself as hob (`harness = false`, with a
@@ -324,8 +330,8 @@ Works like a terminal: a scrollback with the prompt below it.
   window: the session is saved and other running commands are marked
   interrupted, but not `exit` itself. In hob-headless, it's an
   `exit_requested` notification, since the client decides when the frontend
-  ends (by ending its input): hob-cli quits, hob-mcp ends hob (the agent
-  can start it again). The frontend treats a broken pipe on
+  ends (by ending its input): hob-cli quits; hob-mcp ends hob if the agent
+  may start it again (`--allow-restart`), otherwise it only reports it. The frontend treats a broken pipe on
   its output like the end of its input, so a client can just quit.
 - If other commands are running, `exit` first asks to confirm, listing
   them; "Yes" is a plain red button, so Enter can't confirm. It learns of

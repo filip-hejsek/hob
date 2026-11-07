@@ -50,19 +50,25 @@ runs its headless frontend. It stops when a command exits it (e.g. exit), \
 when you close it, or if it crashes or is killed; results report that, with \
 its exit status. Then start it again; block and island numbers start over.";
 
-/// Added to [`INSTRUCTIONS`] when hob-mcp starts hob with a fixed command.
+/// Added to [`INSTRUCTIONS`] when hob-mcp starts hob with a fixed command,
+/// and may start it again.
 const FIXED: &str = "
 
 Hob stops when a command exits it (e.g. exit), when you close it, or if it \
 crashes; results report that. start starts it again; block and island \
 numbers start over.";
 
-/// Serves MCP over `input` and `output`, until `input` ends.
+/// Serves MCP over `input` and `output`, until `input` ends, or hob has
+/// exited and can't be started again ([`Bridge::is_over`]); the reply that
+/// reports that is sent first.
 pub fn serve(bridge: &mut Bridge, input: impl Read, mut output: impl Write) -> io::Result<()> {
     for line in BufReader::new(input).lines() {
         if let Some(reply) = bridge.handle_message(&line?) {
             writeln!(output, "{reply}")?;
             output.flush()?;
+        }
+        if bridge.is_over() {
+            break;
         }
     }
     Ok(())
@@ -86,9 +92,9 @@ impl Bridge {
         };
         let params = message.get("params").cloned().unwrap_or(json!({}));
         let result = match method.as_str().unwrap_or("") {
-            "initialize" => Ok(initialize(&params, &self.launch)),
+            "initialize" => Ok(initialize(&params, &self.launch, self.can_restart())),
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": tools(&self.launch) })),
+            "tools/list" => Ok(json!({ "tools": tools(&self.launch, self.can_restart()) })),
             "tools/call" => self.call_tool(&params),
             method => Err((-32601, format!("no method {method:?}"))),
         };
@@ -111,6 +117,9 @@ impl Bridge {
                 let finished = matches!(a.until.as_deref(), Some("finished"));
                 self.wait(timeout(a.timeout), a.block, finished)
             }),
+            "start" | "close" if !self.can_restart() => {
+                return Err((-32602, format!("no tool {name:?}")));
+            }
             "start" => args_for(args).and_then(|a: StartArgs| {
                 self.start(a.command.map(|c| c.into_iter().map(Into::into).collect()))
             }),
@@ -132,7 +141,7 @@ fn error(id: &Value, code: i64, message: &str) -> String {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).to_string()
 }
 
-fn initialize(params: &Value, launch: &Launch) -> Value {
+fn initialize(params: &Value, launch: &Launch, restart: bool) -> Value {
     let requested = params["protocolVersion"].as_str().unwrap_or("");
     let version = match VERSIONS.contains(&requested) {
         true => requested,
@@ -143,7 +152,8 @@ fn initialize(params: &Value, launch: &Launch) -> Value {
         "capabilities": {"tools": {}},
         "serverInfo": {"name": "hob", "version": env!("CARGO_PKG_VERSION")},
         "instructions": match launch {
-            Launch::Command(_) => format!("{INSTRUCTIONS}{FIXED}"),
+            Launch::Command { .. } if restart => format!("{INSTRUCTIONS}{FIXED}"),
+            Launch::Command { .. } => INSTRUCTIONS.to_owned(),
             Launch::ByAgent => format!("{INSTRUCTIONS}{BY_AGENT}"),
         },
     })
@@ -203,9 +213,9 @@ struct StartArgs {
 struct NoArgs {}
 
 /// The tool definitions for `tools/list`.
-fn tools(launch: &Launch) -> Value {
+fn tools(launch: &Launch, restart: bool) -> Value {
     let start = match launch {
-        Launch::Command(_) => json!({
+        Launch::Command { .. } => json!({
             "name": "start",
             "description": "Start hob again, after it has exited. Reports its PID.",
             "inputSchema": {"type": "object", "properties": {}},
@@ -235,7 +245,7 @@ fn tools(launch: &Launch) -> Value {
             "description": format!("How long to wait for {what}, in seconds (default 10)."),
         })
     };
-    json!([
+    let mut tools = json!([
         {
             "name": "run",
             "description": "Run a hob command line, like typing it at hob's prompt. Waits \
@@ -309,12 +319,16 @@ fn tools(launch: &Launch) -> Value {
                 },
             },
         },
-        start,
-        {
+    ]);
+    if restart {
+        let tools = tools.as_array_mut().expect("tools are an array");
+        tools.push(start);
+        tools.push(json!({
             "name": "close",
             "description": "Close hob, like closing its window: running commands are \
                 interrupted, without asking. If it doesn't exit within 3 s, it's killed.",
             "inputSchema": {"type": "object", "properties": {}},
-        },
-    ])
+        }));
+    }
+    tools
 }

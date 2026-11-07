@@ -27,6 +27,7 @@ const TESTS: &[(&str, fn())] = &[
     ("reports_errors_to_the_agent", reports_errors_to_the_agent),
     ("agent_starts_and_closes_hob", agent_starts_and_closes_hob),
     ("exit_closes_hob", exit_closes_hob),
+    ("without_restart", without_restart),
     ("reports_crashes", reports_crashes),
     ("kills_hob_that_is_stuck", kills_hob_that_is_stuck),
     #[cfg(unix)]
@@ -112,10 +113,19 @@ fn limits() -> Limits {
     }
 }
 
-/// A bridge with a fixed command, and hob started.
+/// A bridge with a fixed command that may be restarted, and hob started.
 fn bridge() -> Bridge {
+    fixed_bridge(true)
+}
+
+/// A bridge with a fixed command, and hob started.
+fn fixed_bridge(restart: bool) -> Bridge {
     let command = hob_command("--hob").into_iter().map(OsString::from);
-    let mut bridge = Bridge::new(Launch::Command(command.collect()), limits());
+    let launch = Launch::Command {
+        command: command.collect(),
+        restart,
+    };
+    let mut bridge = Bridge::new(launch, limits());
     let report = bridge.start(None).unwrap();
     assert!(report.contains("hob started (PID "), "{report}");
     bridge
@@ -365,4 +375,54 @@ fn notices_when_hob_is_killed() {
     assert!(text.contains("exited unexpectedly (signal: 9"), "{text}");
     let (text, error) = tool(&mut bridge, "start", json!({}));
     assert!(!error && text.contains("hob started"), "{text}");
+}
+
+fn without_restart() {
+    let mut bridge = fixed_bridge(false);
+    let reply = request(&mut bridge, "tools/list", json!({}));
+    let tools = reply["result"]["tools"].as_array().unwrap();
+    let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["run", "fill", "press", "state", "wait"]);
+    let reply = request(&mut bridge, "initialize", json!({}));
+    let instructions = reply["result"]["instructions"].as_str().unwrap();
+    assert!(!instructions.contains("start starts it"), "{instructions}");
+    for name in ["start", "close"] {
+        let reply = request(&mut bridge, "tools/call", json!({"name": name}));
+        assert_eq!(reply["error"]["code"], -32602);
+    }
+
+    // Exit does nothing.
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "exit"}));
+    assert!(
+        text.contains("[1] asked to exit, which does nothing here"),
+        "{text}"
+    );
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "echo still here"}));
+    assert!(text.contains("[2] still here"), "{text}");
+
+    // After a crash, the server reports it, then ends.
+    let call = |id: u32, line: &str| {
+        let arguments = json!({"line": line});
+        let params = json!({"name": "run", "arguments": arguments});
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params})
+    };
+    let input = format!("{}\n{}\n", call(1, "crash"), call(2, "echo"));
+    let mut output = Vec::new();
+    hob_mcp::mcp::serve(&mut bridge, input.as_bytes(), &mut output).unwrap();
+    assert!(bridge.is_over());
+    let output = String::from_utf8(output).unwrap();
+    let replies: Vec<Value> = output
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 1, "{output}");
+    let text = replies[0]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("exited unexpectedly (exit status: 3)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("hob-mcp exits, since it can't start hob again"),
+        "{text}"
+    );
 }
