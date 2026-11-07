@@ -259,7 +259,8 @@ impl From<&'static str> for ButtonLabel {
 }
 
 /// Submits the form: the island reports [`Outcome::Submitted`](crate::Outcome::Submitted) with the
-/// entered values.
+/// entered values. Enter presses it, so don't use it to confirm a dangerous
+/// action; use [`button`] instead.
 pub fn submit_button(label: impl Into<ButtonLabel>) -> Widget {
     make_button(label.into(), Action::Submit)
 }
