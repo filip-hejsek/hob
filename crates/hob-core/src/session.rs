@@ -1,21 +1,28 @@
 //! [`Session`]: what a frontend saves to restore on the next start.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use kettle_ui::FrozenIsland;
+use kettle_ui::{FrozenIsland, Image, ImageData, ImageKey};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::LogRecord;
 
 /// The version of the session file format. Bump it on incompatible changes.
-/// Version 1 had no log records, and `blocks` instead of `scrollback`.
-const VERSION: u32 = 2;
+/// Version 1 had no log records, and `blocks` instead of `scrollback`;
+/// version 2 had no images.
+const VERSION: u32 = 3;
 
 /// A frontend's state worth keeping across restarts: the prompt history and
 /// the scrollback. Saved as JSON, without ephemeral log records.
+///
+/// Images are saved once each, in a table by [`ImageKey`] at the end of the
+/// file, and islands refer to them by key. Ephemeral images
+/// ([`Image::ephemeral`]) aren't saved, nor their paths: they're restored
+/// without data, so only their alt text is shown.
 #[derive(Default, Serialize, Deserialize)]
 pub struct Session {
     /// Entered command lines, oldest first.
@@ -85,9 +92,22 @@ impl Serialize for Entry {
         match self {
             Entry::Text(text) => EntryRef::<()>::Text(text).serialize(serializer),
             Entry::Log(record) => EntryRef::<()>::Log(record).serialize(serializer),
-            Entry::Island(island) => EntryRef::Island(island).serialize(serializer),
+            Entry::Island(island) => {
+                EntryRef::Island(island.map_images(saved_image)).serialize(serializer)
+            }
             Entry::Unreadable { raw, .. } => EntryRef::Island(raw).serialize(serializer),
         }
+    }
+}
+
+/// An image as saved in an island: without data, which is saved in the
+/// table, and without the path if it's ephemeral.
+fn saved_image(image: &Image) -> Image {
+    let image = image.without_data();
+    if image.is_ephemeral() {
+        image.without_path()
+    } else {
+        image
     }
 }
 
@@ -136,12 +156,14 @@ impl<'de> Deserialize<'de> for Entry {
     }
 }
 
-/// The file contents: the session, tagged with the format version.
+/// The file contents: the session, tagged with the format version, and the
+/// images.
 #[derive(Serialize)]
 struct FileRef<'a> {
     version: u32,
     #[serde(flatten)]
     session: &'a Session,
+    images: BTreeMap<ImageKey, ImageData>,
 }
 
 #[derive(Deserialize)]
@@ -153,6 +175,8 @@ struct Header {
 struct File {
     #[serde(flatten)]
     session: Session,
+    #[serde(default)]
+    images: BTreeMap<ImageKey, ImageData>,
 }
 
 /// A version 1 file.
@@ -182,8 +206,12 @@ impl Session {
                     scrollback: blocks.into_iter().map(Item::Block).collect(),
                 }
             }
-            VERSION => {
-                let File { session } = serde_json::from_str(&json).map_err(SessionError::Format)?;
+            2 | VERSION => {
+                let File {
+                    mut session,
+                    images,
+                } = serde_json::from_str(&json).map_err(SessionError::Format)?;
+                session.attach_images(&images);
                 session
             }
             _ => return Err(SessionError::Version(version)),
@@ -200,6 +228,7 @@ impl Session {
         let file = FileRef {
             version: VERSION,
             session: self,
+            images: self.image_table(),
         };
         let json = serde_json::to_string_pretty(&file).map_err(SessionError::Format)?;
         let tmp = tmp_path(path);
@@ -213,6 +242,74 @@ impl Session {
             let _ = fs::remove_file(&tmp);
             SessionError::Io(e)
         })
+    }
+}
+
+impl Session {
+    /// The entries of all blocks.
+    fn entries(&self) -> impl Iterator<Item = &Entry> {
+        (self.scrollback.iter())
+            .filter_map(|item| match item {
+                Item::Block(block) => Some(block.entries.iter()),
+                Item::Notice(_) => None,
+            })
+            .flatten()
+    }
+
+    /// The data of the islands' images that are saved.
+    fn image_table(&self) -> BTreeMap<ImageKey, ImageData> {
+        (self.entries())
+            .filter_map(|entry| match entry {
+                Entry::Island(island) => Some(island.images()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|image| !image.is_ephemeral())
+            .filter_map(|image| Some((image.key(), image.data()?.clone())))
+            .collect()
+    }
+
+    /// Gives the loaded islands' images their data from the table. Images
+    /// of unreadable islands get it inline, so it's saved with them.
+    fn attach_images(&mut self, images: &BTreeMap<ImageKey, ImageData>) {
+        let entries = (self.scrollback.iter_mut())
+            .filter_map(|item| match item {
+                Item::Block(block) => Some(block.entries.iter_mut()),
+                Item::Notice(_) => None,
+            })
+            .flatten();
+        for entry in entries {
+            match entry {
+                Entry::Island(island) => {
+                    *island = island.map_images(|image| match images.get(&image.key()) {
+                        Some(data) => image.with_data(data.clone()),
+                        None => image.clone(),
+                    });
+                }
+                Entry::Unreadable { raw, .. } => attach_raw_images(raw, images),
+                Entry::Text(_) | Entry::Log(_) => {}
+            }
+        }
+    }
+}
+
+/// Puts image data into the images of an island that can't be read, as far
+/// as they can be found: objects in its named state with a known `key`.
+fn attach_raw_images(raw: &mut serde_json::Value, images: &BTreeMap<ImageKey, ImageData>) {
+    let Some(state) = raw.get_mut("state").and_then(|s| s.as_object_mut()) else {
+        return;
+    };
+    for value in state.values_mut() {
+        let Some(image) = value.as_object_mut() else {
+            continue;
+        };
+        let key = image.get("key").and_then(|k| k.as_str()?.parse().ok());
+        let data = key.and_then(|key: ImageKey| serde_json::to_value(images.get(&key)?).ok());
+        if let Some(serde_json::Value::Object(data)) = data {
+            for (k, v) in data {
+                image.entry(k).or_insert(v);
+            }
+        }
     }
 }
 
@@ -310,6 +407,7 @@ mod tests {
         let mut json = serde_json::to_value(FileRef {
             version: VERSION,
             session: &session(),
+            images: BTreeMap::new(),
         })
         .unwrap();
         let island = &mut json["scrollback"][0]["block"]["entries"][0]["island"];
@@ -368,6 +466,90 @@ mod tests {
         };
         assert_eq!((record.level, &*record.message), (Level::Error, "kept"));
         assert_eq!(notice.message, "kept too");
+    }
+
+    fn red(shade: u8, alt: &str) -> Image {
+        Image::from_rgba(2, 2, &[shade, 0, 0, 255].repeat(4), alt).unwrap()
+    }
+
+    fn image_island(images: &[(&str, Image)]) -> Entry {
+        let names = images.iter().map(|(name, _)| image(name));
+        let mut b = IslandBuilder::new(column(names));
+        for (name, img) in images {
+            b.set_state(name, img.clone());
+        }
+        Entry::Island(b.freeze().unwrap())
+    }
+
+    /// Image named state of an island entry.
+    fn image_state(entry: &Entry, name: &str) -> Image {
+        let Entry::Island(island) = entry else {
+            panic!("expected an island");
+        };
+        match island.state(name) {
+            Some(kettle_ui::Value::Image(image)) => image.clone(),
+            other => panic!("not an image: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn images_are_saved_once() {
+        let path = temp_dir("images").join("session.json");
+        let (a, b) = (red(10, "a"), red(20, "b"));
+        let secret = red(30, "secret").ephemeral();
+        let mut s = session();
+        let Item::Block(block) = &mut s.scrollback[0] else {
+            unreachable!()
+        };
+        block.entries = vec![
+            image_island(&[("x", a.clone()), ("y", b.clone()), ("z", secret)]),
+            // The same image again, with another alt text.
+            image_island(&[("x", red(10, "a again"))]),
+        ];
+        s.save(&path).unwrap();
+
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let table = json["images"].as_object().unwrap();
+        assert_eq!(table.len(), 2);
+        assert!(table.contains_key(&a.key().to_string()));
+        let island = &json["scrollback"][0]["block"]["entries"][0]["island"];
+        assert_eq!(island["state"]["x"]["key"], a.key().to_string());
+        assert!(island["state"]["x"].get("data").is_none());
+
+        let loaded = Session::load(&path).unwrap().unwrap();
+        let block = only_block(&loaded);
+        assert_eq!(image_state(&block.entries[0], "x").data(), a.data());
+        assert_eq!(image_state(&block.entries[0], "y").data(), b.data());
+        let secret = image_state(&block.entries[0], "z");
+        assert_eq!(secret.alt(), "secret");
+        assert!(secret.data().is_none());
+        let again = image_state(&block.entries[1], "x");
+        assert_eq!((again.alt(), again.data()), ("a again", a.data()));
+    }
+
+    #[test]
+    fn unreadable_islands_keep_their_images() {
+        let path = temp_dir("unreadable-images").join("session.json");
+        let a = red(10, "a");
+        let mut s = session();
+        let Item::Block(block) = &mut s.scrollback[0] else {
+            unreachable!()
+        };
+        block.entries = vec![image_island(&[("x", a.clone())])];
+        s.save(&path).unwrap();
+        let mut json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        json["scrollback"][0]["block"]["entries"][0]["island"]["root"] = "unknown".into();
+        fs::write(&path, json.to_string()).unwrap();
+
+        let loaded = Session::load(&path).unwrap().unwrap();
+        let block = only_block(&loaded);
+        let Entry::Unreadable { raw, .. } = &block.entries[0] else {
+            panic!("expected an unreadable island");
+        };
+        let data = serde_json::to_value(a.data().unwrap()).unwrap();
+        assert_eq!(raw["state"]["x"]["data"], data["data"]);
     }
 
     #[test]

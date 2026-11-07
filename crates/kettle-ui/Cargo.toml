@@ -11,8 +11,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+base64.workspace = true
+blake3.workspace = true
 futures-channel.workspace = true
 futures-core.workspace = true
+image = { workspace = true, features = ["png", "jpeg", "gif", "webp"] }
+kettle-jxl.workspace = true
 log.workspace = true
 serde.workspace = true
 

@@ -16,6 +16,9 @@ with the workaround used.
   belongs in `kettle-ui-iced`. That crate also holds the `kettle-render`
   tool, which renders island JSON to a PNG without a window.
 - `kettle-ui-demo` uses only `kettle-ui`, not iced.
+- `kettle-jxl` holds hand-written bindings to the system libjxl, used by
+  `kettle-ui` for images. It's the only crate with `unsafe` code; keep it
+  small and keep the structs in step with libjxl's headers.
 - `kettle-ui-headless` is a backend without a GUI, for tests and agents. It
   must not depend on iced either.
 - `hob-core` (the command interpreter) must not depend on any GUI toolkit;

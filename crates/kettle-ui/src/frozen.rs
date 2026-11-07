@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::widget::Widget;
-use crate::{Contents, Error, Fields, Value, collect_fields};
+use crate::{Contents, Error, Fields, Image, Value, collect_fields};
 
 /// An island whose fields and named state can't change, e.g. to show what the
 /// user submitted. Backends show it with all interaction disabled.
@@ -61,6 +61,26 @@ impl FrozenIsland {
     /// [`Model::is_outdated`](crate::Model::is_outdated)).
     pub fn is_outdated(&self, name: &str) -> bool {
         self.outdated.contains(name)
+    }
+
+    /// The images in named state.
+    pub fn images(&self) -> impl Iterator<Item = &Image> {
+        self.state.values().filter_map(|v| match v {
+            Value::Image(image) => Some(image),
+            _ => None,
+        })
+    }
+
+    /// A copy with each image in named state replaced by `f`'s result, e.g.
+    /// to save images separately (see [`Image::without_data`]).
+    pub fn map_images(&self, mut f: impl FnMut(&Image) -> Image) -> FrozenIsland {
+        let mut island = self.clone();
+        for value in island.state.values_mut() {
+            if let Value::Image(image) = value {
+                *image = f(image);
+            }
+        }
+        island
     }
 }
 
@@ -170,6 +190,35 @@ mod tests {
             json["root"]["column"][5]["row"][2],
             json!({"button": {"label": "Remove", "action": {"press": "rm"}, "danger": true}})
         );
+    }
+
+    #[test]
+    fn images_are_objects() {
+        let dot = Image::from_rgba(1, 1, &[1, 2, 3, 255], "dot").unwrap();
+        let mut b = IslandBuilder::new(image("img"));
+        b.set_state("img", dot.clone());
+        let mut json = serde_json::to_value(b.freeze().unwrap()).unwrap();
+        let img = &json["state"]["img"];
+        assert_eq!(img["key"], json!(dot.key().to_string()));
+        assert_eq!(img["alt"], json!("dot"));
+        assert_eq!((&img["width"], &img["height"]), (&json!(1), &json!(1)));
+        assert!(img["format"].is_string() && img["data"].is_string());
+        assert!(img.get("path").is_none());
+
+        let back: FrozenIsland = serde_json::from_value(json.clone()).unwrap();
+        let Some(Value::Image(back)) = back.state("img") else {
+            panic!("not an image");
+        };
+        assert_eq!(back, &dot);
+        assert_eq!(back.data(), dot.data());
+
+        // Without the data, it's an image without data.
+        let img = json["state"]["img"].as_object_mut().unwrap();
+        img.retain(|k, _| k == "key" || k == "alt");
+        let back: FrozenIsland = serde_json::from_value(json).unwrap();
+        assert_eq!(back.state("img"), Some(&Value::Image(dot.without_data())));
+        assert_eq!(back.images().count(), 1);
+        assert_eq!(Value::Image(dot).to_string(), "dot");
     }
 
     #[test]

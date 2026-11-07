@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use hob_core::{CommandResult, Context, Interpreter};
 use kettle_ui::widget::*;
-use kettle_ui::{IslandBuilder, Outcome};
+use kettle_ui::{Image, IslandBuilder, Outcome, Value};
 use kettle_ui_demo::Demo;
 
 /// Registers all demo commands.
@@ -27,6 +27,16 @@ pub fn register(interpreter: &mut Interpreter) {
         pizza,
     );
     interpreter.register("levels", "Log a message at each level", levels);
+    interpreter.register(
+        "view",
+        "Show image files (with -e, they aren't saved in the session)",
+        view,
+    );
+    interpreter.register(
+        "swatch",
+        "Show a swatch of the color typed, like #ff8800",
+        swatch,
+    );
     interpreter.register(
         "confirm",
         "Ask a yes/no question (the arguments), answered with y or n",
@@ -218,4 +228,67 @@ fn delivery_island(name: &str, address: &str) -> IslandBuilder {
 
 fn price(cents: u32) -> String {
     format!("€{}.{:02}", cents / 100, cents % 100)
+}
+
+/// Prints the image files given (relative to the working directory), each
+/// with its name. With `-e`, the images are ephemeral: not saved in the
+/// session.
+fn view(ctx: &mut Context, args: &[String]) -> CommandResult {
+    let (ephemeral, files) = match args {
+        [flag, files @ ..] if flag == "-e" => (true, files),
+        files => (false, files),
+    };
+    if files.is_empty() {
+        return Err("usage: view [-e] FILE...".into());
+    }
+    for file in files {
+        let picture = match Image::from_file(ctx.resolve(file), file.as_str()) {
+            Ok(picture) if ephemeral => picture.ephemeral(),
+            Ok(picture) => picture,
+            Err(e) => {
+                ctx.error(format!("{file}: {e}"));
+                continue;
+            }
+        };
+        let mut b = IslandBuilder::new(column([label(file.as_str()), image("image")]));
+        b.set_state("image", picture);
+        ctx.print_island(b.freeze()?);
+    }
+    Ok(())
+}
+
+/// Shows a swatch of the color typed, made as the user types: an image in
+/// derived state.
+fn swatch(ctx: &mut Context, args: &[String]) -> CommandResult {
+    no_args(args)?;
+    let mut b = IslandBuilder::new(column([
+        text_field("color", "A color, like #ff8800"),
+        image("swatch"),
+        submit_button("OK"),
+    ]));
+    b.derive("swatch", |f| {
+        let color = f.text("color");
+        let Some([r, g, b]) = parse_color(color) else {
+            return Value::Text(String::new());
+        };
+        let pixels = [r, g, b, 255].repeat(120 * 40);
+        match Image::from_rgba(120, 40, &pixels, format!("The color {}", color.trim())) {
+            Ok(image) => image.into(),
+            Err(_) => Value::Text(String::new()),
+        }
+    });
+    if let Outcome::Submitted(fields) = ctx.show(b)? {
+        ctx.print(format!("Color: {}", fields.text("color")));
+    }
+    Ok(())
+}
+
+/// Parses `#rrggbb`.
+fn parse_color(s: &str) -> Option<[u8; 3]> {
+    let hex = s.trim().strip_prefix('#')?;
+    if hex.len() != 6 || !hex.is_ascii() {
+        return None;
+    }
+    let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some([channel(0)?, channel(2)?, channel(4)?])
 }

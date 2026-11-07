@@ -295,6 +295,10 @@ fn render<'a>(
             };
             progress_bar(0.0..=1.0, value).into()
         }
+        Kind::Image { state } => match contents.state(state) {
+            Some(Value::Image(image)) => image_view(image),
+            _ => column([]).into(),
+        },
         Kind::List { state } => column(list(contents, state).iter().map(|s| text(s).into()))
             .spacing(2)
             .into(),
@@ -323,6 +327,35 @@ fn render<'a>(
         })
         .on_press_maybe(send(action_msg(action.clone())))
         .into(),
+    }
+}
+
+/// Shows an image at its natural size, or scaled down to fit. If it's
+/// missing or can't be decoded, shows a notice and its alt text instead.
+fn image_view<'a>(image: &kettle_ui::Image) -> Element<'a, Message> {
+    // Decoded once per image, and the same handle reused, so the renderer
+    // keeps its copy instead of uploading the image again on every view.
+    let handle = image.backend_cache(|image| {
+        let rgba = image.data()?.decode().ok()?;
+        Some(iced::widget::image::Handle::from_rgba(
+            rgba.width,
+            rgba.height,
+            rgba.pixels,
+        ))
+    });
+    match handle {
+        Some(Some(handle)) => iced::widget::image(handle.clone()).into(),
+        _ => {
+            let notice = match image.data() {
+                Some(_) => "Image can't be shown",
+                None => "Image not available",
+            };
+            let mut lines = vec![text(notice).style(text::secondary).into()];
+            if !image.alt().is_empty() {
+                lines.push(text(image.alt().to_owned()).into());
+            }
+            column(lines).spacing(2).into()
+        }
     }
 }
 

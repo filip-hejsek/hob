@@ -12,7 +12,7 @@
 //!   not accessible from outside.
 //! - Form elements (text fields and areas, checkboxes) have values, which the
 //!   host gets when the user submits the form.
-//! - Labels, progress bars and lists can show *named state*. Named state
+//! - Labels, progress bars, lists and images can show *named state*. Named state
 //!   either has an initial value ([`IslandBuilder::set_state`]) and can then be
 //!   updated from outside through a [`StateHandle`], or is *derived*: computed
 //!   from the current field values (e.g. search-as-you-type), and possibly
@@ -50,6 +50,7 @@
 //! `0` turns it off.
 
 mod frozen;
+mod image;
 mod model;
 pub mod widget;
 
@@ -60,6 +61,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use futures_channel::mpsc;
 use serde::{Deserialize, Serialize};
 
+pub use crate::image::{Image, ImageData, ImageError, ImageFormat, ImageKey, Rgba};
 pub use frozen::FrozenIsland;
 pub use model::{Built, Inputs, Job, JobResult, Model, Outcome, StateUpdate, Updates};
 
@@ -131,8 +133,8 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// The value of a piece of named state. Serialized as a plain string,
-/// number, list or bool. JSON has no NaN or infinity: they're saved as
-/// `null`, and `null` is restored as NaN.
+/// number, list or bool, or an object for an image. JSON has no NaN or
+/// infinity: they're saved as `null`, and `null` is restored as NaN.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Value {
@@ -144,6 +146,9 @@ pub enum Value {
     List(Vec<String>),
     /// A flag, e.g. for [`when`](widget::when).
     Bool(bool),
+    /// An image, for [`image`](widget::image). Shown as its alt text
+    /// elsewhere.
+    Image(Image),
 }
 
 impl<'de> Deserialize<'de> for Value {
@@ -156,12 +161,14 @@ impl<'de> Deserialize<'de> for Value {
             Number(Option<f64>),
             List(Vec<String>),
             Bool(bool),
+            Image(Image),
         }
         Ok(match Repr::deserialize(deserializer)? {
             Repr::Text(s) => Value::Text(s),
             Repr::Number(n) => Value::Number(n.unwrap_or(f64::NAN)),
             Repr::List(items) => Value::List(items),
             Repr::Bool(b) => Value::Bool(b),
+            Repr::Image(image) => Value::Image(image),
         })
     }
 }
@@ -173,6 +180,7 @@ impl fmt::Display for Value {
             Value::Number(n) => write!(f, "{n}"),
             Value::List(items) => f.write_str(&items.join(", ")),
             Value::Bool(b) => write!(f, "{b}"),
+            Value::Image(image) => f.write_str(image.alt()),
         }
     }
 }
@@ -204,6 +212,12 @@ impl From<Vec<String>> for Value {
 impl From<bool> for Value {
     fn from(b: bool) -> Self {
         Value::Bool(b)
+    }
+}
+
+impl From<Image> for Value {
+    fn from(image: Image) -> Self {
+        Value::Image(image)
     }
 }
 
@@ -470,9 +484,10 @@ impl IslandBuilder {
                 self.check_references(child, fields)?;
                 state
             }
-            Kind::Label(Text::State(state)) | Kind::Progress { state } | Kind::List { state } => {
-                state
-            }
+            Kind::Label(Text::State(state))
+            | Kind::Progress { state }
+            | Kind::List { state }
+            | Kind::Image { state } => state,
             Kind::Suggestions { state, field } => {
                 match fields.0.get(field) {
                     None => return Err(Error::UnknownField(field.to_string())),

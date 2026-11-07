@@ -41,6 +41,22 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - Chord keys (e.g. Ctrl+N) for buttons, which could work in islands with
   text fields.
 
+### Images
+
+- Opt-in lossy compression for lossless images: lossy JPEG XL can still be
+  visually transparent. The key would then have to include the setting.
+- Images are decoded on the UI thread when first shown, which can stall it
+  for big images; decode in the background, or when the image is made.
+- Color management: ICC profiles are kept when compressing, but ignored when
+  showing images.
+- The session is saved in full after every change, images included, so a
+  session with big images is slow to save.
+- hob-headless resends a live island's images with every change of the
+  island; clients could get each image once.
+- hob-mcp could give the agent the images themselves (MCP image content),
+  not just the outline line.
+- Animated images show only their first frame.
+
 ## kettle-ui-iced
 
 - **Smart layout:** automatically insert all necessary gaps, so the UI looks

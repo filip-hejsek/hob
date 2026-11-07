@@ -162,6 +162,48 @@ mod tests {
         assert!(height(&"line\n".repeat(10)) > empty + 80);
     }
 
+    /// An island showing a solid red image.
+    fn image_island(width: u32, height: u32, with_data: bool) -> FrozenIsland {
+        let pixels = [255, 0, 0, 255].repeat((width * height) as usize);
+        let red = kettle_ui::Image::from_rgba(width, height, &pixels, "A red box").unwrap();
+        let red = if with_data { red } else { red.without_data() };
+        let mut b = IslandBuilder::new(image("img"));
+        b.set_state("img", red);
+        b.freeze().unwrap()
+    }
+
+    fn is_red(rgba: &[u8], size: Size<u32>, x: u32, y: u32) -> bool {
+        let i = ((y * size.width + x) * 4) as usize;
+        rgba[i..i + 4] == [255, 0, 0, 255]
+    }
+
+    #[test]
+    fn image_is_shown_at_its_size() {
+        let (size, rgba) = render_rgba(&image_island(50, 40, true), 300, true);
+        let pad = spacing() as u32;
+        assert_eq!(size.height, 40 + 2 * pad);
+        assert!(is_red(&rgba, size, pad, pad));
+        assert!(is_red(&rgba, size, pad + 49, pad + 39));
+        assert!(!is_red(&rgba, size, pad + 51, pad));
+    }
+
+    #[test]
+    fn wide_image_is_scaled_to_fit() {
+        let (size, rgba) = render_rgba(&image_island(560, 100, true), 300, true);
+        let pad = spacing() as u32;
+        // 280 pixels wide, so half the size.
+        assert_eq!(size.height, 50 + 2 * pad);
+        assert!(is_red(&rgba, size, pad + 279, pad + 49));
+    }
+
+    #[test]
+    fn missing_image_shows_a_notice() {
+        let (size, rgba) = render_rgba(&image_island(50, 400, false), 300, true);
+        assert!(size.height < 100, "{size:?}");
+        assert!(!rgba.chunks(4).any(|p| p == [255, 0, 0, 255]));
+        assert!(rgba.chunks(4).any(|p| p != &rgba[..4]));
+    }
+
     #[test]
     fn height_fits_content() {
         let (size, rgba) = render_rgba(&island(), 300, false);

@@ -2,7 +2,7 @@
 //!
 //! Build the (fixed) widget tree with the functions in this module:
 //! - layout: [`column()`], [`row`], [`when`]
-//! - display: [`label`] (with [`state`]), [`progress`], [`list`]
+//! - display: [`label`] (with [`state`]), [`progress`], [`list`], [`image()`]
 //! - form elements: [`text_field`], [`text_area`], [`checkbox`], [`suggestions`]
 //! - buttons: [`submit_button`], [`cancel_button`], [`button`],
 //!   [`button_danger`] (with [`ButtonLabel`])
@@ -75,6 +75,11 @@ pub enum Kind {
     },
     /// [`list`]
     List {
+        /// The named state shown.
+        state: String,
+    },
+    /// [`image()`]
+    Image {
         /// The named state shown.
         state: String,
     },
@@ -204,6 +209,16 @@ pub fn list(state: &str) -> Widget {
     })
 }
 
+/// Shows named state that's an [`Image`](crate::Image), at its natural
+/// size or scaled down to fit. If the image's data is missing (e.g. it was
+/// [ephemeral](crate::Image::ephemeral) and the island was restored), its
+/// alt text is shown with a notice.
+pub fn image(state: &str) -> Widget {
+    Widget(Kind::Image {
+        state: state.to_owned(),
+    })
+}
+
 /// Like [`list`], but clicking a line puts it into the text field `field`.
 /// For autocomplete.
 pub fn suggestions(state: &str, field: &str) -> Widget {
@@ -300,7 +315,8 @@ fn make_button(label: ButtonLabel, action: Action, danger: bool) -> Widget {
 /// gaps around it.
 ///
 /// Hidden are: a label with empty text (missing state counts as empty), a
-/// list or suggestions with no items (or whose state isn't a list), a column
+/// list or suggestions with no items (or whose state isn't a list), an image
+/// whose state isn't an image, a column
 /// or row whose children are all hidden, and a [`when`] whose state isn't
 /// true or whose child is hidden. Other widgets are always visible.
 pub fn is_visible(contents: &impl Contents, widget: &Widget) -> bool {
@@ -316,6 +332,7 @@ pub fn is_visible(contents: &impl Contents, widget: &Widget) -> bool {
         Kind::List { state } | Kind::Suggestions { state, .. } => {
             matches!(contents.state(state), Some(Value::List(items)) if !items.is_empty())
         }
+        Kind::Image { state } => matches!(contents.state(state), Some(Value::Image(_))),
         Kind::TextField { .. }
         | Kind::TextArea { .. }
         | Kind::Checkbox { .. }

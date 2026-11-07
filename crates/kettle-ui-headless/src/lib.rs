@@ -346,6 +346,20 @@ fn render(model: &impl Contents, widget: &Widget, depth: usize, out: &mut String
             };
             writeln!(out, "{indent}progress {:.0}%", value * 100.0)
         }
+        Kind::Image { state } => match model.state(state) {
+            Some(Value::Image(image)) => {
+                write!(out, "{indent}image {:?} (", image.alt())?;
+                match image.data() {
+                    Some(data) => write!(out, "{}x{}", data.width(), data.height())?,
+                    None => write!(out, "not available")?,
+                }
+                if let Some(path) = image.path() {
+                    write!(out, ", {}", path.display())?;
+                }
+                writeln!(out, ")")
+            }
+            _ => writeln!(out, "{indent}image (none)"),
+        },
         Kind::List { state } => {
             writeln!(out, "{indent}list")?;
             lines(out, state)
@@ -468,6 +482,20 @@ mod tests {
         assert_eq!(
             island.to_string(),
             "row\n  button \"Yes\" [y]\n  button \"No\"\n"
+        );
+    }
+
+    #[test]
+    fn images_are_in_the_outline() {
+        let red = kettle_ui::Image::from_rgba(2, 1, &[255, 0, 0, 255].repeat(2), "Red").unwrap();
+        let mut b = IslandBuilder::new(column([image("a"), image("b"), image("c")]));
+        b.set_state("a", red.clone());
+        b.set_state("b", red.without_data());
+        b.set_state("c", "text");
+        let island = b.freeze().unwrap();
+        assert_eq!(
+            outline(&island),
+            "column\n  image \"Red\" (2x1)\n  image \"Red\" (not available)\n  image (none)\n"
         );
     }
 

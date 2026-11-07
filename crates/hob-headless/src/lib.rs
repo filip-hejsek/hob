@@ -26,15 +26,37 @@ use serde_json::Value;
 
 use protocol::{BlockId, Call, ErrorObject, IslandId, Notification, RunResult, code};
 
-/// Serves `interpreter` to a client: reads calls from `input`, and writes
-/// replies and notifications to `output`. Returns when `input` ends, or
-/// `output` is closed (a broken pipe): either way, the client is gone.
+/// How [`serve_with`] behaves.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct Options {
+    /// Whether islands sent to the client keep the paths of images read
+    /// from files ([`Image::path`](kettle_ui::Image::path)), so a client on
+    /// the same machine can use the file. Off by default: the client may be
+    /// elsewhere, or the paths private. The image data is sent either way.
+    pub image_paths: bool,
+}
+
+/// Serves `interpreter` to a client, with the default [`Options`]: reads
+/// calls from `input`, and writes replies and notifications to `output`.
+/// Returns when `input` ends, or `output` is closed (a broken pipe): either
+/// way, the client is gone.
 ///
 /// Installs the `log` backend, if no other logger is installed yet.
 pub fn serve(
     interpreter: Interpreter,
     input: impl Read + Send + 'static,
     output: impl Write,
+) -> io::Result<()> {
+    serve_with(interpreter, input, output, Options::default())
+}
+
+/// Like [`serve`], with `options`.
+pub fn serve_with(
+    interpreter: Interpreter,
+    input: impl Read + Send + 'static,
+    output: impl Write,
+    options: Options,
 ) -> io::Result<()> {
     let (events, receiver) = mpsc::channel();
     let input_events = events.clone();
@@ -49,6 +71,7 @@ pub fn serve(
     }
     let mut server = Server {
         interpreter,
+        options,
         output,
         events,
         next_id: 0,
@@ -96,6 +119,7 @@ fn forward<T>(items: impl Iterator<Item = T>, events: Sender<Event>, event: impl
 
 struct Server<W> {
     interpreter: Interpreter,
+    options: Options,
     output: W,
     /// For threads and wakers to send events.
     events: Sender<Event>,
@@ -143,7 +167,12 @@ impl<W: Write> Server<W> {
         self.output.flush()
     }
 
-    fn notify(&mut self, notification: Notification) -> io::Result<()> {
+    fn notify(&mut self, mut notification: Notification) -> io::Result<()> {
+        if let Notification::Island { contents, .. } = &mut notification
+            && !self.options.image_paths
+        {
+            *contents = contents.map_images(kettle_ui::Image::without_path);
+        }
         self.send(&protocol::notification(&notification))
     }
 

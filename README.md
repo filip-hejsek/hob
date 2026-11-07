@@ -24,10 +24,15 @@ The project is split into these parts:
   UI embedded in the shell. It is toolkit-independent; **kettle-ui-iced**
   renders it with iced, and **kettle-ui-headless** drives it without a GUI,
   for tests and (later) agents.
+- **kettle-jxl** — minimal bindings to libjxl, for compressing kettle-ui
+  images as JPEG XL.
 - **hob-demo** — demo commands.
 - **hob-fs** — filesystem commands: `pwd`, `cd`, `ls`, `cat`.
 - **hob** — the application: registers the commands and starts the shell
   (or, with `--headless`, the headless frontend).
+
+Building needs libjxl (0.8 or newer, found with pkg-config), e.g. the
+`libjxl` package on Arch or `libjxl-dev` on Debian and Ubuntu.
 
 Run it with:
 
@@ -42,6 +47,10 @@ the platform's state directory (e.g. `~/.local/state/hob/session.json`); set
 Errors and warnings are shown in the scrollback (warnings from libraries only
 on stderr); the `messages` command lists all messages. Set `HOB_LOG=debug` to
 also show debug messages.
+
+Images are saved once each, however often they're shown, compressed as
+JPEG XL where that's smaller; commands can mark an image as ephemeral, so
+it isn't saved at all.
 
 To try the headless frontend, run the demo client, which starts
 `hob --headless` from the same directory:
@@ -64,14 +73,20 @@ implies `--allow-restart`), hob-mcp starts nothing; the agent starts hob
 itself with `start`, giving the command (e.g. `target/debug/hob
 --headless`). This suits an agent working on hob, which rebuilds it.
 
+The headless frontend sends images without the paths of the files they came
+from, unless `HOB_IMAGE_PATHS=1` is set.
+
 To see an island without starting the GUI, render it to a PNG with
 `kettle-render` (`--frozen` gives the disabled look of the scrollback,
 `--width N` sets the width). It reads a frozen island as JSON: e.g. from the
 session file's scrollback, or from the `contents` of a hob-headless `island`
-notification. For example, to render the last island in the session:
+notification. For example, to render the last island in the session
+(with its images, which the session keeps in a table of their own):
 
 ```sh
-jq '[.scrollback[].block?.entries[]? | .island // empty] | last' \
+jq '.images as $images
+    | [.scrollback[].block?.entries[]? | .island // empty] | last
+    | .state |= map_values(if type == "object" then . + ($images[.key] // {}) else . end)' \
     ~/.local/state/hob/session.json > island.json
 cargo run -p kettle-ui-iced --bin kettle-render -- island.json island.png
 ```

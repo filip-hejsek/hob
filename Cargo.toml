@@ -25,16 +25,20 @@ hob-fs = { path = "crates/hob-fs" }
 hob-gui = { path = "crates/hob-gui" }
 hob-headless = { path = "crates/hob-headless" }
 hob-mcp = { path = "crates/hob-mcp" }
+kettle-jxl = { path = "crates/kettle-jxl" }
 kettle-ui = { path = "crates/kettle-ui" }
 kettle-ui-demo = { path = "crates/kettle-ui-demo" }
 kettle-ui-headless = { path = "crates/kettle-ui-headless" }
 kettle-ui-iced = { path = "crates/kettle-ui-iced" }
 
+base64 = "0.22"
+blake3 = "1"
 dirs = "7"
 futures-channel = "0.3"
 futures-core = "0.3"
 futures-executor = "0.3"
 iced = "0.14"
+image = { version = "0.25", default-features = false }
 jiff = "0.2"
 log = "0.4"
 png = "0.18"

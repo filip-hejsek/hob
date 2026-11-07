@@ -22,9 +22,15 @@ struct Client {
 
 impl Client {
     fn start(interpreter: Interpreter) -> Client {
+        Client::start_with(interpreter, hob_headless::Options::default())
+    }
+
+    fn start_with(interpreter: Interpreter, options: hob_headless::Options) -> Client {
         let (input_reader, input) = io::pipe().unwrap();
         let (output, output_writer) = io::pipe().unwrap();
-        thread::spawn(move || hob_headless::serve(interpreter, input_reader, output_writer));
+        thread::spawn(move || {
+            hob_headless::serve_with(interpreter, input_reader, output_writer, options)
+        });
         Client {
             input,
             output: BufReader::new(output),
@@ -122,6 +128,13 @@ fn interpreter() -> Interpreter {
             Outcome::Submitted(fields) => ctx.print(format!("got {}", fields.text("name"))),
             Outcome::Cancelled | Outcome::Pressed(..) => ctx.print("cancelled"),
         }
+        Ok(())
+    });
+    i.register("picture", "Print an image file", |ctx, args| {
+        let picture = kettle_ui::Image::from_file(&args[0], "pic")?;
+        let mut builder = IslandBuilder::new(image("pic"));
+        builder.set_state("pic", picture);
+        ctx.print_island(builder.freeze()?);
         Ok(())
     });
     i.register("tick", "Update state from another thread", |ctx, _| {
@@ -297,4 +310,31 @@ fn exit_asks_first_if_commands_are_running() {
     assert!(client.next().contains("frozen"));
     assert_eq!(client.next(), format!("{exit} exit requested"));
     assert_eq!(client.next(), format!("{exit} finished"));
+}
+
+#[test]
+fn image_paths_are_sent_only_if_asked() {
+    let dir = std::env::temp_dir().join(format!("hob-headless-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("pic.img");
+    let red = kettle_ui::Image::from_rgba(1, 1, &[255, 0, 0, 255], "").unwrap();
+    std::fs::write(&file, red.data().unwrap().bytes()).unwrap();
+    let line = format!("picture {}", file.display());
+
+    let mut client = Client::start(interpreter());
+    client.run(&line);
+    assert_eq!(client.next(), "1 island 2 frozen\nimage \"pic\" (1x1)\n");
+
+    let mut options = hob_headless::Options::default();
+    options.image_paths = true;
+    let mut client = Client::start_with(interpreter(), options);
+    client.run(&line);
+    assert_eq!(
+        client.next(),
+        format!(
+            "1 island 2 frozen\nimage \"pic\" (1x1, {})\n",
+            file.display()
+        )
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
 }

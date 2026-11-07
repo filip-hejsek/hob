@@ -21,7 +21,9 @@ fn main() -> ExitCode {
             hob_gui::run(interpreter, session_path(), placeholder).map_err(|e| e.to_string())
         }
         [flag] if flag == "--headless" => {
-            hob_headless::serve(interpreter, std::io::stdin(), std::io::stdout())
+            let mut options = hob_headless::Options::default();
+            options.image_paths = std::env::var_os("HOB_IMAGE_PATHS").is_some_and(|v| v == "1");
+            hob_headless::serve_with(interpreter, std::io::stdin(), std::io::stdout(), options)
                 .map_err(|e| e.to_string())
         }
         _ => {

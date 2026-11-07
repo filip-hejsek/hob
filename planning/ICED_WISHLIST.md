@@ -137,3 +137,15 @@ there's no GPU, so they use tiny-skia.
 test can't tell that the app asked to exit.
 
 **Workaround:** none in the tests; checked by hand under Xvfb.
+
+## JPEG XL images
+
+**Needed for:** showing images, which kettle-ui keeps compressed as JPEG
+XL where that's smaller.
+
+iced's image widget decodes PNG, JPEG, GIF and WebP (through the `image`
+crate), but not JPEG XL.
+
+**Workaround:** kettle-ui decodes every image to RGBA itself, and
+kettle-ui-iced hands iced the pixels (`Handle::from_rgba`), with iced's
+`image-without-codecs` feature.

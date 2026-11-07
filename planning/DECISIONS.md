@@ -41,6 +41,56 @@ Known bugs are in BUGS.md.
   (left out of JSON when false), and the outline adds `(danger)`. Only
   plain buttons get it: a dangerous action shouldn't be a submit button.
 
+### Images
+
+- `image(state)` shows named state that's a `Value::Image`, so images can
+  change like other state (set through a `StateHandle`, or derived, as in
+  the `swatch` demo). Rejected: an image fixed in the tree (can't change),
+  or both like `label` (more code than needed).
+- An `Image` is made from 8-bit RGBA pixels, an image file's contents (PNG,
+  JPEG, GIF, WebP, JPEG XL) or a file, and always has an alt text. From a
+  file, it keeps the absolute path. Making one compresses it, on the
+  caller's thread (a command's, or a derived computation's).
+- Images are always kept compressed (`ImageData`). Lossy ones are kept as
+  they came, except JPEG: JPEGs and lossless images (RGBA, PNG) are
+  recompressed losslessly as JPEG XL when that's smaller. JPEG XL's JPEG
+  recompression keeps what's needed to restore the original file exactly.
+  PNGs keep their bit depth and ICC profile; animated PNGs and GIFs are
+  kept as they are. Displaying an animated image shows its first frame.
+- Each image has a key (`ImageKey`): a 128-bit BLAKE3 hash of the data the
+  island gave (pixels with their size, or the file contents), not of what's
+  stored, so compression can change, or be non-reproducible, without
+  changing keys.
+- JPEG XL comes from the system libjxl, through our own minimal bindings
+  (`kettle-jxl`, which builds with pkg-config). Rejected: `jpegxl-rs` (GPL,
+  which doesn't fit hob's license), pure-Rust encoders (`zune-jpegxl` has no
+  JPEG recompression, and its lossless output is often bigger than PNG),
+  `gamut-jxl` (needs a newer Rust than our MSRV). libjxl also decodes JPEG
+  XL for display; other formats are decoded by the `image` crate.
+- An image serializes as an object (the only `Value` that does): `key`,
+  `alt`, then `format`, `width`, `height` and `data` (base64) if the data is
+  there, and `path` if it's from a file. An image without data is shown as
+  "Image not available" with its alt text; one that can't be decoded, as
+  "Image can't be shown". Elsewhere (e.g. a label of the same state) an
+  image shows as its alt text.
+- The session file (version 3) keeps each image's data once, in an `images`
+  table by key at the end; islands keep the rest. An island can mark an
+  image ephemeral (`Image::ephemeral`): it's left out of the table, and its
+  path isn't saved either, so after a restart only its alt text is shown.
+  Ephemeral affects only what's saved to disk, not what's shown or sent to
+  clients. An unreadable island's images get their data inline when
+  loaded, so it isn't lost.
+- hob-headless sends images with their data, but without their paths
+  unless asked (`Options::image_paths`, set by `HOB_IMAGE_PATHS=1` in `hob
+  --headless`): the client may not share the file system, and paths may be
+  private. With the path, a client on the same machine can use the file;
+  the data is still there if it can't. The outline shows
+  `image "alt" (WxH)`, with the path if there is one.
+- kettle-ui-iced decodes an image once, when first shown, and keeps the
+  iced handle with the `Image` (`Image::backend_cache`), so the renderer
+  keeps its copy; the handle is dropped with the image. It's shown at its
+  natural size, or scaled down to fit the width.
+
 ### Dependency tracking for derived state
 
 - Field dependencies are tracked automatically: a computation recomputes
