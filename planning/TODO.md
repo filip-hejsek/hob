@@ -54,6 +54,7 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   hasn't been tried with a real agent yet.
 - hob-mcp has no tool for picking a suggestion (filling in the text has the
   same effect), and doesn't use MCP notifications or resources.
+- hob-mcp could return a PNG of an island (`kettle_ui_iced::render_png`).
 - hob-mcp reports a live island in full whenever it changed, which is a lot
   of text for small changes (e.g. a progress bar).
 - No completion or history over the protocol yet, and hob-cli has no line

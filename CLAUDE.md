@@ -12,7 +12,8 @@ with the workaround used.
 ## Architecture rules
 
 - `kettle-ui` must not depend on any GUI toolkit. Anything iced-specific
-  belongs in `kettle-ui-iced`.
+  belongs in `kettle-ui-iced`. That crate also holds the `kettle-render`
+  tool, which renders island JSON to a PNG without a window.
 - `kettle-ui-demo` uses only `kettle-ui`, not iced.
 - `kettle-ui-headless` is a backend without a GUI, for tests and agents. It
   must not depend on iced either.

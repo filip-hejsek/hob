@@ -68,6 +68,15 @@ thread) or as a snapshot of a live island (`Model::freeze`).
 - The default theme. Styling options are deliberately minimal; global
   customization, if any, will be set by the host application, not the
   island.
+- Offscreen rendering (`render_png`, and the `kettle-render` tool for
+  island JSON) draws the island directly with iced's tiny-skia `Headless`
+  renderer and the bundled Fira Sans (iced's `fira-sans` feature, which only
+  adds the font; hob-gui's default font is unchanged), so the output is the
+  same on every machine. The image is as tall as the island. It uses the
+  live look by default, since that's what the island looked like to the
+  user; `--frozen` gives the disabled look of the scrollback. Rejected:
+  `iced_test::Simulator`, whose snapshots give no access to pixels, have a
+  fixed size (1024×768) and 2× scale, and try wgpu first.
 
 ## kettle-ui-headless
 

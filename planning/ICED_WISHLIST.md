@@ -35,3 +35,26 @@ must still be built for some concrete message type.
 
 **Workaround:** build it for our own message type and
 `.map(|_| unreachable!())`.
+
+## Pixels of a test snapshot
+
+**Needed for:** rendering an island to a PNG (kettle-ui-iced `render_png`,
+the `kettle-render` tool), and snapshot tests of it.
+
+`iced_test`'s `Snapshot` doesn't expose its pixels: it can only be compared
+with a PNG file, or written to one if the file is missing. The `Simulator`
+also has a fixed size (1024×768) and scale (2×), and tries wgpu first.
+
+**Workaround:** lay out and draw the element ourselves with a `Headless`
+renderer (tiny-skia), and call its `screenshot`.
+
+## Widget status without events
+
+**Needed for:** drawing widgets offscreen, without a runtime (`render_png`).
+
+Widgets such as `button` work out their status (active, disabled, ...) only
+in `update`, on a `RedrawRequested` event, and draw as disabled until then.
+So drawing a freshly laid-out element shows every button disabled.
+
+**Workaround:** send one `RedrawRequested` event through `update` before
+drawing.

@@ -25,6 +25,11 @@
 //! widget's internal state (focus, cursor, scroll) across rebuilds. Widgets
 //! with nothing to show (see [`is_visible`]) get no gaps around them, but
 //! stay in the iced tree for the same reason.
+//!
+//! [`render_png`] renders an island offscreen, without a window; the
+//! `kettle-render` binary does the same for an island saved as JSON.
+
+mod offscreen;
 
 use std::sync::Arc;
 
@@ -37,6 +42,8 @@ use kettle_ui::{
     Built, Contents, Error, FrozenIsland, IslandBuilder, Job, JobResult, Model, Outcome,
     StateUpdate, Value,
 };
+
+pub use offscreen::render_png;
 
 /// The gap between neighbouring widgets in a [`column`](kettle_ui::widget::column)
 /// or [`row`](kettle_ui::widget::row), in logical pixels. Hosts should use it too, so
