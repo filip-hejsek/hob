@@ -48,11 +48,29 @@ pub fn run(
     session: Option<PathBuf>,
     placeholder: impl Into<String>,
 ) -> iced::Result {
-    let placeholder = placeholder.into();
     let level = hob_core::logger::level_from_env();
+    let records = hob_core::logger::install(level);
+    application(
+        Arc::new(interpreter),
+        session,
+        placeholder.into(),
+        level,
+        records,
+    )
+    .run()
+}
+
+/// The shell as an iced application, ready to run. Log records that aren't
+/// from a command are read from `records`, if given.
+fn application(
+    interpreter: Arc<Interpreter>,
+    session: Option<PathBuf>,
+    placeholder: String,
+    level: Level,
+    records: Option<futures_channel::mpsc::UnboundedReceiver<LogRecord>>,
+) -> iced::Application<impl iced::Program<State = Shell, Message = Message, Theme = iced::Theme>> {
     // The boot function is `Fn`, but it's only called once.
-    let records = Mutex::new(hob_core::logger::install(level));
-    let interpreter = Arc::new(interpreter);
+    let records = Mutex::new(records);
     iced::application(
         move || {
             let records = records.lock().unwrap().take();
@@ -72,7 +90,6 @@ pub fn run(
     .exit_on_close_request(false)
     .title("hob")
     .window_size((640.0, 560.0))
-    .run()
 }
 
 const PROMPT: &str = "prompt";
@@ -691,17 +708,4 @@ fn view_record(record: &LogRecord) -> Element<'_, Message> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dependency_warnings_are_not_shown() {
-        let shown = |level, target| shows_notice(&LogRecord::new(level, target, "m"), Level::Info);
-        assert!(shown(Level::Warn, "hob_gui"));
-        assert!(!shown(Level::Info, "hob_gui"));
-        assert!(shown(Level::Error, "wgpu_core"));
-        assert!(!shown(Level::Warn, "iced_winit::proxy"));
-        let record = LogRecord::new(Level::Warn, "hob_gui", "m");
-        assert!(!shows_notice(&record, Level::Error));
-    }
-}
+mod tests;

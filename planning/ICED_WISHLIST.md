@@ -46,3 +46,38 @@ So drawing a freshly laid-out element shows every button disabled.
 
 **Workaround:** send one `RedrawRequested` event through `update` before
 drawing.
+
+## Subscriptions and more keys in `iced_test`'s `Emulator`
+
+**Needed for:** end-to-end tests of the prompt's history (Up/Down) and
+completion (Tab) in hob-gui.
+
+The `Emulator` passes interactions only to the widgets, not to
+subscriptions such as `event::listen_with` or `window::close_requests`.
+Also, its `Key` has only Enter, Escape, Tab and Backspace, no arrows.
+
+**Workaround:** history and completion are tested on `History` and
+`Interpreter::complete`, and checked by hand in a real window (Xvfb).
+
+## Waiting for an app to settle in `iced_test`
+
+**Needed for:** end-to-end tests of hob-gui, where commands run on threads
+and some wait for an island.
+
+`Mode::Zen` waits for all tasks, which never happens while a command waits
+for an island; `Mode::Immediate` doesn't wait at all, so even the boot task
+(focusing the prompt) may not have run when `Ready` arrives. There's no
+"wait until idle, ignoring long-running streams".
+
+**Workaround:** a harness that retries each expectation until it holds or
+times out, and a click on the prompt before typing into it.
+
+## Choosing the renderer of `iced_test`'s `Emulator`
+
+**Needed for:** fast, reproducible hob-gui tests on any machine.
+
+`Simulator` reads `ICED_TEST_BACKEND`, but `Emulator` always tries wgpu
+first, falling back to tiny-skia.
+
+**Workaround:** none; the tests don't depend on pixels. In the container
+there's no GPU, so they use tiny-skia.

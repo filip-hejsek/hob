@@ -221,3 +221,12 @@ Works like a terminal: a scrollback with the prompt below it.
   and Tab completion of command names: unambiguous part completed, the
   candidates listed below the prompt if there are several. Both live in
   hob-core.
+- End-to-end tests run the real shell (`application()`, the same builder
+  `run` uses) in `iced_test`'s `Emulator`, without a window, with test-only
+  commands. The emulator runs in `Mode::Immediate`, and a small harness
+  retries each expectation until it holds or 5 s pass. Rejected: `Mode::Zen`
+  and `.ice` test files, which wait for all tasks to finish; a command
+  waiting for an island never finishes by itself. Keys handled through
+  subscriptions (Up/Down/Tab) can't be tested this way (see
+  ICED_WISHLIST.md); they're tested on `History` and
+  `Interpreter::complete`, and checked by hand in a real window.
