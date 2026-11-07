@@ -22,13 +22,15 @@
 //!
 //! The host calls `view` after every update, which rebuilds iced widgets from
 //! the kettle-ui tree. Because the tree never changes shape, iced keeps each
-//! widget's internal state (focus, cursor, scroll) across rebuilds.
+//! widget's internal state (focus, cursor, scroll) across rebuilds. Widgets
+//! with nothing to show (see [`is_visible`]) get no gaps around them, but
+//! stay in the iced tree for the same reason.
 
 use std::sync::Arc;
 
-use iced::widget::{button, checkbox, column, progress_bar, row, text, text_input};
-use iced::{Element, Task, task};
-use kettle_ui::widget::{Action, Kind, Text, Widget};
+use iced::widget::{button, checkbox, column, container, progress_bar, row, text, text_input};
+use iced::{Element, Padding, Task, task};
+use kettle_ui::widget::{Action, Kind, Text, Widget, is_visible};
 use kettle_ui::{
     Built, Contents, Error, FrozenIsland, IslandBuilder, Job, JobResult, Model, Outcome,
     StateUpdate, Value,
@@ -133,12 +135,14 @@ fn render<'a>(
     let fields = contents.fields();
     let send = |msg: Msg| interactive.then_some(Message(msg));
     match widget.kind() {
-        Kind::Column(children) => column(children.iter().map(|c| render(contents, c, interactive)))
-            .spacing(spacing())
-            .into(),
-        Kind::Row(children) => row(children.iter().map(|c| render(contents, c, interactive)))
-            .spacing(spacing())
-            .into(),
+        Kind::Column(children) => column(spaced(contents, children, interactive, |g| {
+            Padding::ZERO.top(g)
+        }))
+        .into(),
+        Kind::Row(children) => row(spaced(contents, children, interactive, |g| {
+            Padding::ZERO.left(g)
+        }))
+        .into(),
         Kind::Label(Text::Static(s)) => text(s).into(),
         Kind::Label(Text::State(name)) => text(
             contents
@@ -179,6 +183,36 @@ fn render<'a>(
             }))
             .into(),
     }
+}
+
+/// Renders the children of a column or row, with a leading gap (from `gap`)
+/// before each visible child except the first. Hidden children (see
+/// [`is_visible`]) get no gap and zero size, but stay in place: iced matches
+/// widget state to children by position. Every child is wrapped the same
+/// way, so the tree's shape doesn't depend on visibility.
+fn spaced<'a>(
+    contents: &'a impl Contents,
+    children: &'a [Widget],
+    interactive: bool,
+    gap: impl Fn(f32) -> Padding,
+) -> impl Iterator<Item = Element<'a, Message>> {
+    let mut first = true;
+    children.iter().map(move |child| {
+        let visible = is_visible(contents, child);
+        let padding = if visible && !first {
+            gap(spacing())
+        } else {
+            Padding::ZERO
+        };
+        first &= !visible;
+        let max = if visible { f32::INFINITY } else { 0.0 };
+        container(render(contents, child, interactive))
+            .padding(padding)
+            .max_width(max)
+            .max_height(max)
+            .clip(!visible)
+            .into()
+    })
 }
 
 /// Named state as a list; empty if it's not a list (or not computed yet).

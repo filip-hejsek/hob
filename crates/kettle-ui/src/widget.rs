@@ -6,11 +6,14 @@
 //! - form elements: [`text_field`], [`checkbox`], [`suggestions`]
 //! - buttons: [`submit_button`], [`cancel_button`]
 //!
-//! Backends read the tree through [`Widget::kind`].
+//! Backends read the tree through [`Widget::kind`], and leave out the gaps
+//! around widgets that have nothing to show (see [`is_visible`]).
 
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+
+use crate::{Contents, Value};
 
 /// One node of the (immutable) widget tree. Build it with the free functions
 /// in [this module](self): [`column()`], [`label`], [`text_field`], ...
@@ -151,7 +154,7 @@ pub fn progress(state: &str) -> Widget {
     })
 }
 
-/// A list of lines showing named state (usually a [`Value::List`](crate::Value::List)).
+/// A list of lines showing named state (usually a [`Value::List`]).
 pub fn list(state: &str) -> Widget {
     Widget(Kind::List {
         state: state.to_owned(),
@@ -182,4 +185,120 @@ pub fn cancel_button(label: &str) -> Widget {
         label: label.to_owned(),
         action: Action::Cancel,
     })
+}
+
+/// Whether `widget` has anything to show. Backends give a hidden widget no
+/// gaps around it.
+///
+/// Hidden are: a label with empty text (missing state counts as empty), a
+/// list or suggestions with no items (or whose state isn't a list), and a
+/// column or row whose children are all hidden. Other widgets are always
+/// visible.
+pub fn is_visible(contents: &impl Contents, widget: &Widget) -> bool {
+    match widget.kind() {
+        Kind::Column(children) | Kind::Row(children) => {
+            children.iter().any(|c| is_visible(contents, c))
+        }
+        Kind::Label(Text::Static(s)) => !s.is_empty(),
+        Kind::Label(Text::State(name)) => contents
+            .state(name)
+            .is_some_and(|v| !v.to_string().is_empty()),
+        Kind::List { state } | Kind::Suggestions { state, .. } => {
+            matches!(contents.state(state), Some(Value::List(items)) if !items.is_empty())
+        }
+        Kind::TextField { .. }
+        | Kind::Checkbox { .. }
+        | Kind::Progress { .. }
+        | Kind::Button { .. } => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::Fields;
+
+    struct TestContents {
+        root: Widget,
+        fields: Fields,
+        state: HashMap<String, Value>,
+    }
+
+    impl Contents for TestContents {
+        fn root(&self) -> &Widget {
+            &self.root
+        }
+        fn fields(&self) -> &Fields {
+            &self.fields
+        }
+        fn state(&self, name: &str) -> Option<&Value> {
+            self.state.get(name)
+        }
+        fn is_outdated(&self, _: &str) -> bool {
+            false
+        }
+    }
+
+    fn contents(state: impl IntoIterator<Item = (&'static str, Value)>) -> TestContents {
+        TestContents {
+            root: column([]),
+            fields: Fields::default(),
+            state: state.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
+        }
+    }
+
+    #[test]
+    fn labels() {
+        let c = contents([
+            ("text", "a".into()),
+            ("empty", "".into()),
+            ("zero", 0.0.into()),
+            ("no_items", Value::List(Vec::new())),
+        ]);
+        assert!(is_visible(&c, &label("a")));
+        assert!(!is_visible(&c, &label("")));
+        assert!(is_visible(&c, &label(state("text"))));
+        assert!(is_visible(&c, &label(state("zero"))));
+        assert!(!is_visible(&c, &label(state("empty"))));
+        assert!(!is_visible(&c, &label(state("missing"))));
+        assert!(!is_visible(&c, &label(state("no_items"))));
+    }
+
+    #[test]
+    fn lists() {
+        let c = contents([
+            ("items", Value::List(vec!["a".into()])),
+            ("no_items", Value::List(Vec::new())),
+            ("text", "a".into()),
+        ]);
+        assert!(is_visible(&c, &list("items")));
+        assert!(is_visible(&c, &suggestions("items", "f")));
+        for name in ["no_items", "text", "missing"] {
+            assert!(!is_visible(&c, &list(name)));
+            assert!(!is_visible(&c, &suggestions(name, "f")));
+        }
+    }
+
+    #[test]
+    fn other_widgets_are_visible() {
+        let c = contents([]);
+        assert!(is_visible(&c, &text_field("f", "")));
+        assert!(is_visible(&c, &checkbox("c", "")));
+        assert!(is_visible(&c, &progress("missing")));
+        assert!(is_visible(&c, &submit_button("")));
+    }
+
+    #[test]
+    fn nested_layouts() {
+        let c = contents([("items", Value::List(vec!["a".into()]))]);
+        assert!(!is_visible(&c, &column([])));
+        assert!(!is_visible(
+            &c,
+            &column([label(""), row([list("missing")])])
+        ));
+        assert!(is_visible(&c, &column([label(""), row([list("items")])])));
+        assert!(is_visible(&c, &row([column([]), text_field("f", "")])));
+    }
 }

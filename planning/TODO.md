@@ -40,9 +40,8 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 
 - **Smart layout:** automatically insert all necessary gaps, so the UI looks
   good without manual spacing adjustments. The spacing itself stays fixed;
-  only where the gaps go becomes automatic.
-- Bug: an empty `list` still takes up a spacing gap in its parent column.
-  Will probably be fixed by the smart layout.
+  only where the gaps go becomes automatic. (Done so far: widgets with
+  nothing to show get no gaps.)
 - Post-MVP: some global styling customization. It will be set by the host
   application, not the island, and may be iced-specific.
 

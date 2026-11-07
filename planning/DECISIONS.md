@@ -51,6 +51,15 @@ thread) or as a snapshot of a live island (`Model::freeze`).
 ## kettle-ui-iced
 
 - Spacing is fixed at 10 px.
+- A widget with nothing to show (empty label, list or suggestions with no
+  items, a column or row of such widgets) gets no gaps around it. The check
+  is `kettle_ui::widget::is_visible`, so other backends can share it. A
+  `when(...)` wrapper that hides any widget may be added later, through the
+  same check.
+- Hidden widgets stay in the iced tree, at zero size: iced matches widget
+  state (focus, cursor) to children by position, so removing one could reset
+  the widgets after it. Columns and rows use spacing 0, and every child is
+  wrapped in a container whose padding adds the gap before it.
 - The default theme. Styling options are deliberately minimal; global
   customization, if any, will be set by the host application, not the
   island.
