@@ -59,6 +59,11 @@ Don't use it:
   server won't have your changes. Test them with their tests or hob-cli,
   and install the server again once they're committed.
 
+Some of a command's behavior can't be seen through it. Results sum up
+what happened since the last call, so intermediate states are often lost:
+an island that changed several times is shown only as it ends up (e.g.
+"island #14 changed (30 times)"). Check such behavior with a test.
+
 ## Checks
 
 Before committing, all of these must pass without warnings:

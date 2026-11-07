@@ -78,6 +78,14 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - hob-mcp has no tool for picking a suggestion (filling in the text has the
   same effect), and doesn't use MCP notifications or resources.
 - hob-mcp could return a PNG of an island (`kettle_ui_iced::render_png`).
+- Records of what an agent did, for inspecting later (hob-headless saves
+  nothing; see DECISIONS.md):
+  - hob-mcp could save a session file (`hob_core::Session`), built from
+    the notifications it gets, to open in hob-gui with `HOB_SESSION`. It
+    would show only final states.
+  - hob-mcp could write a log of the messages to and from hob (one JSON
+    line each, with times). It would include the intermediate states its
+    results leave out (e.g. each change of a progress bar).
 - hob-mcp reports a changed island of the command a result is about in
   full, which is a lot of text for small changes (e.g. a progress bar).
 - No completion or history over the protocol yet, and hob-cli has no line

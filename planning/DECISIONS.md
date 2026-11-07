@@ -322,7 +322,11 @@ operands, `--` ends them); unknown ones are errors.
   same commands. hob-headless itself doesn't know about specific commands.
 - Updates of live islands from `StateHandle`s wake the server through a
   waker (`Island::poll_waking`); no polling on a timer.
-- Nothing is saved; there's no session.
+- Nothing is saved; there's no session. The client owns the scrollback
+  (see `clear` below), so a client that wants a record keeps it itself.
+  Rejected: saving a session in hob-headless, which would need its own
+  copy of the scrollback. A session wouldn't show intermediate states
+  anyway: it's a snapshot, with each island as it is when saved.
 
 ## hob-cli (demo client)
 
