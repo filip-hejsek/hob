@@ -4,6 +4,21 @@ Design decisions made so far, by area, with rejected alternatives where
 they're worth remembering. Open questions and plans are in TODO.md.
 Known bugs are in BUGS.md.
 
+## Build
+
+- Dev builds keep only line tables as debug info (`debug =
+  "line-tables-only"`): backtraces still have files and lines, but a
+  debugger can't show variables, which nobody has needed. Full debug info
+  made a fresh `target/` 5.4 GB (test binaries linking iced were 300–500 MB
+  each, three quarters of it debug info); this makes it 2.6 GB, and builds
+  faster.
+- Rejected: dynamic linking for tests. Linking `std` dynamically
+  (`-C prefer-dynamic`) saved almost nothing. Putting iced and gix in one
+  test-only `dylib` crate (as Bevy's `dynamic_linking` does) shrank the
+  test binaries by 0.27 GB but the shared library was as big, so the total
+  grew; it also needs `prefer-dynamic` everywhere, since libtest is only
+  shipped as an rlib.
+
 ## kettle-ui core
 
 - The widget tree is fixed once built. kettle-ui is deliberately small:

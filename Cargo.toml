@@ -10,6 +10,11 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/filip-hejsek/hob"
 publish = false
 
+# Backtraces keep file and line numbers; no variables for a debugger. Halves
+# the size of target/ (see planning/DECISIONS.md).
+[profile.dev]
+debug = "line-tables-only"
+
 [workspace.lints.rust]
 missing_docs = "warn"
 unreachable_pub = "warn"
