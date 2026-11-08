@@ -315,7 +315,9 @@ and renders the island as an indented text outline.
   backslashes), and a `~` stays a `~`. Commands without a spec, and text
   arguments, aren't completed.
 - Commands that work with any frontend (such as `help` and `messages`) are
-  built into hob-core (`hob_core::builtins`), and registered by `hob`.
+  built into hob-core (`hob_core::builtins`), and registered by `hob`. The
+  shell command `!` is registered separately (`register_shell`), so a
+  program built on hob (hob-mcp-test-client) can leave it out.
 - Every command is registered with a one-line description (required, so
   `help` never has gaps), written as an imperative without a full stop:
   "Print the arguments". Bare `help` lists all commands with their

@@ -1,7 +1,5 @@
-//! Commands that work with any frontend. Register them with [`register`].
+//! Commands that work with any frontend. Register them with [`register`]:
 //!
-//! - `!COMMAND`: runs a shell command with `sh -c`, in the working directory,
-//!   printing its output (stdout and stderr) as it comes.
 //! - `clear`: clears the scrollback.
 //! - `exit`: exits hob; if other commands are running, asks first, listing
 //!   them.
@@ -11,6 +9,12 @@
 //! - `messages [LEVEL]`: lists the log records the frontend has, oldest
 //!   first, from `LEVEL` up (`info` by default, so `messages debug` lists
 //!   all).
+//!
+//! The shell command is separate ([`register_shell`]), so a program can
+//! have the builtins without it:
+//!
+//! - `!COMMAND`: runs a shell command with `sh -c`, in the working directory,
+//!   printing its output (stdout and stderr) as it comes.
 
 use std::io::Read;
 use std::process::Stdio;
@@ -26,9 +30,8 @@ use kettle_ui::{IslandBuilder, Outcome};
 use crate::args::{Kind, Matches, Spec};
 use crate::{CommandResult, Context, Interpreter, Level, LogRecord};
 
-/// Registers all built-in commands.
+/// Registers the built-in commands, except the shell command.
 pub fn register(interpreter: &mut Interpreter) {
-    interpreter.register_sh_prefix("!", "Run a shell command: !COMMAND", shell);
     interpreter.register_spec("clear", "Clear the scrollback", Spec::new(), clear);
     interpreter.register_spec("exit", "Exit hob", Spec::new(), exit);
     let commands = Kind::custom(|ctx| ctx.commands().iter().map(|&c| c.to_owned()).collect());
@@ -49,6 +52,11 @@ pub fn register(interpreter: &mut Interpreter) {
         Spec::new().arg("LEVEL", levels).optional(),
         messages,
     );
+}
+
+/// Registers the shell command, `!COMMAND`.
+pub fn register_shell(interpreter: &mut Interpreter) {
+    interpreter.register_sh_prefix("!", "Run a shell command: !COMMAND", shell);
 }
 
 /// The most output of a shell command that's shown. The scrollback isn't
@@ -310,6 +318,7 @@ mod tests {
     ) -> Vec<String> {
         let mut interpreter = Interpreter::new();
         register(&mut interpreter);
+        register_shell(&mut interpreter);
         let mut requests = interpreter.run(line).unwrap();
         let mut records = Some(records);
         let (mut running, mut outcome) = (Some(running), outcome);
@@ -454,6 +463,7 @@ mod tests {
     fn shell_commands_run_in_the_working_directory() {
         let mut interpreter = Interpreter::new();
         register(&mut interpreter);
+        register_shell(&mut interpreter);
         interpreter.set_cwd("/");
         let mut requests = interpreter.run("!pwd").unwrap();
         let waker = std::task::Waker::noop();

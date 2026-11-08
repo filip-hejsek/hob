@@ -1,6 +1,7 @@
 //! An MCP client for people: lets a user try an MCP server the way an agent
 //! would, with hob as the GUI. It has hob's generic builtins
-//! (`hob_core::builtins`), but none of hob's own commands.
+//! (`hob_core::builtins`, without the shell command), but none of hob's own
+//! commands.
 
 use std::path::PathBuf;
 use std::process::ExitCode;

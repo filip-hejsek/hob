@@ -8,7 +8,7 @@ in ../DECISIONS.md.
 - A standalone program that lets a person use an MCP server the way an
   agent would. Hob provides the GUI: it depends on hob-gui and registers
   its own commands, not hob's (only the generic `hob_core::builtins`:
-  `clear`, `exit`, `messages`, `!`, ...).
+  `clear`, `exit`, `messages`, ..., but not the shell command `!`).
 - Its session is saved apart from hob's (`HOB_MCP_TEST_CLIENT_SESSION`,
   or `hob-mcp-test-client/session.json` in the state directory).
 

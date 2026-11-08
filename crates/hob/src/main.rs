@@ -59,6 +59,7 @@ fn main() -> ExitCode {
 fn interpreter() -> Interpreter {
     let mut interpreter = Interpreter::new();
     hob_core::builtins::register(&mut interpreter);
+    hob_core::builtins::register_shell(&mut interpreter);
     hob_demo::register(&mut interpreter);
     hob_fs::register(&mut interpreter);
     hob_git::register(&mut interpreter);
