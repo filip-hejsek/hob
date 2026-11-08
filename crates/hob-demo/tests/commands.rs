@@ -159,3 +159,24 @@ fn view_saves_images_as_asked() {
         ["error: -e and -l can't be used together"]
     );
 }
+
+#[test]
+fn table() {
+    let lines = rest(run("table"));
+    let [outline] = lines.as_slice() else {
+        panic!("expected one island: {lines:?}");
+    };
+    let expected_start = "\
+column
+  label \"All borders\"
+  table
+    row
+      label \"Planet\"
+      label \"Moons\"
+      label \"Distance (AU)\"
+    row
+      label \"Mercury\"
+";
+    assert!(outline.starts_with(expected_start), "{outline}");
+    assert!(outline.contains("  table (horizontal borders)\n    row\n"));
+}

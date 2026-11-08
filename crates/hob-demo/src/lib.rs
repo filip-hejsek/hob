@@ -57,6 +57,12 @@ pub fn register(interpreter: &mut Interpreter) {
         Spec::new(),
         swatch,
     );
+    interpreter.register_spec(
+        "table",
+        "Show a table, with all borders and with horizontal ones only",
+        Spec::new(),
+        table_demo,
+    );
     interpreter.register(
         "confirm",
         "Ask a yes/no question (the arguments), answered with y or n",
@@ -283,6 +289,27 @@ fn swatch(ctx: &mut Context, _: &Matches) -> CommandResult {
     if let Outcome::Submitted(fields) = ctx.show(b)? {
         ctx.print(format!("Color: {}", fields.text("color")));
     }
+    Ok(())
+}
+
+/// Prints the same table twice: with all borders, and with horizontal ones
+/// only.
+fn table_demo(ctx: &mut Context, _: &Matches) -> CommandResult {
+    let planets = [
+        ["Planet", "Moons", "Distance (AU)"],
+        ["Mercury", "0", "0.39"],
+        ["Venus", "0", "0.72"],
+        ["Earth", "1", "1.00"],
+        ["Mars", "2", "1.52"],
+    ];
+    let rows = || planets.map(|cells| cells.map(label));
+    let b = IslandBuilder::new(column([
+        label("All borders"),
+        table(rows()),
+        label("Horizontal borders only"),
+        table_horizontal(rows()),
+    ]));
+    ctx.print_island(b.freeze()?);
     Ok(())
 }
 

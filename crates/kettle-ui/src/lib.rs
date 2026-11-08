@@ -480,6 +480,9 @@ impl IslandBuilder {
                     .iter()
                     .try_for_each(|c| self.check_references(c, fields));
             }
+            Kind::Table { rows, .. } => {
+                return (rows.iter().flatten()).try_for_each(|c| self.check_references(c, fields));
+            }
             Kind::When { state, child } => {
                 self.check_references(child, fields)?;
                 state
@@ -529,6 +532,9 @@ fn collect_fields(widget: &Widget, fields: &mut Fields) -> Result<(), Error> {
     let (id, value) = match widget.kind() {
         Kind::Column(children) | Kind::Row(children) => {
             return children.iter().try_for_each(|c| collect_fields(c, fields));
+        }
+        Kind::Table { rows, .. } => {
+            return (rows.iter().flatten()).try_for_each(|c| collect_fields(c, fields));
         }
         Kind::When { child, .. } => return collect_fields(child, fields),
         Kind::TextField { id, .. } | Kind::TextArea { id, .. } => (id, Field::Text(String::new())),

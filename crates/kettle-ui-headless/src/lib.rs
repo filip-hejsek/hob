@@ -42,7 +42,7 @@ use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 use futures_core::Stream;
-use kettle_ui::widget::{Action, Kind, Text, Widget, is_shown};
+use kettle_ui::widget::{Action, Borders, Kind, Text, Widget, is_shown};
 use kettle_ui::{
     Built, Contents, Error, Fields, FrozenIsland, IslandBuilder, Job, Model, Outcome, Updates,
     Value,
@@ -312,6 +312,19 @@ fn render(model: &impl Contents, widget: &Widget, depth: usize, out: &mut String
             }
             Ok(())
         }
+        Kind::Table { rows, borders } => {
+            match borders {
+                Borders::All => writeln!(out, "{indent}table")?,
+                Borders::Horizontal => writeln!(out, "{indent}table (horizontal borders)")?,
+            }
+            for cells in rows {
+                writeln!(out, "{indent}  row")?;
+                for cell in cells {
+                    render(model, cell, depth + 2, out)?;
+                }
+            }
+            Ok(())
+        }
         // A shown child appears as if it weren't wrapped; a hidden one not at all.
         Kind::When { state, child } if is_shown(model, state) => render(model, child, depth, out),
         Kind::When { .. } => Ok(()),
@@ -406,6 +419,7 @@ fn find<'a>(
         Kind::Column(children) | Kind::Row(children) => {
             children.iter().find_map(|c| find(model, c, pred))
         }
+        Kind::Table { rows, .. } => rows.iter().flatten().find_map(|c| find(model, c, pred)),
         Kind::When { state, child } if is_shown(model, state) => find(model, child, pred),
         _ => None,
     }
@@ -436,6 +450,22 @@ mod tests {
         island.type_text("a", "one\ntwo").unwrap();
         assert_eq!(island.fields().text("a"), "one\ntwo");
         assert_eq!(island.to_string(), "text_area a: \"one\\ntwo\"\n");
+    }
+
+    #[test]
+    fn tables_hold_fields() {
+        let mut island = Island::new(IslandBuilder::new(table_horizontal([
+            vec![label("Name"), text_field("name", "")],
+            vec![checkbox("ok", "OK")],
+        ])))
+        .unwrap();
+        island.type_text("name", "Ada").unwrap();
+        island.set_checked("ok", true).unwrap();
+        assert_eq!(
+            island.to_string(),
+            "table (horizontal borders)\n  row\n    label \"Name\"\n    \
+             text_field name: \"Ada\"\n  row\n    checkbox ok: [x] \"OK\"\n"
+        );
     }
 
     #[test]

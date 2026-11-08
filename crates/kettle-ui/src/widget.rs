@@ -1,7 +1,7 @@
 //! The widgets an island is built from.
 //!
 //! Build the (fixed) widget tree with the functions in this module:
-//! - layout: [`column()`], [`row`], [`when`]
+//! - layout: [`column()`], [`row`], [`table`], [`table_horizontal`], [`when`]
 //! - display: [`label`] (with [`state`]), [`progress`], [`list`], [`image()`]
 //! - form elements: [`text_field`], [`text_area`], [`checkbox`], [`suggestions`]
 //! - buttons: [`submit_button`], [`cancel_button`], [`button`],
@@ -38,6 +38,15 @@ pub enum Kind {
     Column(Vec<Widget>),
     /// [`row`]
     Row(Vec<Widget>),
+    /// [`table`] or [`table_horizontal`]
+    Table {
+        /// The cells, row by row. Rows may differ in length; missing cells
+        /// are empty.
+        rows: Vec<Vec<Widget>>,
+        /// Which borders are drawn.
+        #[serde(default, skip_serializing_if = "Borders::is_all")]
+        borders: Borders,
+    },
     /// [`when`]
     When {
         /// The named state that decides whether `child` is shown.
@@ -105,6 +114,23 @@ pub enum Kind {
     },
 }
 
+/// Which borders a [`table`] draws.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Borders {
+    /// Around every cell ([`table`]).
+    #[default]
+    All,
+    /// Only above and below every row ([`table_horizontal`]).
+    Horizontal,
+}
+
+impl Borders {
+    fn is_all(&self) -> bool {
+        *self == Borders::All
+    }
+}
+
 /// What a button does.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -152,6 +178,29 @@ pub fn column(children: impl IntoIterator<Item = Widget>) -> Widget {
 /// Lays out children horizontally.
 pub fn row(children: impl IntoIterator<Item = Widget>) -> Widget {
     Widget(Kind::Row(children.into_iter().collect()))
+}
+
+/// Lays out cells in a grid, row by row, with a border around every cell.
+/// Each column is as wide as its widest cell. Rows may differ in length;
+/// missing cells are left empty.
+pub fn table<R: IntoIterator<Item = Widget>>(rows: impl IntoIterator<Item = R>) -> Widget {
+    make_table(rows, Borders::All)
+}
+
+/// Like [`table`], but with borders only between rows, and above and below
+/// the table.
+pub fn table_horizontal<R: IntoIterator<Item = Widget>>(
+    rows: impl IntoIterator<Item = R>,
+) -> Widget {
+    make_table(rows, Borders::Horizontal)
+}
+
+fn make_table<R: IntoIterator<Item = Widget>>(
+    rows: impl IntoIterator<Item = R>,
+    borders: Borders,
+) -> Widget {
+    let rows = rows.into_iter().map(|r| r.into_iter().collect()).collect();
+    Widget(Kind::Table { rows, borders })
 }
 
 /// Shows `child` only while the named state `state` is
@@ -317,14 +366,16 @@ fn make_button(label: ButtonLabel, action: Action, danger: bool) -> Widget {
 ///
 /// Hidden are: a label with empty text (missing state counts as empty), a
 /// list or suggestions with no items (or whose state isn't a list), an image
-/// whose state isn't an image, a column
-/// or row whose children are all hidden, and a [`when`] whose state isn't
-/// true or whose child is hidden. Other widgets are always visible.
+/// whose state isn't an image, a column or row whose children are all
+/// hidden, a table without cells (its borders still show otherwise), and a
+/// [`when`] whose state isn't true or whose child is hidden. Other widgets
+/// are always visible.
 pub fn is_visible(contents: &impl Contents, widget: &Widget) -> bool {
     match widget.kind() {
         Kind::Column(children) | Kind::Row(children) => {
             children.iter().any(|c| is_visible(contents, c))
         }
+        Kind::Table { rows, .. } => rows.iter().any(|r| !r.is_empty()),
         Kind::When { state, child } => is_shown(contents, state) && is_visible(contents, child),
         Kind::Label(Text::Static(s)) => !s.is_empty(),
         Kind::Label(Text::State(name)) => contents
@@ -349,6 +400,7 @@ pub(crate) fn keys(widget: &Widget, f: &mut impl FnMut(char, &Action)) {
         Kind::Column(children) | Kind::Row(children) => {
             children.iter().for_each(|c| keys(c, f));
         }
+        Kind::Table { rows, .. } => rows.iter().flatten().for_each(|c| keys(c, f)),
         Kind::When { child, .. } => keys(child, f),
         Kind::Button {
             key: Some(key),
@@ -463,6 +515,28 @@ mod tests {
         ));
         assert!(is_visible(&c, &column([label(""), row([list("items")])])));
         assert!(is_visible(&c, &row([column([]), text_field("f", "")])));
+    }
+
+    #[test]
+    fn tables_are_visible_with_any_cells() {
+        let c = contents([]);
+        assert!(!is_visible(&c, &table::<[Widget; 0]>([])));
+        assert!(!is_visible(&c, &table([[], []])));
+        assert!(is_visible(&c, &table([vec![], vec![label("")]])));
+        assert!(is_visible(&c, &table_horizontal([[label("a")]])));
+    }
+
+    #[test]
+    fn table_borders_are_left_out_of_json_when_all() {
+        let json = |w: &Widget| serde_json::to_string(w).unwrap();
+        assert_eq!(
+            json(&table([[label("a")]])),
+            r#"{"table":{"rows":[[{"label":{"static":"a"}}]]}}"#
+        );
+        assert_eq!(
+            json(&table_horizontal([[label("a")]])),
+            r#"{"table":{"rows":[[{"label":{"static":"a"}}]],"borders":"horizontal"}}"#
+        );
     }
 
     #[test]

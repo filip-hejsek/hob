@@ -56,15 +56,16 @@ mod offscreen;
 mod scope;
 mod text_area;
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use iced::advanced::widget::operation::{Focusable, Outcome as OperationOutcome};
 use iced::advanced::widget::{Id, Operation, operate};
 use iced::widget::{
-    Container, button, column, container, operation, progress_bar, row, text, text_input,
+    Container, button, column, container, operation, progress_bar, row, rule, text, text_input,
 };
-use iced::{Element, Padding, Rectangle, Task, task};
-use kettle_ui::widget::{Action, Kind, Text, Widget, is_shown, is_visible};
+use iced::{Element, Length, Padding, Rectangle, Task, task};
+use kettle_ui::widget::{Action, Borders, Kind, Text, Widget, is_shown, is_visible};
 use kettle_ui::{
     Built, Contents, Error, FrozenIsland, IslandBuilder, Job, JobResult, Model, Outcome,
     StateUpdate, Value,
@@ -247,6 +248,7 @@ fn render<'a>(
             Padding::ZERO.left(g)
         }))
         .into(),
+        Kind::Table { rows, borders } => table(contents, rows, *borders, interactive, ids),
         Kind::When { state, child } => {
             // Disabled while hidden, so a focused text field stops taking input.
             let shown = is_shown(contents, state);
@@ -327,6 +329,78 @@ fn render<'a>(
             button::primary
         })
         .on_press_maybe(send(action_msg(action.clone())))
+        .into(),
+    }
+}
+
+/// Renders a table with iced's `table`, which draws lines only between
+/// cells, and adds the outer ones: a border around it, or lines above and
+/// below it.
+fn table<'a>(
+    contents: &'a impl Contents,
+    rows: &'a [Vec<Widget>],
+    borders: Borders,
+    interactive: bool,
+    ids: Option<&'a FieldIds>,
+) -> Element<'a, Message> {
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if columns == 0 {
+        // iced's table divides by the number of columns.
+        return column([]).into();
+    }
+    let cells: Vec<Vec<Element<'a, Message>>> = (rows.iter())
+        .map(|row| {
+            (0..columns)
+                .map(|col| match row.get(col) {
+                    Some(cell) => render(contents, cell, interactive, ids),
+                    None => text("").into(),
+                })
+                .collect()
+        })
+        .collect();
+    // iced's table gives a cell that fills the width (e.g. a text field) no
+    // room unless its column fills too.
+    let fills: Vec<bool> = (0..columns)
+        .map(|col| {
+            cells
+                .iter()
+                .any(|row| row[col].as_widget().size().width.is_fill())
+        })
+        .collect();
+    let fill_if = |fill| if fill { Length::Fill } else { Length::Shrink };
+    let width = fill_if(fills.contains(&true));
+    // iced's table takes the first row as headers, and builds the others
+    // from data, given by value: here, the row's index, to take its cells
+    // from `cells`.
+    let cells: Vec<Vec<RefCell<Option<Element<'a, Message>>>>> = (cells.into_iter())
+        .map(|row| row.into_iter().map(|c| RefCell::new(Some(c))).collect())
+        .collect();
+    let take = |row: usize, col: usize| cells[row][col].take().expect("each cell is taken once");
+    let table = iced::widget::table(
+        (0..columns).map(|col| {
+            iced::widget::table::column(take(0, col), move |row| take(row, col))
+                .width(fill_if(fills[col]))
+        }),
+        1..rows.len(),
+    );
+    match borders {
+        Borders::All => container(table)
+            .style(|theme: &iced::Theme| container::Style {
+                border: iced::Border {
+                    color: theme.extended_palette().background.strong.color,
+                    width: 1.0,
+                    radius: 0.0.into(),
+                },
+                ..container::Style::default()
+            })
+            .into(),
+        Borders::Horizontal => column([
+            rule::horizontal(1).into(),
+            table.separator_x(0).into(),
+            rule::horizontal(1).into(),
+        ])
+        // The rules fill the width; without this, so would the column.
+        .width(width)
         .into(),
     }
 }
@@ -418,6 +492,9 @@ impl Shown {
             Kind::Column(children) | Kind::Row(children) => {
                 children.iter().for_each(|c| self.collect(contents, c, ids));
             }
+            Kind::Table { rows, .. } => {
+                (rows.iter().flatten()).for_each(|c| self.collect(contents, c, ids));
+            }
             Kind::When { state, child } if is_shown(contents, state) => {
                 self.collect(contents, child, ids);
             }
@@ -467,6 +544,7 @@ fn field_ids(widget: &Widget, out: &mut Vec<Arc<str>>) {
         Kind::Column(children) | Kind::Row(children) => {
             children.iter().for_each(|c| field_ids(c, out));
         }
+        Kind::Table { rows, .. } => rows.iter().flatten().for_each(|c| field_ids(c, out)),
         Kind::When { child, .. } => field_ids(child, out),
         Kind::TextField { id, .. } | Kind::TextArea { id, .. } | Kind::Checkbox { id, .. } => {
             out.push(id.clone());

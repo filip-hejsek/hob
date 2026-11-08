@@ -188,3 +188,17 @@ iced never reads the launcher's token (`XDG_ACTIVATION_TOKEN` on Wayland,
 our fork's `startup-notify` branch: the 0.14 branch plus one commit that
 gives the first window the token from the environment. To be sent
 upstream as a fix for iced#3317.
+
+## Table borders and fill-width cells
+
+**Needed for:** kettle-ui's `table` and `table_horizontal`.
+
+iced's `table` draws lines only between cells, not around the table. And
+a cell that fills the width (e.g. a text input) gets no width unless its
+column fills; in a table whose columns all shrink, only the first one is
+made to fill.
+
+**Workaround:** the outer lines come from a bordered container (all
+borders) or rules above and below (horizontal only). Columns are set to
+fill when one of their cells does, found from the rendered cells' sizes;
+the cells are rendered first and handed to iced's table by row index.

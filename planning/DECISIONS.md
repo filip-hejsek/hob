@@ -56,6 +56,19 @@ Known bugs are in BUGS.md.
   (left out of JSON when false), and the outline adds `(danger)`. Only
   plain buttons get it: a dangerous action shouldn't be a submit button.
 
+- `table(rows)` lays out cells (any widgets) in a grid, row by row, with
+  a border around every cell; `table_horizontal(rows)` draws only the lines
+  between rows, and above and below the table. It's one `Kind::Table` with
+  a `borders` field (`all` or `horizontal`, left out of JSON when `all`).
+  Rows may differ in length; missing cells are empty. There's no header
+  row: a command that wants one puts labels in the first row. Cells are
+  widgets rather than named state, so a table can hold fields, and like
+  the rest of the tree it can't grow rows at runtime. The outline shows
+  `table` (or `table (horizontal borders)`), then a `row` per row with its
+  cells under it. A table without cells is hidden. Rejected: a table of
+  named state (a list of lists), which `Value` doesn't have, and which
+  couldn't hold fields.
+
 ### Images
 
 - `image(state)` shows named state that's a `Value::Image`, so images can
@@ -236,6 +249,15 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   a parameter (`--theme`, light by default), since the host picks it. Not
   `iced_test::Simulator`: it's made for tests (fixed 1024×768 size and 2×
   scale, snapshots compared with PNG files), not for producing images.
+
+- Tables use iced's `table`, as wide as their content (iced's first-column
+  fill doesn't make a shrinking table wider). A column with a cell that
+  fills the width (a text field, text area or progress bar) fills it too,
+  sharing what's left with other such columns; otherwise iced's table
+  gives that cell no width. iced's table draws only the lines between
+  cells, so the outer ones are added: a 1 px container border for `all`,
+  and 1 px rules above and below for `horizontal`, in the same colour
+  (`background.strong`). Cell padding is iced's (10 px across, 5 px down).
 
 ## kettle-ui-headless
 

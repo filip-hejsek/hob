@@ -109,11 +109,31 @@ mod tests {
         b.freeze().unwrap()
     }
 
+    /// A table with a ragged last row, made by `make` (all borders or
+    /// horizontal only).
+    fn table_island(make: fn(Vec<Vec<Widget>>) -> Widget) -> FrozenIsland {
+        IslandBuilder::new(column([
+            label("Files"),
+            make(vec![
+                vec![label("Name"), label("Size")],
+                vec![label("Cargo.toml"), label("1.2 KiB")],
+                vec![label("README.md"), label("3.4 KiB")],
+                vec![label("src")],
+            ]),
+        ]))
+        .freeze()
+        .unwrap()
+    }
+
     /// Compares the rendering with `tests/snapshots/NAME.png`, pixel by
     /// pixel. If the file is missing, writes it instead; delete it to
     /// regenerate it.
     fn check_snapshot(name: &str, frozen: bool) {
-        let png = render_png(&island(), &Theme::Light, 300, frozen);
+        check_island_snapshot(name, &island(), frozen);
+    }
+
+    fn check_island_snapshot(name: &str, island: &FrozenIsland, frozen: bool) {
+        let png = render_png(island, &Theme::Light, 300, frozen);
         let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests", "snapshots"]
             .iter()
             .collect::<PathBuf>()
@@ -151,6 +171,16 @@ mod tests {
     #[test]
     fn frozen_look_matches_snapshot() {
         check_snapshot("frozen", true);
+    }
+
+    #[test]
+    fn table_matches_snapshot() {
+        check_island_snapshot("table", &table_island(table), true);
+    }
+
+    #[test]
+    fn horizontal_table_matches_snapshot() {
+        check_island_snapshot("table_horizontal", &table_island(table_horizontal), true);
     }
 
     #[test]
