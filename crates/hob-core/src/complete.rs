@@ -1,12 +1,14 @@
 //! Tab completion of command lines: command names, then whatever a
-//! command's [`Spec`](crate::args::Spec) says comes next.
+//! command's [`Spec`](crate::args::Spec) says comes next. The shell command
+//! of a `!` line is completed with programs on `PATH`, then paths.
 
-use std::fs;
+use std::ffi::OsStr;
 use std::path::Path;
+use std::{env, fs};
 
 use crate::args::{CompletionContext, Expect, Kind, Next};
-use crate::line::{self, Partial};
-use crate::{Commands, Run, is_prefix};
+use crate::line::{self, Partial, Syntax, Word};
+use crate::{Commands, Run, is_prefix, prefixed};
 
 /// What [`Interpreter::complete`](crate::Interpreter::complete) made of a
 /// line.
@@ -43,20 +45,38 @@ impl Candidate {
     }
 }
 
-pub(crate) fn complete(commands: &Commands, cwd: &Path, line: &str) -> Completion {
+/// Completes `line`; programs are looked for in `path` (as in `PATH`).
+pub(crate) fn complete(
+    commands: &Commands,
+    cwd: &Path,
+    path: Option<&OsStr>,
+    line: &str,
+) -> Completion {
     let unchanged = Completion {
         line: line.to_owned(),
         candidates: Vec::new(),
         filled: Vec::new(),
     };
-    let trimmed = line.trim_start();
-    if (commands.keys()).any(|name| is_prefix(name) && trimmed.starts_with(name.as_str())) {
-        return unchanged;
-    }
     let home = line::home();
-    let (words, partial) = line::split_partial(line, home.as_deref());
+    let trimmed = line.trim_start();
+    let (syntax, words, partial) = match prefixed(commands, trimmed) {
+        Some((prefix, command)) if matches!(command.run, Run::Rest { sh: true, .. }) => {
+            let start = line.len() - trimmed.len() + prefix.len();
+            let (words, mut partial) =
+                line::split_partial(&line[start..], home.as_deref(), Syntax::Sh);
+            partial.word.start += start;
+            partial.word.end += start;
+            (Syntax::Sh, words, partial)
+        }
+        Some(_) => return unchanged,
+        None => {
+            let (words, partial) = line::split_partial(line, home.as_deref(), Syntax::Hob);
+            (Syntax::Hob, words, partial)
+        }
+    };
     let typed = partial.word.value.as_str();
     let candidates: Vec<Candidate> = match words.split_first() {
+        _ if syntax == Syntax::Sh => sh_candidates(cwd, path, &words, typed),
         None => (commands.keys())
             .filter(|name| !is_prefix(name) && name.starts_with(typed))
             .map(|name| Candidate::word(name))
@@ -79,7 +99,14 @@ pub(crate) fn complete(commands: &Commands, cwd: &Path, line: &str) -> Completio
     match candidates.as_slice() {
         [] => unchanged,
         [only] => Completion {
-            line: rewrite(line, &partial, &only.value, !only.open, home.as_deref()),
+            line: rewrite(
+                line,
+                &partial,
+                &only.value,
+                !only.open,
+                home.as_deref(),
+                syntax,
+            ),
             candidates: Vec::new(),
             filled: Vec::new(),
         },
@@ -90,13 +117,13 @@ pub(crate) fn complete(commands: &Commands, cwd: &Path, line: &str) -> Completio
             let common = &first.value[..len];
             let filled = (candidates.iter())
                 .map(|c| {
-                    let mut line = rewrite(line, &partial, &c.value, true, home.as_deref());
+                    let mut line = rewrite(line, &partial, &c.value, true, home.as_deref(), syntax);
                     line.pop(); // The space.
                     line
                 })
                 .collect();
             Completion {
-                line: rewrite(line, &partial, common, false, home.as_deref()),
+                line: rewrite(line, &partial, common, false, home.as_deref(), syntax),
                 candidates: candidates.into_iter().map(|c| c.shown).collect(),
                 filled,
             }
@@ -111,8 +138,8 @@ fn candidates(expect: &Expect, ctx: &CompletionContext, typed: &str) -> Vec<Cand
             .map(|long| format!("--{long}"))
             .collect(),
         Next::Nothing | Next::Value(Kind::Text) => return Vec::new(),
-        Next::Value(Kind::Path) => return paths(ctx.cwd(), typed, false),
-        Next::Value(Kind::Dir) => return paths(ctx.cwd(), typed, true),
+        Next::Value(Kind::Path) => return paths(ctx.cwd(), typed, Filter::All),
+        Next::Value(Kind::Dir) => return paths(ctx.cwd(), typed, Filter::Dirs),
         Next::Subcommands(names) => names.iter().map(|&n| n.to_owned()).collect(),
         Next::Value(Kind::Choice(choices)) => choices.iter().map(|&c| c.to_owned()).collect(),
         Next::Value(Kind::Custom(completer)) => completer.complete(ctx),
@@ -123,10 +150,84 @@ fn candidates(expect: &Expect, ctx: &CompletionContext, typed: &str) -> Vec<Cand
     words.iter().map(|w| Candidate::word(w)).collect()
 }
 
+/// The shell operators after which a new command starts.
+const COMMAND_SEPARATORS: &[&str] = &["|", "||", "&&", ";", "&", "|&", "("];
+
+/// The candidates for the word being typed in a shell command, after
+/// `words`: a program where a command name goes (but not before anything is
+/// typed: there would be too many), otherwise a path.
+fn sh_candidates(cwd: &Path, path: Option<&OsStr>, words: &[Word], typed: &str) -> Vec<Candidate> {
+    let is_command_name = (words.iter().rev())
+        .take_while(|w| !(w.operator && COMMAND_SEPARATORS.contains(&w.value.as_str())))
+        .all(|w| !w.operator && is_assignment(&w.value));
+    if !is_command_name {
+        paths(cwd, typed, Filter::All)
+    } else if typed.contains('/') {
+        paths(cwd, typed, Filter::Programs)
+    } else if typed.is_empty() {
+        Vec::new()
+    } else {
+        programs(cwd, path, typed)
+    }
+}
+
+/// Whether a shell word is a variable assignment (`NAME=value`).
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// The programs in `path` (like `PATH`) whose names start with `typed`, sorted. Hidden
+/// ones only if `typed` starts with `.`. Relative directories in it are
+/// relative to `cwd`, as for the shell.
+fn programs(cwd: &Path, path: Option<&OsStr>, typed: &str) -> Vec<Candidate> {
+    let Some(path) = path else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = (env::split_paths(&path))
+        .filter_map(|dir| fs::read_dir(cwd.join(dir)).ok())
+        .flat_map(|entries| entries.flatten())
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let hidden = name.starts_with('.') && !typed.starts_with('.');
+            (name.starts_with(typed) && !hidden && is_program(&entry.path())).then_some(name)
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names.iter().map(|name| Candidate::word(name)).collect()
+}
+
+/// Whether `path` is a file that can be run (following symlinks).
+fn is_program(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    let executable = {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    };
+    #[cfg(not(unix))]
+    let executable = true;
+    metadata.is_file() && executable
+}
+
+/// Which paths are completed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Filter {
+    All,
+    Dirs,
+    /// Directories and programs.
+    Programs,
+}
+
 /// The paths that `typed` (relative to `cwd`) can be completed to: the
 /// entries of its directory that start with its last component. Hidden ones
 /// only if that starts with `.`. Directories end with `/`.
-fn paths(cwd: &Path, typed: &str, only_dirs: bool) -> Vec<Candidate> {
+fn paths(cwd: &Path, typed: &str, filter: Filter) -> Vec<Candidate> {
     let (dir, base) = match typed.rfind('/') {
         Some(i) => typed.split_at(i + 1),
         None => ("", typed),
@@ -141,8 +242,14 @@ fn paths(cwd: &Path, typed: &str, only_dirs: bool) -> Vec<Candidate> {
                 return None;
             }
             // Follows symlinks, so a link to a directory counts as one.
-            let is_dir = entry.path().is_dir();
-            if only_dirs && !is_dir {
+            let path = entry.path();
+            let is_dir = path.is_dir();
+            let wanted = match filter {
+                Filter::All => true,
+                Filter::Dirs => is_dir,
+                Filter::Programs => is_dir || is_program(&path),
+            };
+            if !wanted {
                 return None;
             }
             let slash = if is_dir { "/" } else { "" };
@@ -159,8 +266,15 @@ fn paths(cwd: &Path, typed: &str, only_dirs: bool) -> Vec<Candidate> {
 
 /// The line with the word being typed replaced by `value`. If `done`, the
 /// word is finished: its quote is closed and a space follows.
-fn rewrite(line: &str, partial: &Partial, value: &str, done: bool, home: Option<&str>) -> String {
-    let word = line::requote(value, partial.quote, done, home, partial.word.tilde);
+fn rewrite(
+    line: &str,
+    partial: &Partial,
+    value: &str,
+    done: bool,
+    home: Option<&str>,
+    syntax: Syntax,
+) -> String {
+    let word = line::requote(value, partial.quote, done, home, partial.word.tilde, syntax);
     let space = if done { " " } else { "" };
     format!("{}{word}{space}", &line[..partial.word.start])
 }
@@ -354,5 +468,81 @@ mod tests {
         let (i, _dir) = setup();
         assert_eq!(complete(&i, "'ec"), completion("'echo' ", &[]));
         assert_eq!(complete(&i, "'ls' no"), completion("'ls' notes.txt ", &[]));
+    }
+
+    /// Completes `line` in an interpreter with `!` in a temporary directory
+    /// with some files, and `bin` and `sbin` directories as `PATH`.
+    fn sh_filled(line: &str) -> Completion {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let files = [
+            ("notes.txt", false),
+            ("a$b.txt", false),
+            ("run.sh", true),
+            ("sub/x", false),
+            ("bin/grep", true),
+            ("bin/greet", true),
+            ("bin/grok", false),
+            ("bin/.gz", true),
+            ("sbin/grep", true),
+            ("sbin/gzip", true),
+        ];
+        for (file, executable) in files {
+            let path = dir.path().join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "").unwrap();
+            let mode = if executable { 0o755 } else { 0o644 };
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let mut i = Interpreter::new();
+        i.register_sh_prefix("!", "Test", |_, _| Ok(()));
+        i.register_prefix("@", "Test", |_, _| Ok(()));
+        let path = std::env::join_paths(["bin", "sbin"]).unwrap();
+        super::complete(&i.commands, dir.path(), Some(&path), line)
+    }
+
+    /// Like [`sh_filled`], leaving out the filled-in lines.
+    fn sh(line: &str) -> Completion {
+        Completion {
+            filled: Vec::new(),
+            ..sh_filled(line)
+        }
+    }
+
+    #[test]
+    fn completes_programs_in_shell_commands() {
+        assert_eq!(sh("!gr"), completion("!gre", &["greet", "grep"]));
+        assert_eq!(sh("! gz"), completion("! gzip ", &[]));
+        assert_eq!(sh("  !grep"), completion("  !grep ", &[]));
+        assert_eq!(sh("!.g"), completion("!.gz ", &[]));
+        // Not before anything is typed.
+        assert_eq!(sh("!"), completion("!", &[]));
+        // After operators, and assignments.
+        assert_eq!(sh("!ls|gz"), completion("!ls|gzip ", &[]));
+        assert_eq!(sh("!a && X=1 gz"), completion("!a && X=1 gzip ", &[]));
+        // With a slash, programs and directories as paths.
+        assert_eq!(
+            sh("!./"),
+            completion("!./", &["bin/", "run.sh", "sbin/", "sub/"])
+        );
+        assert_eq!(sh("!./r"), completion("!./run.sh ", &[]));
+        // Other prefix commands aren't completed.
+        assert_eq!(sh("@gz"), completion("@gz", &[]));
+    }
+
+    #[test]
+    fn completes_paths_in_shell_commands() {
+        assert_eq!(sh("!cat no"), completion("!cat notes.txt ", &[]));
+        assert_eq!(sh("!cat gz no"), completion("!cat gz notes.txt ", &[]));
+        assert_eq!(sh("!ls >no"), completion("!ls >notes.txt ", &[]));
+        // Quoted for the shell.
+        assert_eq!(sh("!cat a"), completion(r"!cat a\$b.txt ", &[]));
+        assert_eq!(sh(r#"!cat "a"#), completion(r#"!cat "a\$b.txt" "#, &[]));
+        assert_eq!(sh("!cat 'a"), completion("!cat 'a$b.txt' ", &[]));
+        assert_eq!(
+            sh_filled("!cat ").filled[..2],
+            [r"!cat a\$b.txt", "!cat bin/"]
+        );
     }
 }

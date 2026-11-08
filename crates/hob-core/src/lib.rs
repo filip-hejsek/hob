@@ -87,8 +87,9 @@ type Job = Box<dyn FnOnce(&mut Context) -> CommandResult + Send>;
 enum Run {
     /// With the words after its name.
     Words(CommandFn<[String]>),
-    /// With the rest of the line after its prefix.
-    Rest(CommandFn<str>),
+    /// With the rest of the line after its prefix, which is completed as
+    /// a shell command if `sh`.
+    Rest { run: CommandFn<str>, sh: bool },
     /// With the words after its name, parsed by a spec.
     Parsed(Arc<Spec>, CommandFn<Matches>),
 }
@@ -203,7 +204,7 @@ impl Interpreter {
     /// Registers a command that's run for every line starting with `prefix`,
     /// e.g. `!` for `!ls -l`. It gets the rest of the line, unsplit (`ls -l`).
     /// If several prefixes match, the longest wins. `help` lists it like
-    /// other commands; Tab doesn't complete it.
+    /// other commands; Tab doesn't complete it, nor the rest of the line.
     ///
     /// # Panics
     ///
@@ -218,6 +219,21 @@ impl Interpreter {
         description: impl Into<String>,
         run: impl Fn(&mut Context, &str) -> CommandResult + Send + Sync + 'static,
     ) {
+        self.insert_prefix(prefix, description.into(), Arc::new(run), false);
+    }
+
+    /// Registers a prefix command whose rest of the line is a shell command,
+    /// for completion (`!`).
+    pub(crate) fn register_sh_prefix(
+        &mut self,
+        prefix: &str,
+        description: impl Into<String>,
+        run: impl Fn(&mut Context, &str) -> CommandResult + Send + Sync + 'static,
+    ) {
+        self.insert_prefix(prefix, description.into(), Arc::new(run), true);
+    }
+
+    fn insert_prefix(&mut self, prefix: &str, description: String, run: CommandFn<str>, sh: bool) {
         assert!(
             is_prefix(prefix)
                 && !prefix.starts_with(['\'', '"', '\\'])
@@ -225,7 +241,7 @@ impl Interpreter {
             "the prefix {prefix:?} must start with a special character other than a quote \
              or backslash, and have no whitespace"
         );
-        self.insert(prefix, description.into(), Run::Rest(Arc::new(run)));
+        self.insert(prefix, description, Run::Rest { run, sh });
     }
 
     fn insert(&mut self, name: &str, description: String, run: Run) {
@@ -247,9 +263,12 @@ impl Interpreter {
     /// as far as it's unambiguous, with a space after a finished word. The
     /// first word is a command name; after it, what the command's
     /// [`Spec`] says comes next (options, subcommands, paths, ...).
-    /// Commands without a spec, and prefix commands, aren't completed.
+    /// The rest of a `!` line is completed as a shell command: programs on
+    /// `PATH`, then paths. Commands without a spec, and other prefix
+    /// commands, aren't completed.
     pub fn complete(&self, line: &str) -> Completion {
-        complete::complete(&self.commands, &self.cwd(), line)
+        let path = std::env::var_os("PATH");
+        complete::complete(&self.commands, &self.cwd(), path.as_deref(), line)
     }
 
     /// Starts running a command line on a new thread. If it starts with a
@@ -267,34 +286,32 @@ impl Interpreter {
             name: name.to_owned(),
             known: self.commands.keys().cloned().collect(),
         };
-        let prefixed = (self.commands.iter())
-            .filter(|(prefix, _)| is_prefix(prefix) && line.starts_with(prefix.as_str()))
-            .max_by_key(|(prefix, _)| prefix.len());
-        let (name, command): (String, Job) = if let Some((prefix, command)) = prefixed {
-            let Run::Rest(run) = command.run.clone() else {
-                unreachable!("prefixes are registered with Run::Rest");
+        let (name, command): (String, Job) =
+            if let Some((prefix, command)) = prefixed(&self.commands, line) {
+                let Run::Rest { run, .. } = command.run.clone() else {
+                    unreachable!("prefixes are registered with Run::Rest");
+                };
+                let rest = line[prefix.len()..].to_owned();
+                (prefix.clone(), Box::new(move |ctx| run(ctx, &rest)))
+            } else {
+                let words = line::split(line).map_err(|e| Error::Syntax(e.to_string()))?;
+                let mut words = words.into_iter().map(|w| w.value);
+                let name = words.next().ok_or(Error::Empty)?;
+                // A quoted name can't run a prefix command.
+                let command = (self.commands.get(&name))
+                    .filter(|_| !is_prefix(&name))
+                    .ok_or_else(|| unknown(&name))?;
+                let args: Vec<String> = words.collect();
+                let job: Job = match command.run.clone() {
+                    Run::Words(run) => Box::new(move |ctx| run(ctx, &args)),
+                    Run::Parsed(spec, run) => {
+                        let path = name.clone();
+                        Box::new(move |ctx| run(ctx, &spec.parse(&args, &path)?))
+                    }
+                    Run::Rest { .. } => unreachable!("prefixes aren't looked up by name"),
+                };
+                (name, job)
             };
-            let rest = line[prefix.len()..].to_owned();
-            (prefix.clone(), Box::new(move |ctx| run(ctx, &rest)))
-        } else {
-            let words = line::split(line).map_err(|e| Error::Syntax(e.to_string()))?;
-            let mut words = words.into_iter().map(|w| w.value);
-            let name = words.next().ok_or(Error::Empty)?;
-            // A quoted name can't run a prefix command.
-            let command = (self.commands.get(&name))
-                .filter(|_| !is_prefix(&name))
-                .ok_or_else(|| unknown(&name))?;
-            let args: Vec<String> = words.collect();
-            let job: Job = match command.run.clone() {
-                Run::Words(run) => Box::new(move |ctx| run(ctx, &args)),
-                Run::Parsed(spec, run) => {
-                    let path = name.clone();
-                    Box::new(move |ctx| run(ctx, &spec.parse(&args, &path)?))
-                }
-                Run::Rest(_) => unreachable!("prefixes aren't looked up by name"),
-            };
-            (name, job)
-        };
         let (cwd, number) = {
             let mut shared = lock(&self.cwd);
             shared.started += 1;
@@ -329,6 +346,14 @@ impl Interpreter {
 }
 
 /// Whether a command name is a prefix: it starts with a special character.
+/// The prefix command that runs `line` (without leading whitespace): the
+/// one with the longest matching prefix.
+fn prefixed<'a>(commands: &'a Commands, line: &str) -> Option<(&'a String, &'a Command)> {
+    (commands.iter())
+        .filter(|(prefix, _)| is_prefix(prefix) && line.starts_with(prefix.as_str()))
+        .max_by_key(|(prefix, _)| prefix.len())
+}
+
 fn is_prefix(name: &str) -> bool {
     name.starts_with(|c: char| !c.is_alphanumeric() && !c.is_whitespace())
 }

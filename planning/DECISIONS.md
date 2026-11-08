@@ -335,6 +335,20 @@ and renders the island as an indented text outline.
   unsplit. The longest matching prefix wins. They share the name table with
   other commands, so `help` lists them and `help !` describes one, but Tab
   doesn't complete them: completing `!` to `! ` would only get in the way.
+- Tab completes the shell command of a `!` line (other prefix commands get
+  no completion; `register_prefix` has no way to ask for it, since only `!`
+  needs it). It's split with an `sh` flavor of the line syntax: unquoted
+  operators (`|`, `&&`, `;`, `<`, ...) are words of their own, and `\$` and
+  ``\` `` escape in double quotes. A command name (the first word, or after
+  `|`, `&&`, `;`, `&`, `(`, and any `NAME=value`) is completed with the
+  programs on `PATH` (executable files; relative entries are relative to the
+  working directory), or as a path to a directory or program if it has a
+  `/`. Nothing is offered for an empty command name: `PATH` has thousands of
+  programs, too many to list. Other words are completed as paths. Completed
+  words are quoted for `sh`, escaping anything it would expand or split at
+  (`$`, `*`, `|`, ...). Not completed: shell builtins and keywords,
+  variables (`$HOME/...`), and a command name after a redirection
+  (`>out cmd`).
 - `!COMMAND` (a builtin) runs a shell command with `sh -c`, not `$SHELL`, so
   the syntax is the same whatever the user's login shell. It runs in the
   interpreter's working directory, with pipes for stdio and no pty. Nothing

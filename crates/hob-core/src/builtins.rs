@@ -28,7 +28,7 @@ use crate::{CommandResult, Context, Interpreter, Level, LogRecord};
 
 /// Registers all built-in commands.
 pub fn register(interpreter: &mut Interpreter) {
-    interpreter.register_prefix("!", "Run a shell command: !COMMAND", shell);
+    interpreter.register_sh_prefix("!", "Run a shell command: !COMMAND", shell);
     interpreter.register_spec("clear", "Clear the scrollback", Spec::new(), clear);
     interpreter.register_spec("exit", "Exit hob", Spec::new(), exit);
     let commands = Kind::custom(|ctx| ctx.commands().iter().map(|&c| c.to_owned()).collect());

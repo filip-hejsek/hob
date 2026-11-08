@@ -173,9 +173,12 @@ Only the first parts are done; the rest is still to be designed.
   prompt line, or a list of matches?
 - Completion works only at the end of the line (iced doesn't tell the app
   where the cursor is; see ICED_WISHLIST.md).
+- Shell completion for `!` could also offer shell builtins (`cd`, `export`,
+  ...), variable names after `$`, and paths starting with a variable.
 - Completing a path reads its directory on the UI thread, which could
   stall on a slow or network filesystem; so could a command's custom
-  completer (e.g. `git log` reading refs).
+  completer (e.g. `git log` reading refs), or reading the `PATH`
+  directories for `!`.
 - There is no way to move focus to the command prompt using only the keyboard.
 - Selecting output works only within one printed text or log record; a
   selection can't span several, nor include islands.
