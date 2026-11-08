@@ -11,6 +11,10 @@ in ../DECISIONS.md.
   `clear`, `exit`, `messages`, ..., but not the shell command `!`).
 - Its session is saved apart from hob's (`HOB_MCP_TEST_CLIENT_SESSION`,
   or `hob-mcp-test-client/session.json` in the state directory).
+- It passes hob-gui its own configuration: the title and stderr prefix
+  `hob-mcp-test-client`, and the application ID
+  `io.github.filip_hejsek.hob_mcp_test_client`, so desktops don't group its
+  window with hob's. There's no desktop file for it yet.
 
 ## Build
 

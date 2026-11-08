@@ -78,27 +78,34 @@ mod selectable;
 /// The target of the shell's own log records.
 const TARGET: &str = "hob_gui";
 
-/// The program name that starts lines logged to stderr.
-const LOG_PREFIX: &str = "hob";
+/// Configuration supplied by the application running the shell.
+#[derive(Clone, Debug)]
+pub struct GuiConfig {
+    /// The window's title.
+    pub title: String,
+    /// The window's Wayland app ID and X11 class, which should match the
+    /// name of the desktop file.
+    pub app_id: String,
+    /// The placeholder shown in the empty prompt, e.g. a hint on how to list
+    /// the commands.
+    pub command_placeholder: String,
+    /// Starts the shell's messages on stderr, followed by `: `.
+    pub log_prefix: String,
+}
 
 /// Opens the main window, running commands with `interpreter`, and blocks
 /// until it closes. If `session` is given, the session is restored from that
-/// file, and saved to it. The prompt shows `placeholder` while it's empty,
-/// e.g. a hint on how to list the commands.
-pub fn run(
-    interpreter: Interpreter,
-    session: Option<PathBuf>,
-    placeholder: impl Into<String>,
-) -> iced::Result {
-    let early_log = hob_core::logger::early_log_stderr(LOG_PREFIX);
+/// file, and saved to it.
+pub fn run(interpreter: Interpreter, session: Option<PathBuf>, config: GuiConfig) -> iced::Result {
+    let early_log = hob_core::logger::early_log_stderr(&config.log_prefix);
     let level = hob_core::logger::level_from_env(early_log);
-    let records = hob_core::logger::install(level, LOG_PREFIX.into());
+    let records = hob_core::logger::install(level, config.log_prefix.clone());
     let limits = Limits::from_env();
     application(
         Some(Arc::new(interpreter)),
         session,
         limits,
-        placeholder.into(),
+        config,
         level,
         records,
     )
@@ -108,29 +115,33 @@ pub fn run(
 /// Opens the session saved in `session` read-only, and blocks until the
 /// window closes. No commands run, and the file isn't changed, even if it
 /// can't be read.
-pub fn preview(session: PathBuf) -> iced::Result {
-    let early_log = hob_core::logger::early_log_stderr(LOG_PREFIX);
+pub fn preview(session: PathBuf, config: GuiConfig) -> iced::Result {
+    let early_log = hob_core::logger::early_log_stderr(&config.log_prefix);
     let level = hob_core::logger::level_from_env(early_log);
-    let records = hob_core::logger::install(level, LOG_PREFIX.into());
-    let title = format!("hob (preview of {})", session.display());
+    let records = hob_core::logger::install(level, config.log_prefix.clone());
+    let config = GuiConfig {
+        title: format!("{} (preview of {})", config.title, session.display()),
+        ..config
+    };
     let limits = Limits::default();
-    application(None, Some(session), limits, String::new(), level, records)
-        .title(move |_: &Shell| title.clone())
-        .run()
+    application(None, Some(session), limits, config, level, records).run()
 }
 
 /// The shell as an iced application, ready to run. Without an interpreter,
 /// it's a read-only preview of the session. The session is trimmed to
-/// `limits` when saved. Log records that aren't from a command are read
-/// from `records`, if given.
+/// `limits` when saved. The window is set up as `config` says. Log records
+/// that aren't from a command are read from `records`, if given.
 fn application(
     interpreter: Option<Arc<Interpreter>>,
     session: Option<PathBuf>,
     limits: Limits,
-    placeholder: String,
+    config: GuiConfig,
     level: Level,
     records: Option<futures_channel::mpsc::UnboundedReceiver<LogRecord>>,
 ) -> iced::Application<impl iced::Program<State = Shell, Message = Message, Theme = iced::Theme>> {
+    let title = config.title.clone();
+    let window = window_settings(&config.app_id);
+    let config = Arc::new(config);
     // The boot function is `Fn`, but it's only called once.
     let records = Mutex::new(records);
     iced::application(
@@ -140,7 +151,7 @@ fn application(
                 interpreter.clone(),
                 session.clone(),
                 limits,
-                placeholder.clone(),
+                config.clone(),
                 level,
                 records,
             )
@@ -151,20 +162,17 @@ fn application(
     .subscription(Shell::subscription)
     // Save the session before exiting.
     .exit_on_close_request(false)
-    .title("hob")
-    .window(window_settings())
+    .title(move |_: &Shell| title.clone())
+    .window(window)
 }
 
-/// The application ID: the window's Wayland app ID and X11 class, which
-/// must match the name of the desktop file (`data/<APP_ID>.desktop`).
-pub const APP_ID: &str = "io.github.filip_hejsek.hob";
-
-fn window_settings() -> iced::window::Settings {
+#[cfg_attr(not(target_os = "linux"), expect(unused_variables))]
+fn window_settings(app_id: &str) -> iced::window::Settings {
     iced::window::Settings {
         size: iced::Size::new(640.0, 560.0),
         #[cfg(target_os = "linux")]
         platform_specific: iced::window::settings::PlatformSpecific {
-            application_id: APP_ID.to_owned(),
+            application_id: app_id.to_owned(),
             ..Default::default()
         },
         ..Default::default()
@@ -177,8 +185,8 @@ const SCROLLBACK: &str = "scrollback";
 struct Shell {
     /// Runs commands; without one, the shell is a read-only preview.
     interpreter: Option<Arc<Interpreter>>,
-    /// Shown in the empty prompt.
-    placeholder: String,
+    /// Configuration provided by the application.
+    config: Arc<GuiConfig>,
     /// Where the session is saved, if anywhere.
     session: Option<PathBuf>,
     /// How big the saved session may get; the scrollback and history are
@@ -320,12 +328,12 @@ impl Shell {
         interpreter: Option<Arc<Interpreter>>,
         session: Option<PathBuf>,
         limits: Limits,
-        placeholder: String,
+        config: Arc<GuiConfig>,
         level: Level,
         records: Option<futures_channel::mpsc::UnboundedReceiver<LogRecord>>,
     ) -> (Self, Task<Message>) {
         let mut shell = Shell {
-            placeholder,
+            config,
             interpreter,
             session,
             limits,
@@ -367,7 +375,7 @@ impl Shell {
             Ok(Some(session)) => session,
             Ok(None) if self.is_preview() => {
                 let message = format!("There's no saved session at {}.", path.display());
-                eprintln!("{LOG_PREFIX}: {message}");
+                eprintln!("{}: {message}", self.config.log_prefix);
                 self.scrollback
                     .push(Item::Notice(LogRecord::new(Level::Error, TARGET, message)));
                 return;
@@ -383,7 +391,7 @@ impl Shell {
                         Err(e) => message += &format!("; couldn't move it aside: {e}"),
                     }
                 }
-                eprintln!("{LOG_PREFIX}: {message}");
+                eprintln!("{}: {message}", self.config.log_prefix);
                 self.scrollback
                     .push(Item::Notice(LogRecord::new(Level::Error, TARGET, message)));
                 return;
@@ -440,7 +448,7 @@ impl Shell {
                 if self.save_error.as_ref() == Some(&message) {
                     return;
                 }
-                eprintln!("{LOG_PREFIX}: {message}");
+                eprintln!("{}: {message}", self.config.log_prefix);
                 self.save_error = Some(message.clone());
                 LogRecord::new(Level::Error, TARGET, message).ephemeral()
             }
@@ -733,6 +741,7 @@ impl Shell {
             request => request,
         };
         let island_id = self.next_id();
+        let config = self.config.clone();
         let Some(block) = self.block_mut(block) else {
             return Task::none();
         };
@@ -744,7 +753,7 @@ impl Shell {
             }
             Request::Log(record) => {
                 if record.level <= Level::Warn {
-                    eprintln!("{LOG_PREFIX}: {}: {record}", record.target);
+                    eprintln!("{}: {}: {record}", config.log_prefix, record.target);
                 }
                 Entry::Log(record)
             }
@@ -941,7 +950,7 @@ impl Shell {
             .into();
         }
 
-        let prompt = text_input(&self.placeholder, &self.prompt)
+        let prompt = text_input(&self.config.command_placeholder, &self.prompt)
             .id(Id::new(PROMPT))
             .on_input(Message::PromptChanged)
             .on_submit(Message::PromptSubmitted)

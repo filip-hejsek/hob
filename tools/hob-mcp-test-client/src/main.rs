@@ -30,8 +30,7 @@ fn main() -> ExitCode {
     let mut interpreter = Interpreter::new();
     hob_core::builtins::register(&mut interpreter);
     hob_mcp_test_client::register(&mut interpreter, &client);
-    let placeholder = "Type a command, or help";
-    let result = hob_gui::run(interpreter, session_path(), placeholder);
+    let result = hob_gui::run(interpreter, session_path(), gui_config());
     // Ends a server process, which dropping the runtime might not.
     client.close();
     match result {
@@ -40,6 +39,17 @@ fn main() -> ExitCode {
             eprintln!("{LOG_PREFIX}: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// What the shell calls the client: its own name and application ID, so
+/// desktops don't group it with hob.
+fn gui_config() -> hob_gui::GuiConfig {
+    hob_gui::GuiConfig {
+        title: "hob-mcp-test-client".to_owned(),
+        app_id: "io.github.filip_hejsek.hob_mcp_test_client".to_owned(),
+        command_placeholder: "Type a command, or help".to_owned(),
+        log_prefix: LOG_PREFIX.to_owned(),
     }
 }
 

@@ -231,7 +231,7 @@ fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
         Some(Arc::new(interpreter())),
         None,
         Limits::default(),
-        PLACEHOLDER.into(),
+        Arc::new(gui_config()),
         Level::Info,
         None,
     );
@@ -262,7 +262,7 @@ fn ctrl_d_does_not_exit_while_commands_are_running() {
         Some(Arc::new(interpreter())),
         None,
         Limits::default(),
-        PLACEHOLDER.into(),
+        Arc::new(gui_config()),
         Level::Info,
         None,
     );
@@ -384,7 +384,7 @@ fn saving_trims_the_scrollback_and_history() {
         Some(Arc::new(interpreter())),
         Some(file.0.clone()),
         limits,
-        PLACEHOLDER.into(),
+        Arc::new(gui_config()),
         Level::Info,
         None,
     );
@@ -469,7 +469,7 @@ fn preview_shows_the_session_without_changing_it() {
         None,
         Some(file.0.clone()),
         Limits::default(),
-        String::new(),
+        gui_config(),
         Level::Info,
         None,
     );
@@ -490,7 +490,7 @@ fn preview_shows_the_session_without_changing_it() {
         None,
         Some(file.0.clone()),
         Limits::default(),
-        String::new(),
+        Arc::new(gui_config()),
         Level::Info,
         None,
     );
@@ -509,7 +509,7 @@ fn preview_leaves_a_bad_file_alone() {
         None,
         Some(file.0.clone()),
         Limits::default(),
-        String::new(),
+        Arc::new(gui_config()),
         Level::Info,
         None,
     );
@@ -519,6 +519,16 @@ fn preview_leaves_a_bad_file_alone() {
 
 /// Shown in the empty prompt.
 const PLACEHOLDER: &str = "Type a command";
+
+/// Shell config for the tests.
+fn gui_config() -> GuiConfig {
+    GuiConfig {
+        title: "test".into(),
+        app_id: "org.example.test".into(),
+        command_placeholder: PLACEHOLDER.into(),
+        log_prefix: "test".into(),
+    }
+}
 
 /// How long [`Harness::expect`] waits.
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -582,7 +592,7 @@ fn start_with(
         Some(Arc::new(interpreter())),
         session,
         limits,
-        PLACEHOLDER.into(),
+        gui_config(),
         Level::Info,
         None,
     );

@@ -21,10 +21,7 @@ fn main() -> ExitCode {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let result = match args.as_slice() {
         #[cfg(feature = "gui")]
-        [] => {
-            let placeholder = "Type a command, or help";
-            hob_gui::run(interpreter(), session_path(), placeholder).map_err(|e| e.to_string())
-        }
+        [] => hob_gui::run(interpreter(), session_path(), gui_config()).map_err(|e| e.to_string()),
         // No interpreter: a preview runs nothing.
         #[cfg(feature = "gui")]
         [flag, path @ ..] if flag == "--preview" && path.len() <= 1 => {
@@ -33,7 +30,7 @@ fn main() -> ExitCode {
                 _ => session_path(),
             };
             match path {
-                Some(path) => hob_gui::preview(path).map_err(|e| e.to_string()),
+                Some(path) => hob_gui::preview(path, gui_config()).map_err(|e| e.to_string()),
                 None => Err("no session to preview: no state directory".to_owned()),
             }
         }
@@ -55,6 +52,22 @@ fn main() -> ExitCode {
             eprintln!("{LOG_PREFIX}: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(feature = "gui")]
+/// The application ID: the window's Wayland app ID and X11 class, which
+/// must match the name of the desktop file (`data/<APP_ID>.desktop`).
+const APP_ID: &str = "io.github.filip_hejsek.hob";
+
+#[cfg(feature = "gui")]
+/// What the shell calls hob.
+fn gui_config() -> hob_gui::GuiConfig {
+    hob_gui::GuiConfig {
+        title: "hob".to_owned(),
+        app_id: APP_ID.to_owned(),
+        command_placeholder: "Type a command, or help".into(),
+        log_prefix: LOG_PREFIX.to_owned(),
     }
 }
 

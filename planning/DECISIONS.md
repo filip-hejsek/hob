@@ -375,8 +375,9 @@ and renders the island as an indented text outline.
   It doesn't expand `~`, which the command line already did (as a shell
   does, so a quoted `~` stays), and doesn't normalize, so `..` in a path
   is followed by the OS, as in a shell.
-- The prompt's placeholder is a parameter of `hob_gui::run`; `hob` passes a
-  hint to use `help`, since only it knows that `help` is registered.
+- The prompt's placeholder is set by the program running hob-gui (in
+  `hob_gui::GuiConfig`); `hob` passes a hint to use `help`, since only it
+  knows that `help` is registered.
 
 ## Filesystem commands (hob-fs)
 
@@ -471,8 +472,9 @@ they're made from the notes whenever `todo` runs.
   `tracing`: spans aren't needed, since commands log through their context.
 - Lines on stderr start with the program's name and `: `, as is usual for
   Unix tools. Crates that print to stderr themselves name it in a
-  `LOG_PREFIX` constant. The logger takes the prefix when installed.
-  Messages from before the logger is installed (e.g. a bad
+  `LOG_PREFIX` constant. The logger takes the prefix when installed, and
+  hob-gui takes it from its user, so that hob-mcp-test-client's lines
+  don't say `hob`. Messages from before the logger is installed (e.g. a bad
   `HOB_LOG`) go to an early log, a function which prints them to stderr.
   Functions that run that early take it as a parameter, rather than the
   prefix, so the prefix is added in one place (more such settings are
@@ -620,6 +622,10 @@ Works like a terminal: a scrollback with the prompt below it.
   (`data/io.github.filip_hejsek.hob.desktop`), so desktops can match the
   two. The desktop file runs `hob` from `PATH`. Rejected: a plain `hob`,
   which could clash with other programs' IDs.
+- hob-gui doesn't hardcode hob's name: `run` and `preview` take a
+  `GuiConfig` (window title, application ID, prompt placeholder and stderr
+  prefix), and `hob` passes its own. The preview's title is the title
+  followed by "(preview of FILE)".
 - iced comes from a fork (https://github.com/filip-hejsek/iced, branch
   `startup-notify`) that passes the launcher's startup notification token
   to winit (see ICED_WISHLIST.md). Every iced crate is patched, not just

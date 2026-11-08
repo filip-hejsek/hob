@@ -9,10 +9,7 @@
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-use hob_mcp::{Bridge, Launch, Limits};
-
-/// The program name that starts lines logged to stderr.
-const LOG_PREFIX: &str = "hob-mcp";
+use hob_mcp::{Bridge, LOG_PREFIX, Launch, Limits};
 
 const USAGE: &str = "usage: hob-mcp [--allow-restart] [--agent-spawns | COMMAND [ARG]...]";
 
