@@ -30,6 +30,8 @@ The project is split into these parts:
 - **hob-fs** — filesystem commands: `pwd`, `cd`, `ls`, `cat`.
 - **hob-git** — Git commands, using gitoxide rather than the `git` program:
   `git status`, `git log`, `git branch`, `git diff`.
+- **hob-notes** — notes and TODO items, kept in SQLite: `note`, `title`,
+  `todo`, `done`.
 - **hob** — the application: registers the commands and starts the shell
   (or, with `--headless`, the headless frontend; with `--preview`, a
   read-only view of a saved session).
@@ -58,6 +60,14 @@ gets big: past 4 MiB of text (`HOB_SESSION_SIZE`), or 16 MiB of images
 (`HOB_SESSION_IMAGES`), after which older images show only their alt text.
 Sizes are in bytes, or with a `K`, `M` or `G` suffix; small values help
 when trying the trimming out. The history keeps 10,000 lines.
+
+Notes are kept in the platform's data directory (e.g.
+`~/.local/share/hob/notes.sqlite`); set `HOB_NOTES` to use another file,
+e.g. when trying hob out (also through hob-mcp), so real notes aren't
+touched. `note` takes a note (the arguments, or it asks), and `title`
+names the last one. `todo` offers a few things to do now: TODO notes
+(whose title or text starts with "todo") to work on, and unnamed notes to
+name. Picking a TODO note makes it active, until `done`.
 
 `hob --preview [FILE]` shows a saved session (by default, the current one)
 read-only: nothing runs, and the file isn't changed.

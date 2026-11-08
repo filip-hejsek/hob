@@ -15,13 +15,14 @@ workspace = true
 [features]
 default = ["gui"]
 # The window (hob-gui). Without it, hob only runs with `--headless`.
-gui = ["dep:dirs", "dep:hob-gui"]
+gui = ["dep:hob-gui"]
 
 [dependencies]
-dirs = { workspace = true, optional = true }
+dirs.workspace = true
 hob-core.workspace = true
 hob-demo.workspace = true
 hob-fs.workspace = true
 hob-git.workspace = true
 hob-gui = { workspace = true, optional = true }
 hob-headless.workspace = true
+hob-notes.workspace = true

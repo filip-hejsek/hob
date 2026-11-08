@@ -407,6 +407,41 @@ named like git's so they're familiar; `!git ...` still runs the real one.
 - Tests build repositories with the `git` program, ignoring the user's
   config (`GIT_CONFIG_GLOBAL=/dev/null`), with fixed commit times.
 
+## Note commands (hob-notes)
+
+`note`, `title`, `todo` and `done`. Notes are stored; TODO items aren't,
+they're made from the notes whenever `todo` runs.
+
+- Notes are kept in SQLite, through rusqlite with SQLite bundled (built
+  from source), so there's no new system library to find; unlike libjxl,
+  a bundled copy costs nothing license-wise. The file is `HOB_NOTES`, or
+  `notes.sqlite` in the platform's data directory (`hob` decides; the
+  crate gets the path, or `None`, in which case its commands fail). Notes
+  are user data, so the data directory, not the state one like the
+  session.
+- Each command opens its own connection (commands run concurrently on
+  their own threads), with a 5 s busy timeout. `note` opens it before
+  asking for the text, so a broken database doesn't lose what was typed.
+- The schema version is SQLite's `user_version`; a database from a newer
+  version is refused rather than misread.
+- A note is created unnamed (`title` NULL); `title` names, or renames,
+  the note with the highest id. Without arguments `note` asks with a text
+  area and `title` with a text field (showing the old title). Text and
+  titles are trimmed when saved; empty ones are errors.
+- A TODO note is one whose title or text starts with "todo", ignoring
+  case, checked with SQL `LIKE 'todo%'` (ASCII case only). Literally a
+  prefix: "todos" counts too.
+- A note has a `status` (open, active or done), used only by TODO notes.
+  At most one is active (a partial unique index): picking another makes
+  the old one open again. `done` marks the active one done, with a time.
+- TODO items come from sources, each giving its items oldest first: open
+  TODO notes (to work on) and unnamed notes (to name). An unnamed TODO note
+  gives both. `todo` offers 3, taken from the sources in turn, so many
+  unnamed notes don't hide the TODOs. They're plain buttons with keys
+  `a`–`c` (so Enter picks none), plus "Not now"; the active note is shown
+  above them and not offered. Picking a naming item asks for the title
+  right away.
+
 ## Logging
 
 - Commands log with `ctx.error/warn/info/debug`; the records go into the

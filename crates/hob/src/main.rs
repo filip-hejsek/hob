@@ -4,7 +4,6 @@
 //! read-only, without running commands. Built without the `gui` feature, it
 //! runs only with `--headless`.
 
-#[cfg(feature = "gui")]
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -63,7 +62,17 @@ fn interpreter() -> Interpreter {
     hob_demo::register(&mut interpreter);
     hob_fs::register(&mut interpreter);
     hob_git::register(&mut interpreter);
+    hob_notes::register(&mut interpreter, notes_path());
     interpreter
+}
+
+/// Where the notes are kept: `HOB_NOTES` if set, otherwise in the
+/// platform's data directory.
+fn notes_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("HOB_NOTES") {
+        return Some(path.into());
+    }
+    Some(dirs::data_dir()?.join("hob").join("notes.sqlite"))
 }
 
 #[cfg(feature = "gui")]

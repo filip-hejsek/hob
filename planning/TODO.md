@@ -133,6 +133,19 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - `branch` doesn't show upstreams or ahead/behind counts.
 - Long operations (`status` in a huge repository) can't be interrupted.
 
+## Note commands (hob-notes)
+
+Only the first parts are done; the rest is still to be designed.
+
+- More TODO sources (e.g. Git: uncommitted changes), and a better choice
+  of which 3 items to offer than oldest first, in turn.
+- A way to list, show, edit and delete notes; `title` and `done` work only
+  on the last or the active note.
+- Whether "starts with todo" should need a word boundary ("todos" counts
+  now), and should ignore non-ASCII case.
+- Picking an item works on what was read when the island was shown; a
+  note changed meanwhile (e.g. done by another command) isn't rechecked.
+
 ## Logging
 
 - `log` records from a command's thread could go into its block.

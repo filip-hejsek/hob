@@ -31,9 +31,12 @@ with the workaround used.
   commands. Clients use its `protocol` module.
 - `hob-cli` is a demo client for `hob-headless`, and `hob-mcp` an MCP
   server that bridges to it; no GUI toolkit in either.
-- `hob-demo` holds demo commands, `hob-fs` filesystem commands, and
-  `hob-git` Git commands. Like `hob-core`, they must not depend on any GUI
-  toolkit.
+- `hob-demo` holds demo commands, `hob-fs` filesystem commands,
+  `hob-git` Git commands, and `hob-notes` note commands. Like `hob-core`,
+  they must not depend on any GUI toolkit.
+- When trying hob, set `HOB_NOTES` to a scratch file (e.g. start
+  `["env", "HOB_NOTES=...", "target/debug/hob", "--headless"]`), so the
+  user's notes aren't changed.
 - kettle-ui is deliberately small: the widget tree is fixed once built, and
   spacing is fixed and styling options are minimal (see
   planning/DECISIONS.md). Don't add options without a need.

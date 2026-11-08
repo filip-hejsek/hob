@@ -31,6 +31,7 @@ hob-git = { path = "crates/hob-git" }
 hob-gui = { path = "crates/hob-gui" }
 hob-headless = { path = "crates/hob-headless" }
 hob-mcp = { path = "crates/hob-mcp" }
+hob-notes = { path = "crates/hob-notes" }
 kettle-jxl = { path = "crates/kettle-jxl" }
 kettle-ui = { path = "crates/kettle-ui" }
 kettle-ui-demo = { path = "crates/kettle-ui-demo" }
@@ -49,6 +50,8 @@ image = { version = "0.25", default-features = false }
 jiff = "0.2"
 log = "0.4"
 png = "0.18"
+# Bundled SQLite: no system library to find (see planning/DECISIONS.md).
+rusqlite = { version = "0.41", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 tempfile = "3"
