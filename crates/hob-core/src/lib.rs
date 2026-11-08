@@ -827,6 +827,16 @@ mod tests {
         Completion {
             line: line.to_owned(),
             candidates: candidates.iter().map(|&c| c.to_owned()).collect(),
+            filled: Vec::new(),
+        }
+    }
+
+    /// Completes `line`, leaving out the filled-in lines (tested in
+    /// `complete`).
+    fn complete(i: &Interpreter, line: &str) -> Completion {
+        Completion {
+            filled: Vec::new(),
+            ..i.complete(line)
         }
     }
 
@@ -836,26 +846,26 @@ mod tests {
         for name in ["fruit", "fruit-search", "contact", "căt", "cătalog"] {
             i.register(name, "Test", |_, _| Ok(()));
         }
-        assert_eq!(i.complete("co"), completion("contact ", &[]));
-        assert_eq!(i.complete("  co"), completion("  contact ", &[]));
+        assert_eq!(complete(&i, "co"), completion("contact ", &[]));
+        assert_eq!(complete(&i, "  co"), completion("  contact ", &[]));
         assert_eq!(
-            i.complete("fr"),
+            complete(&i, "fr"),
             completion("fruit", &["fruit", "fruit-search"])
         );
         assert_eq!(
-            i.complete("c"),
+            complete(&i, "c"),
             completion("c", &["contact", "căt", "cătalog"])
         );
-        assert_eq!(i.complete("că"), completion("căt", &["căt", "cătalog"]));
-        assert_eq!(i.complete("x"), completion("x", &[]));
+        assert_eq!(complete(&i, "că"), completion("căt", &["căt", "cătalog"]));
+        assert_eq!(complete(&i, "x"), completion("x", &[]));
         // Arguments aren't completed.
-        assert_eq!(i.complete("contact co"), completion("contact co", &[]));
-        assert_eq!(i.complete("contact "), completion("contact ", &[]));
+        assert_eq!(complete(&i, "contact co"), completion("contact co", &[]));
+        assert_eq!(complete(&i, "contact "), completion("contact ", &[]));
     }
 
     #[test]
     fn completing_nothing_lists_all_commands() {
-        let c = interpreter().complete("");
+        let c = complete(&interpreter(), "");
         assert_eq!(c, completion("", &["ask", "echo", "fail", "panic"]));
     }
 
@@ -1025,8 +1035,8 @@ mod tests {
     #[test]
     fn prefix_commands_are_not_completed() {
         let i = prefixed();
-        assert_eq!(i.complete("").line, "echo ");
-        assert_eq!(i.complete("!").line, "!");
+        assert_eq!(complete(&i, "").line, "echo ");
+        assert_eq!(complete(&i, "!").line, "!");
     }
 
     #[test]

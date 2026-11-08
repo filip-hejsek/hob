@@ -17,6 +17,10 @@ pub struct Completion {
     /// The possible completions, if there are several; otherwise empty.
     /// Paths are shown by their last component, like a shell does.
     pub candidates: Vec<String>,
+    /// For each candidate, the line with it filled in as a finished word
+    /// (its quote closed), but without a space after it: what a picker
+    /// shows while the candidate is picked.
+    pub filled: Vec<String>,
 }
 
 /// A possible completion of the word being typed.
@@ -43,6 +47,7 @@ pub(crate) fn complete(commands: &Commands, cwd: &Path, line: &str) -> Completio
     let unchanged = Completion {
         line: line.to_owned(),
         candidates: Vec::new(),
+        filled: Vec::new(),
     };
     let trimmed = line.trim_start();
     if (commands.keys()).any(|name| is_prefix(name) && trimmed.starts_with(name.as_str())) {
@@ -76,15 +81,24 @@ pub(crate) fn complete(commands: &Commands, cwd: &Path, line: &str) -> Completio
         [only] => Completion {
             line: rewrite(line, &partial, &only.value, !only.open, home.as_deref()),
             candidates: Vec::new(),
+            filled: Vec::new(),
         },
         [first, rest @ ..] => {
             let len = (rest.iter()).fold(first.value.len(), |len, c| {
                 common_prefix_len(&first.value[..len], &c.value)
             });
             let common = &first.value[..len];
+            let filled = (candidates.iter())
+                .map(|c| {
+                    let mut line = rewrite(line, &partial, &c.value, true, home.as_deref());
+                    line.pop(); // The space.
+                    line
+                })
+                .collect();
             Completion {
                 line: rewrite(line, &partial, common, false, home.as_deref()),
                 candidates: candidates.into_iter().map(|c| c.shown).collect(),
+                filled,
             }
         }
     }
@@ -214,37 +228,59 @@ mod tests {
         Completion {
             line: line.to_owned(),
             candidates: candidates.iter().map(|&c| c.to_owned()).collect(),
+            filled: Vec::new(),
         }
+    }
+
+    /// Completes `line`, leaving out the filled-in lines, which
+    /// [`fills_in_candidates`] checks.
+    fn complete(i: &Interpreter, line: &str) -> Completion {
+        Completion {
+            filled: Vec::new(),
+            ..i.complete(line)
+        }
+    }
+
+    #[test]
+    fn fills_in_candidates() {
+        let (i, _dir) = setup();
+        assert_eq!(i.complete("ls n").filled, [r"ls new\ file", "ls notes.txt"]);
+        assert_eq!(
+            i.complete("ls 'n").filled,
+            ["ls 'new file'", "ls 'notes.txt'"]
+        );
+        assert_eq!(i.complete("cd s").filled, ["cd sub/", "cd subway/"]);
+        assert_eq!(i.complete("ls --c").filled, [""; 0]);
     }
 
     #[test]
     fn completes_options() {
         let (i, _dir) = setup();
-        assert_eq!(i.complete("ls --a"), completion("ls --all ", &[]));
+        assert_eq!(complete(&i, "ls --a"), completion("ls --all ", &[]));
         assert_eq!(
-            i.complete("ls -"),
+            complete(&i, "ls -"),
             completion("ls --", &["--all", "--color", "--width"])
         );
         // Not after an operand.
-        assert_eq!(i.complete("ls notes.txt --a").candidates, [""; 0]);
+        assert_eq!(complete(&i, "ls notes.txt --a").candidates, [""; 0]);
     }
 
     #[test]
     fn completes_option_values() {
         let (i, _dir) = setup();
         assert_eq!(
-            i.complete("ls --color a"),
+            complete(&i, "ls --color a"),
             completion("ls --color a", &["always", "auto"])
         );
         assert_eq!(
-            i.complete("ls --color n"),
+            complete(&i, "ls --color n"),
             completion("ls --color never ", &[])
         );
         // A text value isn't completed, and isn't taken for a path.
-        assert_eq!(i.complete("ls -aw n"), completion("ls -aw n", &[]));
+        assert_eq!(complete(&i, "ls -aw n"), completion("ls -aw n", &[]));
         // Once given, the value isn't what's completed.
         assert_eq!(
-            i.complete("ls -w5 no"),
+            complete(&i, "ls -w5 no"),
             completion("ls -w5 notes.txt ", &[])
         );
     }
@@ -252,68 +288,71 @@ mod tests {
     #[test]
     fn completes_paths() {
         let (i, _dir) = setup();
-        assert_eq!(i.complete("ls no"), completion("ls notes.txt ", &[]));
+        assert_eq!(complete(&i, "ls no"), completion("ls notes.txt ", &[]));
         assert_eq!(
-            i.complete("ls n"),
+            complete(&i, "ls n"),
             completion("ls n", &["new file", "notes.txt"])
         );
-        assert_eq!(i.complete("ls ne"), completion(r"ls new\ file ", &[]));
-        assert_eq!(i.complete("ls 'ne"), completion("ls 'new file' ", &[]));
+        assert_eq!(complete(&i, "ls ne"), completion(r"ls new\ file ", &[]));
+        assert_eq!(complete(&i, "ls 'ne"), completion("ls 'new file' ", &[]));
         assert_eq!(
-            i.complete(r#"ls "new f"#),
+            complete(&i, r#"ls "new f"#),
             completion(r#"ls "new file" "#, &[])
         );
         // Directories get a slash and no space; their entries are listed by
         // name.
         assert_eq!(
-            i.complete("ls sub"),
+            complete(&i, "ls sub"),
             completion("ls sub", &["sub/", "subway/"])
         );
-        assert_eq!(i.complete("ls sub/"), completion("ls sub/inner.txt ", &[]));
-        assert_eq!(i.complete("ls subw"), completion("ls subway/", &[]));
+        assert_eq!(
+            complete(&i, "ls sub/"),
+            completion("ls sub/inner.txt ", &[])
+        );
+        assert_eq!(complete(&i, "ls subw"), completion("ls subway/", &[]));
         // Hidden files only when asked for.
-        assert_eq!(i.complete("ls .h"), completion("ls .hidden ", &[]));
-        assert_eq!(i.complete("ls ").candidates.len(), 4);
+        assert_eq!(complete(&i, "ls .h"), completion("ls .hidden ", &[]));
+        assert_eq!(complete(&i, "ls ").candidates.len(), 4);
         // Paths go on after the first.
-        assert_eq!(i.complete("ls a no"), completion("ls a notes.txt ", &[]));
+        assert_eq!(complete(&i, "ls a no"), completion("ls a notes.txt ", &[]));
     }
 
     #[test]
     fn completes_directories() {
         let (i, dir) = setup();
         assert_eq!(
-            i.complete("cd "),
+            complete(&i, "cd "),
             completion("cd sub", &["sub/", "subway/"])
         );
-        assert_eq!(i.complete("cd sub/"), completion("cd sub/", &[]));
+        assert_eq!(complete(&i, "cd sub/"), completion("cd sub/", &[]));
         // Absolute paths too.
         let line = format!("cd {}/subw", dir.path().display());
         let completed = format!("cd {}/subway/", dir.path().display());
-        assert_eq!(i.complete(&line).line, completed);
+        assert_eq!(complete(&i, &line).line, completed);
         // Nothing after the last argument.
-        assert_eq!(i.complete("cd sub ").candidates, [""; 0]);
+        assert_eq!(complete(&i, "cd sub ").candidates, [""; 0]);
     }
 
     #[test]
     fn completes_subcommands_and_custom_values() {
         let (i, _dir) = setup();
-        assert_eq!(i.complete("git l"), completion("git log ", &[]));
-        assert_eq!(i.complete("git "), completion("git ", &["log", "status"]));
-        assert_eq!(i.complete("git log e"), completion("git log echo ", &[]));
-        assert_eq!(i.complete("git frob "), completion("git frob ", &[]));
+        assert_eq!(complete(&i, "git l"), completion("git log ", &[]));
+        assert_eq!(complete(&i, "git "), completion("git ", &["log", "status"]));
+        assert_eq!(complete(&i, "git log e"), completion("git log echo ", &[]));
+        assert_eq!(complete(&i, "git frob "), completion("git frob ", &[]));
     }
 
     #[test]
     fn commands_without_a_spec_are_not_completed() {
         let (i, _dir) = setup();
-        assert_eq!(i.complete("echo no"), completion("echo no", &[]));
-        assert_eq!(i.complete("nope no"), completion("nope no", &[]));
+        assert_eq!(complete(&i, "echo no"), completion("echo no", &[]));
+        assert_eq!(complete(&i, "nope no"), completion("nope no", &[]));
     }
 
     #[test]
     fn quoted_command_names() {
         let (i, _dir) = setup();
-        assert_eq!(i.complete("'ec"), completion("'echo' ", &[]));
-        assert_eq!(i.complete("'ls' no"), completion("'ls' notes.txt ", &[]));
+        assert_eq!(complete(&i, "'ec"), completion("'echo' ", &[]));
+        assert_eq!(complete(&i, "'ls' no"), completion("'ls' notes.txt ", &[]));
     }
 }

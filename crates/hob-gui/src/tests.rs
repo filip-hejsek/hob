@@ -138,6 +138,59 @@ fn only_printable_text_no_widget_took_is_typed() {
     assert!(matches!(tab, Some(Message::Key(..))));
 }
 
+// The emulator doesn't pass keys to subscriptions, so the tests below send
+// the shell's actions for Tab and Shift+Tab, and the key message for Escape.
+
+#[test]
+fn tab_again_picks_a_candidate_and_enter_runs_it() {
+    let mut shell = start(None);
+    shell.step(click(PLACEHOLDER));
+    shell.step(typewrite("s"));
+    shell.update(Message::Action(Action::Complete));
+    shell.expect("sing");
+    // Picks say, then sing, then back to say.
+    shell.update(Message::Action(Action::Complete));
+    shell.update(Message::Action(Action::Complete));
+    shell.update(Message::Action(Action::PickPrevious));
+    shell.step(press(Key::Enter));
+    shell.expect("> say");
+    // The offer is gone.
+    shell.expect_absent("sing");
+}
+
+#[test]
+fn space_takes_the_picked_candidate() {
+    let mut shell = start(None);
+    shell.step(click(PLACEHOLDER));
+    shell.step(typewrite("s"));
+    shell.update(Message::Action(Action::Complete));
+    // Going back from the start picks the last.
+    shell.update(Message::Action(Action::PickPrevious));
+    shell.step(typewrite(" loud"));
+    shell.step(press(Key::Enter));
+    shell.expect("> sing loud");
+    shell.expect("la la");
+}
+
+#[test]
+fn escape_restores_the_line_from_before_picking() {
+    let mut shell = start(None);
+    shell.step(click(PLACEHOLDER));
+    shell.step(typewrite("s"));
+    shell.update(Message::Action(Action::Complete));
+    shell.update(Message::Action(Action::Complete));
+    shell.update(Message::Action(Action::Complete));
+    // The prompt takes Escape first, and loses focus.
+    shell.step(press(Key::Escape));
+    let escape = keyboard::Key::Named(keyboard::key::Named::Escape);
+    shell.update(Message::Key(escape, Modifiers::empty()));
+    // The candidates are still offered, and the prompt has focus again.
+    shell.expect("sing");
+    shell.step(typewrite("ay hi"));
+    shell.step(press(Key::Enter));
+    shell.expect("> say hi");
+}
+
 #[test]
 fn ctrl_d_works_while_nothing_has_focus() {
     let mut shell = start(None);
@@ -476,6 +529,10 @@ fn interpreter() -> Interpreter {
     hob_core::builtins::register(&mut interpreter);
     interpreter.register("say", "Print the arguments", |ctx, args| {
         ctx.print(args.join(" "));
+        Ok(())
+    });
+    interpreter.register("sing", "Print a song", |ctx, _| {
+        ctx.print("la la");
         Ok(())
     });
     interpreter.register("greet", "Ask for a name and greet", |ctx, _| {

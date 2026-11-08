@@ -697,7 +697,7 @@ Works like a terminal: a scrollback with the prompt below it.
   first, if it doesn't fit). The island's bounds come from an operation
   (it's a focusable with the island's Id), then a second one scrolls.
   Closing the window still exits without asking.
-  Escape has no binding.
+  Escape only cancels picking a completion candidate (see below).
 - Typing while nothing has focus (e.g. after a click on the scrollback)
   focuses the prompt and adds the text at its end. The shell gets key
   presses through a subscription, after the widgets: printable text
@@ -716,6 +716,18 @@ Works like a terminal: a scrollback with the prompt below it.
   and Tab completion (see hob-core): unambiguous part completed, the
   candidates listed below the prompt if there are several. Both live in
   hob-core.
+- Tab again, while candidates are listed, picks one, a bit like zsh's menu
+  completion: the picked one has a box of the primary colour (no border)
+  and is filled in to the prompt as a finished word (quote closed), but
+  without the space. Tab and Shift+Tab pick the next and previous,
+  wrapping (Shift+Tab first picks the last). Escape restores the line from
+  before picking, and keeps the list. Anything else that changes the line
+  ends it, so Space and Enter need no handling of their own: Space takes
+  the candidate and adds the space, Enter takes it and runs the line, and
+  typing other text goes on after it. hob-core gives the filled-in line
+  for each candidate (`Completion::filled`). iced's text input drops focus
+  on Escape before the shell's bindings see it, so Escape works while
+  nothing has focus too, and focuses the prompt again.
 - Trailing whitespace is trimmed from a submitted line, so the space that
   completion adds doesn't reach the command or the history. It's invisible,
   and words are split at whitespace anyway, so it can't mean anything,

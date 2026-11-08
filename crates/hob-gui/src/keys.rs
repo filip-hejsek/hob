@@ -10,8 +10,13 @@ pub(crate) enum Action {
     HistoryBack,
     /// The next line in the history.
     HistoryForward,
-    /// Completes the word being typed.
+    /// Completes the word being typed; once candidates are listed, picks
+    /// the next one.
     Complete,
+    /// Picks the previous candidate, once candidates are listed.
+    PickPrevious,
+    /// Stops picking a candidate, restoring the line from before.
+    CancelPick,
     /// Scrolls the scrollback up by a page.
     PageUp,
     /// Scrolls the scrollback down by a page.
@@ -37,8 +42,12 @@ impl Action {
     /// Where focus must be for it to work.
     pub(crate) fn scope(self) -> Scope {
         match self {
-            Action::HistoryBack | Action::HistoryForward | Action::Complete => Scope::Prompt,
-            Action::Exit => Scope::PromptOrNothing,
+            Action::HistoryBack
+            | Action::HistoryForward
+            | Action::Complete
+            | Action::PickPrevious => Scope::Prompt,
+            // The prompt loses focus on Escape before the shell sees it.
+            Action::Exit | Action::CancelPick => Scope::PromptOrNothing,
             Action::PageUp | Action::PageDown | Action::Clear => Scope::Anywhere,
         }
     }
@@ -65,11 +74,14 @@ impl Binding {
 /// The default bindings.
 pub(crate) fn defaults() -> Vec<Binding> {
     let named = |key, action| Binding::new(Key::Named(key), Modifiers::empty(), action);
+    let shift = |key, action| Binding::new(Key::Named(key), Modifiers::SHIFT, action);
     let ctrl = |c: &str, action| Binding::new(Key::Character(c.into()), Modifiers::CTRL, action);
     vec![
         named(Named::ArrowUp, Action::HistoryBack),
         named(Named::ArrowDown, Action::HistoryForward),
         named(Named::Tab, Action::Complete),
+        shift(Named::Tab, Action::PickPrevious),
+        named(Named::Escape, Action::CancelPick),
         named(Named::PageUp, Action::PageUp),
         named(Named::PageDown, Action::PageDown),
         ctrl("l", Action::Clear),
@@ -121,6 +133,10 @@ mod tests {
         );
         assert_eq!(
             lookup(&bindings, Key::Named(Named::Tab), Modifiers::SHIFT),
+            Some(Action::PickPrevious)
+        );
+        assert_eq!(
+            lookup(&bindings, Key::Named(Named::Tab), Modifiers::CTRL),
             None
         );
     }

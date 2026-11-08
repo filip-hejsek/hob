@@ -18,7 +18,9 @@
 //! [`Context::log_records`](hob_core::Context::log_records).
 //!
 //! The prompt works like a shell's: Up and Down browse the history, and Tab
-//! completes command names and arguments. Tab doesn't move focus. Anywhere, PageUp and
+//! completes command names and arguments. Tab again, while candidates are
+//! listed, picks one (Tab and Shift+Tab move on, Escape goes back to the line
+//! from before). Tab doesn't move focus. Anywhere, PageUp and
 //! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). Ctrl+D
 //! in the empty prompt, or while nothing has focus, exits (like `exit`), unless
 //! commands are running: then it says so, and focuses an island waiting for
@@ -57,7 +59,7 @@ use iced::advanced::widget::operation::{Focusable, Outcome as OperationOutcome, 
 use iced::advanced::widget::{Operation, operate};
 use iced::keyboard::{self, Modifiers};
 use iced::widget::scrollable::AbsoluteOffset;
-use iced::widget::{Id, column, container, operation, rule, scrollable, text, text_input};
+use iced::widget::{Id, column, container, operation, row, rule, scrollable, text, text_input};
 use iced::{
     Border, Color, Element, Event, Font, Length, Rectangle, Subscription, Task, Theme, event, font,
     padding, window,
@@ -182,8 +184,9 @@ struct Shell {
     level: Level,
     prompt: String,
     history: History,
-    /// Completions offered after Tab, shown below the prompt.
-    candidates: Vec<String>,
+    /// The candidates Tab found, if there are several; shown below the
+    /// prompt.
+    offer: Option<Offer>,
     /// The key bindings.
     bindings: Vec<Binding>,
     /// The scrollback, oldest first.
@@ -202,6 +205,19 @@ enum Item {
     Block(Block),
     /// A log record that isn't from a command.
     Notice(LogRecord),
+}
+
+/// Candidates offered by Tab completion. Tab again starts picking one: the
+/// picked candidate is filled in to the prompt, and Tab and Shift+Tab pick
+/// another. Escape restores the line from before; anything that changes the
+/// line ends the offer (so Space and Enter take the candidate).
+struct Offer {
+    /// How the candidates are listed.
+    candidates: Vec<String>,
+    /// The line with each candidate filled in.
+    filled: Vec<String>,
+    /// The candidate picked, if picking, and the line from before.
+    picked: Option<(usize, String)>,
 }
 
 /// A command line and its output.
@@ -311,7 +327,7 @@ impl Shell {
             level,
             prompt: String::new(),
             history: History::new(),
-            candidates: Vec::new(),
+            offer: None,
             bindings: keys::defaults(),
             scrollback: Vec::new(),
             cleared_records: Vec::new(),
@@ -485,7 +501,7 @@ impl Shell {
             Message::PromptChanged(prompt) => {
                 self.prompt = prompt;
                 self.history.stop_browsing();
-                self.candidates.clear();
+                self.offer = None;
                 Task::none()
             }
             Message::PromptSubmitted => {
@@ -519,7 +535,7 @@ impl Shell {
             Message::TypedUnfocused(text) => {
                 self.prompt.push_str(&text);
                 self.history.stop_browsing();
-                self.candidates.clear();
+                self.offer = None;
                 let prompt = Id::new(PROMPT);
                 operation::focus(prompt.clone()).chain(operation::move_cursor_to_end(prompt))
             }
@@ -578,7 +594,7 @@ impl Shell {
             return Task::none();
         }
         self.history.push(&line);
-        self.candidates.clear();
+        self.offer = None;
         let id = self.next_id();
         let mut block = Block {
             id,
@@ -610,16 +626,37 @@ impl Shell {
             return Task::none();
         }
         let line = match action {
-            Action::HistoryBack => self.history.back(&self.prompt).map(str::to_owned),
-            Action::HistoryForward => self.history.forward().map(str::to_owned),
+            Action::HistoryBack => {
+                self.offer = None;
+                self.history.back(&self.prompt).map(str::to_owned)
+            }
+            Action::HistoryForward => {
+                self.offer = None;
+                self.history.forward().map(str::to_owned)
+            }
+            Action::Complete if self.offer.is_some() => self.pick(1),
             Action::Complete => {
                 let Some(interpreter) = &self.interpreter else {
                     return Task::none();
                 };
                 let completion = interpreter.complete(&self.prompt);
-                self.candidates = completion.candidates;
+                self.offer = (!completion.candidates.is_empty()).then_some(Offer {
+                    candidates: completion.candidates,
+                    filled: completion.filled,
+                    picked: None,
+                });
                 self.history.stop_browsing();
                 Some(completion.line)
+            }
+            Action::PickPrevious => self.pick(-1),
+            Action::CancelPick => {
+                let Some((_, before)) = self.offer.as_mut().and_then(|o| o.picked.take()) else {
+                    return Task::none();
+                };
+                self.prompt = before;
+                // Escape took focus from the prompt.
+                return operation::focus(Id::new(PROMPT))
+                    .chain(operation::move_cursor_to_end(Id::new(PROMPT)));
             }
             Action::PageUp => return scroll_page(1.0),
             Action::PageDown => return scroll_page(-1.0),
@@ -638,6 +675,25 @@ impl Shell {
             }
             None => Task::none(),
         }
+    }
+
+    /// Picks the candidate `step` places after the picked one (before, if
+    /// negative), and returns the line with it filled in. If none is picked
+    /// yet, starts picking with the first (or, going back, the last).
+    fn pick(&mut self, step: isize) -> Option<String> {
+        let offer = self.offer.as_mut()?;
+        let len = offer.filled.len();
+        let index = match &offer.picked {
+            Some((index, _)) => (*index as isize + step).rem_euclid(len as isize) as usize,
+            None if step < 0 => len - 1,
+            None => 0,
+        };
+        let before = match offer.picked.take() {
+            Some((_, before)) => before,
+            None => self.prompt.clone(),
+        };
+        offer.picked = Some((index, before));
+        Some(offer.filled[index].clone())
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -900,9 +956,11 @@ impl Shell {
             container(
                 // The prompt stays the first child, so it keeps its state
                 // (focus) when the candidates appear.
-                column([prompt.into()].into_iter().chain(
-                    (!self.candidates.is_empty()).then(|| text(self.candidates.join("   ")).into()),
-                ))
+                column(
+                    [prompt.into()]
+                        .into_iter()
+                        .chain(self.offer.as_ref().map(view_offer)),
+                )
                 .spacing(spacing()),
             )
             .padding(padding::vertical(spacing()).horizontal(2.0 * spacing()))
@@ -1196,6 +1254,28 @@ fn view_block(block: &Block, level: Level) -> Element<'_, Message> {
     ])
     .spacing(spacing())
     .into()
+}
+
+/// Lists the candidates of an offer; the picked one has a box of the primary
+/// colour.
+fn view_offer(offer: &Offer) -> Element<'_, Message> {
+    let picked = offer.picked.as_ref().map(|(index, _)| *index);
+    let candidates = offer.candidates.iter().enumerate().map(|(i, candidate)| {
+        let style = move |theme: &Theme| match picked == Some(i) {
+            true => {
+                let primary = theme.extended_palette().primary.base;
+                container::Style::default()
+                    .background(primary.color)
+                    .color(primary.text)
+            }
+            false => container::Style::default(),
+        };
+        container(text(candidate))
+            .padding(padding::horizontal(spacing() / 2.0))
+            .style(style)
+            .into()
+    });
+    row(candidates).spacing(spacing()).wrap().into()
 }
 
 fn view_entry(entry: &Entry) -> Element<'_, Message> {
