@@ -26,9 +26,9 @@ TODO.md.
 
 ## hob-mcp
 
-- The `reports_crashes` test is flaky (failed once in about ten runs): the
-  result after `crash` lacked "[2] was interrupted" (the `crash` command
-  itself). Not investigated.
+- If a command makes hob exit before hob has replied to `run` (hob-headless
+  starts it first), `run` fails with "hob has exited" and the command's
+  block isn't reported as interrupted, since the bridge never learned it.
 
 ## Logging
 

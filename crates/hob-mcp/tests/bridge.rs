@@ -100,7 +100,10 @@ fn interpreter() -> Interpreter {
         }
         Ok(())
     });
-    i.register("crash", "Exit with status 3", |_, _| {
+    i.register("crash", "Exit with status 3", |ctx, _| {
+        // The frontend handles this request only after it has replied to
+        // `run`, so the bridge knows the block when hob exits.
+        let _ = ctx.log_records();
         eprintln!("crashing on purpose");
         std::process::exit(3);
     });
