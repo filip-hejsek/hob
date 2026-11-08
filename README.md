@@ -32,6 +32,10 @@ The project is split into these parts:
   `git status`, `git log`, `git branch`, `git diff`.
 - **hob-notes** — notes and TODO items, kept in SQLite: `note`, `title`,
   `todo`, `done`.
+- **hob-mcp-test-client** (in `tools/`) — an MCP client for people: try
+  an MCP server the way an agent would, with hob as the GUI. Built only
+  on request (`cargo build -p hob-mcp-test-client`, `--features http` for
+  remote servers).
 - **hob** — the application: registers the commands and starts the shell
   (or, with `--headless`, the headless frontend; with `--preview`, a
   read-only view of a saved session).

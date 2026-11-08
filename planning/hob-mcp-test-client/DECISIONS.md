@@ -7,7 +7,10 @@ in ../DECISIONS.md.
 
 - A standalone program that lets a person use an MCP server the way an
   agent would. Hob provides the GUI: it depends on hob-gui and registers
-  its own commands, not the built-in ones.
+  its own commands, not hob's (only the generic `hob_core::builtins`:
+  `clear`, `exit`, `messages`, `!`, ...).
+- Its session is saved apart from hob's (`HOB_MCP_TEST_CLIENT_SESSION`,
+  or `hob-mcp-test-client/session.json` in the state directory).
 
 ## Build
 
@@ -31,7 +34,8 @@ in ../DECISIONS.md.
   hob-mcp's server.
 - stdio is always built. Streamable HTTP and OAuth are behind a cargo
   feature (`http`), since they add about 90 crates (reqwest, hyper,
-  oauth2, TLS).
+  oauth2, TLS). It also enables rmcp's `reqwest` feature: the HTTP
+  transport alone has no TLS.
 - Commands block on their own threads, so they reach rmcp's async API
   through a tokio runtime the program holds (`Handle::block_on`); iced
   doesn't need tokio.

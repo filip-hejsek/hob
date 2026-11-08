@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "tools/*"]
+# tools/ (hob-mcp-test-client) is built only on request (`-p`), so it
+# doesn't slow down or block work on the other crates.
+default-members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.0"

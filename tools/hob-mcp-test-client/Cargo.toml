@@ -1,0 +1,24 @@
+[package]
+name = "hob-mcp-test-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Streamable HTTP and OAuth, for remote servers. Without it, only servers
+# started as a child process (stdio) can be used.
+http = ["rmcp/transport-streamable-http-client-reqwest", "rmcp/reqwest", "rmcp/auth"]
+
+[dependencies]
+dirs.workspace = true
+hob-core.workspace = true
+hob-gui.workspace = true
+rmcp = { version = "3.9", default-features = false, features = ["client", "transport-child-process"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
