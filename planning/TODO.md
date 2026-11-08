@@ -78,6 +78,10 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 
 - Whether the text outline is the right thing to show an agent; hob-mcp
   hasn't been tried with a real agent yet.
+    - The outline works fine, but simplifying it and converting to Markdown
+      would reduce noise for the agent.
+    - Hypothesis: for smaller models, it might also help to reduce jargon,
+      e.g. "island" -> "form" or "view", "frozen" -> "non-interactive".
 - hob-mcp has no tool for picking a suggestion (filling in the text has the
   same effect), and doesn't use MCP notifications or resources.
 - hob-mcp could return a PNG of an island (`kettle_ui_iced::render_png`).
