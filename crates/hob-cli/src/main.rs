@@ -262,7 +262,8 @@ fn repl(client: &mut Client, state: &Mutex<State>, printer: &Sender<Print>) -> R
 
 /// Prints notifications and errors as they arrive.
 fn print(state: &Mutex<State>, printed: &Receiver<Print>) {
-    let level = hob_core::logger::level_from_env();
+    let early_log = hob_core::logger::early_log_stderr(LOG_PREFIX);
+    let level = hob_core::logger::level_from_env(early_log);
     for print in printed {
         match print {
             Print::Notification(n) => print_notification(n, state, level),

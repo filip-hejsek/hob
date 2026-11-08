@@ -11,9 +11,6 @@ use std::sync::Mutex;
 use crate::{Level, LogRecord, Request};
 use futures_channel::mpsc;
 
-/// The program name that starts lines logged to stderr.
-const LOG_PREFIX: &str = "hob";
-
 thread_local! {
     /// The requests of the command running on this thread, if any.
     static COMMAND: RefCell<Option<mpsc::UnboundedSender<Request>>> =
@@ -62,16 +59,18 @@ struct Logger {
     sender: mpsc::UnboundedSender<LogRecord>,
     /// Dependency records already logged: level, target and message.
     seen: Mutex<HashSet<(Level, String, String)>>,
+    stderr_prefix: String,
 }
 
 /// Installs the logger, if no other logger is installed yet. Returns the
 /// records it receives.
-pub fn install(level: Level) -> Option<mpsc::UnboundedReceiver<LogRecord>> {
+pub fn install(level: Level, stderr_prefix: String) -> Option<mpsc::UnboundedReceiver<LogRecord>> {
     let (sender, receiver) = mpsc::unbounded();
     let logger = Logger {
         level,
         sender,
         seen: Mutex::default(),
+        stderr_prefix,
     };
     log::set_boxed_logger(Box::new(logger)).ok()?;
     log::set_max_level(filter(level.max(Level::Warn)));
@@ -87,12 +86,22 @@ pub fn is_ours(target: &str) -> bool {
         .any(|ours| krate == *ours || krate.strip_prefix(ours).is_some_and(|r| r.starts_with('_')))
 }
 
+/// Returns an early log function that prints messages to stderr after
+/// `log_prefix` and `: `. Before installing the logger, you should only call
+/// functions that don't need logging, or that have an `early_log` parameter
+/// (e.g. [`level_from_env`]): records logged with the `log` crate before
+/// then are silently dropped.
+pub fn early_log_stderr(log_prefix: &str) -> impl FnMut(&str) {
+    move |message| eprintln!("{log_prefix}: {message}")
+}
+
 /// The lowest level logged for our crates, from the `HOB_LOG` environment
-/// variable; `info` if it isn't set or is invalid.
-pub fn level_from_env() -> Level {
+/// variable; `info` if it isn't set or is invalid. This function may be called
+/// before the logger is installed, so `early_log` is used for logging.
+pub fn level_from_env(mut early_log: impl FnMut(&str)) -> Level {
     match std::env::var("HOB_LOG") {
         Ok(level) => level.parse().unwrap_or_else(|e| {
-            eprintln!("{LOG_PREFIX}: ignoring HOB_LOG: {e}");
+            early_log(&format!("ignoring HOB_LOG: {e}"));
             Level::Info
         }),
         Err(_) => Level::Info,
@@ -146,7 +155,7 @@ impl log::Log for Logger {
             return;
         };
         if entry.level <= Level::Warn {
-            eprintln!("{LOG_PREFIX}: {entry} ({target})");
+            eprintln!("{}: {entry} ({target})", self.stderr_prefix);
         }
         // Only fails once the shell is gone.
         let _ = self.sender.unbounded_send(entry);
@@ -176,6 +185,7 @@ mod tests {
             level: Level::Info,
             sender,
             seen: Mutex::default(),
+            stderr_prefix: "hob".into(),
         };
         let log = |target, message| {
             let args = format_args!("{message}");
@@ -211,6 +221,7 @@ mod tests {
             level: Level::Info,
             sender,
             seen: Mutex::default(),
+            stderr_prefix: "hob".into(),
         };
         let log = |message| {
             let args = format_args!("{message}");

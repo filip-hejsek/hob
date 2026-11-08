@@ -34,6 +34,9 @@ use serde_json::Value;
 
 use process::{Hob, HobEvent};
 
+/// The program name that starts lines logged to stderr.
+pub const LOG_PREFIX: &str = "hob-mcp";
+
 /// After something happens, how long to wait for more before reporting, so
 /// that things that happen together are reported together.
 const SETTLE: Duration = Duration::from_millis(100);
@@ -159,11 +162,12 @@ const NOT_RUNNING: &str = "error: hob isn't running; start starts it";
 impl Bridge {
     /// A bridge that starts hob as `launch` says. Hob isn't started yet.
     pub fn new(launch: Launch, limits: Limits) -> Self {
+        let early_log = hob_core::logger::early_log_stderr(LOG_PREFIX);
         Bridge {
             launch,
             limits,
             hob: None,
-            level: hob_core::logger::level_from_env(),
+            level: hob_core::logger::level_from_env(early_log),
             blocks: BTreeMap::new(),
             islands: BTreeMap::new(),
             events: Vec::new(),

@@ -26,6 +26,9 @@ use serde_json::Value;
 
 use protocol::{BlockId, Call, ErrorObject, IslandId, Notification, RunResult, code};
 
+/// The program name that starts lines logged to stderr.
+const LOG_PREFIX: &str = "hob";
+
 /// How [`serve_with`] behaves.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
@@ -63,7 +66,9 @@ pub fn serve_with(
     thread::Builder::new()
         .name("hob-headless input".into())
         .spawn(move || read_input(input, input_events))?;
-    if let Some(records) = hob_core::logger::install(hob_core::logger::level_from_env()) {
+    let early_log = hob_core::logger::early_log_stderr(LOG_PREFIX);
+    let log_level = hob_core::logger::level_from_env(early_log);
+    if let Some(records) = hob_core::logger::install(log_level, LOG_PREFIX.into()) {
         let events = events.clone();
         thread::Builder::new()
             .name("hob-headless log".into())

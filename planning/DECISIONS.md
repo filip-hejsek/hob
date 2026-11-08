@@ -471,7 +471,12 @@ they're made from the notes whenever `todo` runs.
   `tracing`: spans aren't needed, since commands log through their context.
 - Lines on stderr start with the program's name and `: `, as is usual for
   Unix tools. Crates that print to stderr themselves name it in a
-  `LOG_PREFIX` constant.
+  `LOG_PREFIX` constant. The logger takes the prefix when installed.
+  Messages from before the logger is installed (e.g. a bad
+  `HOB_LOG`) go to an early log, a function which prints them to stderr.
+  Functions that run that early take it as a parameter, rather than the
+  prefix, so the prefix is added in one place (more such settings are
+  likely, e.g. a log file); it could also send the messages elsewhere.
 - Records logged on a command's thread (e.g. by a library it calls) go into
   the command's block instead, as requests like those of `ctx.warn`, so the
   frontend treats them the same (also for stderr). The command's thread

@@ -90,12 +90,14 @@ pub fn run(
     session: Option<PathBuf>,
     placeholder: impl Into<String>,
 ) -> iced::Result {
-    let level = hob_core::logger::level_from_env();
-    let records = hob_core::logger::install(level);
+    let early_log = hob_core::logger::early_log_stderr(LOG_PREFIX);
+    let level = hob_core::logger::level_from_env(early_log);
+    let records = hob_core::logger::install(level, LOG_PREFIX.into());
+    let limits = Limits::from_env();
     application(
         Some(Arc::new(interpreter)),
         session,
-        Limits::from_env(),
+        limits,
         placeholder.into(),
         level,
         records,
@@ -107,8 +109,9 @@ pub fn run(
 /// window closes. No commands run, and the file isn't changed, even if it
 /// can't be read.
 pub fn preview(session: PathBuf) -> iced::Result {
-    let level = hob_core::logger::level_from_env();
-    let records = hob_core::logger::install(level);
+    let early_log = hob_core::logger::early_log_stderr(LOG_PREFIX);
+    let level = hob_core::logger::level_from_env(early_log);
+    let records = hob_core::logger::install(level, LOG_PREFIX.into());
     let title = format!("hob (preview of {})", session.display());
     let limits = Limits::default();
     application(None, Some(session), limits, String::new(), level, records)

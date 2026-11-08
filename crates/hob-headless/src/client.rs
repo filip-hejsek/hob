@@ -11,9 +11,6 @@ use serde_json::Value;
 
 use crate::protocol::{self, Call, ErrorObject, Incoming, Notification};
 
-/// The program name that starts lines logged to stderr.
-const LOG_PREFIX: &str = "hob";
-
 /// A connection to the headless frontend.
 ///
 /// Notifications are passed to a callback, in order, on a thread of the
@@ -136,7 +133,10 @@ fn read(
                 let _ = replies.send((id, result));
             }
             Ok(Incoming::Notification(n)) => notify(n),
-            Err(e) => eprintln!("{LOG_PREFIX}: bad message from the headless frontend: {e}"),
+            Err(e) => eprintln!(
+                "{}: bad message from the headless frontend: {e}",
+                crate::LOG_PREFIX
+            ),
         }
     }
 }
