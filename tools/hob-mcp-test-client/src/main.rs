@@ -9,6 +9,9 @@ use std::process::ExitCode;
 use hob_core::Interpreter;
 use hob_mcp_test_client::Client;
 
+/// The program name that starts lines logged to stderr.
+const LOG_PREFIX: &str = "hob-mcp-test-client";
+
 fn main() -> ExitCode {
     if std::env::args_os().len() > 1 {
         eprintln!("usage: hob-mcp-test-client");
@@ -19,7 +22,7 @@ fn main() -> ExitCode {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
         Err(e) => {
-            eprintln!("hob-mcp-test-client: can't start the async runtime: {e}");
+            eprintln!("{LOG_PREFIX}: can't start the async runtime: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -34,7 +37,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("hob-mcp-test-client: {e}");
+            eprintln!("{LOG_PREFIX}: {e}");
             ExitCode::FAILURE
         }
     }

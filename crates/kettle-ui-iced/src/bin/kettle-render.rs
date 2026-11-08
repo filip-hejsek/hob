@@ -11,6 +11,9 @@ use std::process::ExitCode;
 use iced::Theme;
 use kettle_ui::FrozenIsland;
 
+/// The program name that starts lines logged to stderr.
+const LOG_PREFIX: &str = "kettle-render";
+
 const USAGE: &str =
     "usage: kettle-render [--frozen] [--width N] [--theme NAME] ISLAND.json OUT.png";
 
@@ -33,7 +36,7 @@ fn main() -> ExitCode {
             "--theme" => match args.next().map(|name| find_theme(&name)) {
                 Some(Ok(t)) => theme = t,
                 Some(Err(e)) => {
-                    eprintln!("kettle-render: {e}");
+                    eprintln!("{LOG_PREFIX}: {e}");
                     return ExitCode::from(2);
                 }
                 None => return usage(),
@@ -48,7 +51,7 @@ fn main() -> ExitCode {
     match run(input, output, &theme, width, frozen) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("kettle-render: {e}");
+            eprintln!("{LOG_PREFIX}: {e}");
             ExitCode::FAILURE
         }
     }

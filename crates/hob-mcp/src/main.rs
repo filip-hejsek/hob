@@ -11,6 +11,9 @@ use std::process::ExitCode;
 
 use hob_mcp::{Bridge, Launch, Limits};
 
+/// The program name that starts lines logged to stderr.
+const LOG_PREFIX: &str = "hob-mcp";
+
 const USAGE: &str = "usage: hob-mcp [--allow-restart] [--agent-spawns | COMMAND [ARG]...]";
 
 fn main() -> ExitCode {
@@ -42,7 +45,7 @@ fn main() -> ExitCode {
                 Launch::Command { command, restart }
             }
             Err(e) => {
-                eprintln!("hob-mcp: can't find hob: {e}");
+                eprintln!("{LOG_PREFIX}: can't find hob: {e}");
                 return ExitCode::FAILURE;
             }
         }
@@ -51,17 +54,17 @@ fn main() -> ExitCode {
     if let Launch::Command { .. } = launch
         && let Err(report) = bridge.start(None)
     {
-        eprint!("hob-mcp: {report}");
+        eprint!("{LOG_PREFIX}: {report}");
         return ExitCode::FAILURE;
     }
     match hob_mcp::mcp::serve(&mut bridge, std::io::stdin(), std::io::stdout()) {
         Ok(()) if bridge.is_over() => {
-            eprintln!("hob-mcp: hob has exited");
+            eprintln!("{LOG_PREFIX}: hob has exited");
             ExitCode::FAILURE
         }
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("hob-mcp: {e}");
+            eprintln!("{LOG_PREFIX}: {e}");
             ExitCode::FAILURE
         }
     }

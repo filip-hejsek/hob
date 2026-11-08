@@ -11,6 +11,9 @@ use std::sync::Mutex;
 use crate::{Level, LogRecord, Request};
 use futures_channel::mpsc;
 
+/// The program name that starts lines logged to stderr.
+const LOG_PREFIX: &str = "hob";
+
 thread_local! {
     /// The requests of the command running on this thread, if any.
     static COMMAND: RefCell<Option<mpsc::UnboundedSender<Request>>> =
@@ -89,7 +92,7 @@ pub fn is_ours(target: &str) -> bool {
 pub fn level_from_env() -> Level {
     match std::env::var("HOB_LOG") {
         Ok(level) => level.parse().unwrap_or_else(|e| {
-            eprintln!("hob: ignoring HOB_LOG: {e}");
+            eprintln!("{LOG_PREFIX}: ignoring HOB_LOG: {e}");
             Level::Info
         }),
         Err(_) => Level::Info,
@@ -143,7 +146,7 @@ impl log::Log for Logger {
             return;
         };
         if entry.level <= Level::Warn {
-            eprintln!("hob: {entry} ({target})");
+            eprintln!("{LOG_PREFIX}: {entry} ({target})");
         }
         // Only fails once the shell is gone.
         let _ = self.sender.unbounded_send(entry);

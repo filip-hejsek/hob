@@ -78,6 +78,9 @@ mod selectable;
 /// The target of the shell's own log records.
 const TARGET: &str = "hob_gui";
 
+/// The program name that starts lines logged to stderr.
+const LOG_PREFIX: &str = "hob";
+
 /// Opens the main window, running commands with `interpreter`, and blocks
 /// until it closes. If `session` is given, the session is restored from that
 /// file, and saved to it. The prompt shows `placeholder` while it's empty,
@@ -361,7 +364,7 @@ impl Shell {
             Ok(Some(session)) => session,
             Ok(None) if self.is_preview() => {
                 let message = format!("There's no saved session at {}.", path.display());
-                eprintln!("hob: {message}");
+                eprintln!("{LOG_PREFIX}: {message}");
                 self.scrollback
                     .push(Item::Notice(LogRecord::new(Level::Error, TARGET, message)));
                 return;
@@ -377,7 +380,7 @@ impl Shell {
                         Err(e) => message += &format!("; couldn't move it aside: {e}"),
                     }
                 }
-                eprintln!("hob: {message}");
+                eprintln!("{LOG_PREFIX}: {message}");
                 self.scrollback
                     .push(Item::Notice(LogRecord::new(Level::Error, TARGET, message)));
                 return;
@@ -434,7 +437,7 @@ impl Shell {
                 if self.save_error.as_ref() == Some(&message) {
                     return;
                 }
-                eprintln!("hob: {message}");
+                eprintln!("{LOG_PREFIX}: {message}");
                 self.save_error = Some(message.clone());
                 LogRecord::new(Level::Error, TARGET, message).ephemeral()
             }
@@ -738,7 +741,7 @@ impl Shell {
             }
             Request::Log(record) => {
                 if record.level <= Level::Warn {
-                    eprintln!("hob: {}: {record}", record.target);
+                    eprintln!("{LOG_PREFIX}: {}: {record}", record.target);
                 }
                 Entry::Log(record)
             }

@@ -26,6 +26,9 @@ use hob_headless::client::Client;
 use hob_headless::protocol::{BlockId, Call, IslandId, Notification};
 use kettle_ui::FrozenIsland;
 
+/// The program name that starts lines logged to stderr.
+const LOG_PREFIX: &str = "hob-cli";
+
 const HELP: &str = "\
 Lines are run as hob commands (try help). Driver commands act on the newest
 live island, or on island N if given as #N:
@@ -147,7 +150,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("hob-cli: {e}");
+            eprintln!("{LOG_PREFIX}: {e}");
             ExitCode::FAILURE
         }
     }

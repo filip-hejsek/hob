@@ -9,6 +9,9 @@ use std::process::ExitCode;
 
 use hob_core::Interpreter;
 
+/// The program name that starts lines logged to stderr.
+const LOG_PREFIX: &str = "hob";
+
 #[cfg(feature = "gui")]
 const USAGE: &str = "usage: hob [--headless | --preview [SESSION]]";
 #[cfg(not(feature = "gui"))]
@@ -49,7 +52,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("hob: {e}");
+            eprintln!("{LOG_PREFIX}: {e}");
             ExitCode::FAILURE
         }
     }

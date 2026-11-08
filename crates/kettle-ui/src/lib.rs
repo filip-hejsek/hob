@@ -67,6 +67,9 @@ pub use model::{Built, Inputs, Job, JobResult, Model, Outcome, StateUpdate, Upda
 
 use widget::{Kind, Text, Widget};
 
+/// The program name that starts lines logged to stderr.
+const LOG_PREFIX: &str = "kettle-ui";
+
 /// Why [`IslandBuilder::build`] failed.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -597,7 +600,7 @@ fn misuse(strict: bool, message: String, fallback: &str) {
 /// harnesses capture stderr and show it for failing tests.)
 fn warn(message: fmt::Arguments<'_>) {
     if log::max_level() == log::LevelFilter::Off {
-        eprintln!("kettle-ui: warning: {message}");
+        eprintln!("{LOG_PREFIX}: warning: {message}");
     } else {
         log::warn!("{message}");
     }
