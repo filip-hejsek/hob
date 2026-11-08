@@ -158,3 +158,4 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - There is no way to move focus to the command prompt using only the keyboard.
 - Selecting output works only within one printed text or log record; a
   selection can't span several, nor include islands.
+- Scroll to the bottom when a new command is started.

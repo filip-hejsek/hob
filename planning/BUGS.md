@@ -43,3 +43,6 @@ TODO.md.
   no longer lists them after a restart.
 - Edits in a live island are only saved on close (or with the next
   scrollback change), so a crash loses them.
+- When a running command prints something, the scrollback is always scrolled
+  by the amount printed, even when it isn't at the bottom. It should stay in
+  place unless it is at the bottom.
