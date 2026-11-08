@@ -43,7 +43,7 @@ impl Limits {
     /// variables `HOB_SESSION_SIZE` (the scrollback) and
     /// `HOB_SESSION_IMAGES`, if set: a number of bytes, optionally followed
     /// by `K`, `M` or `G` (KiB, MiB, GiB). Invalid values are ignored, with
-    /// a message on stderr.
+    /// a logged warning.
     pub fn from_env() -> Limits {
         let mut limits = Limits::default();
         for (var, limit) in [
@@ -55,7 +55,7 @@ impl Limits {
             };
             match parse_size(&value) {
                 Some(size) => *limit = size,
-                None => eprintln!("hob: ignoring {var}: not a size: {value:?}"),
+                None => log::warn!("ignoring {var}: not a size: {value:?}"),
             }
         }
         limits
