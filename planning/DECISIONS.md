@@ -544,6 +544,16 @@ they're made from the notes whenever `todo` runs.
   that keeps changing (e.g. a progress bar) doesn't fill unrelated results.
   `run`, `press` and `wait` for a block end with the command's status
   ("has finished", "is waiting for island #3").
+- Images in islands are sent as MCP image content after the result's text,
+  each labeled with its island, alt text and size, in outline order. Each
+  image (by key) is sent only the first time an island showing it is shown,
+  since images are big and an island resends them with every change;
+  `state` sends those of live islands again, for an agent that lost them.
+  PNG, JPEG, GIF and WebP up to 1568 px and 1 MiB are sent as they are;
+  others (JPEG XL, which clients don't take, or bigger ones) are decoded,
+  scaled down to 1568 px (models scale them to about that anyway), and sent
+  as PNG, or as JPEG (on white) if the PNG is over 1 MiB. Rejected: only the
+  outline line (the agent couldn't see what a command shows).
 - Errors are tool results with `isError`, so the agent sees them.
 - Hob runs as a child process, started with a fixed command (`hob
   --headless` from the same directory, or the arguments), or with

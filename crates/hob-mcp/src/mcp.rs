@@ -7,11 +7,13 @@
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
-use crate::{Bridge, Launch};
+use crate::{Bridge, IslandImage, Launch};
 
 /// The protocol versions this server knows, newest first. It speaks the
 /// client's if it's one of them, otherwise the newest.
@@ -42,7 +44,11 @@ Commands keep running between tool calls. Every tool result starts with what \
 happened since the last one, and shows new islands. Changed islands are \
 shown when the result is about their command; others are only listed as \
 changed until then. Use wait to wait for more (it shows all changed islands, \
-or those of the command given), and state for an overview.";
+or those of the command given), and state for an overview.
+
+An image in an island is shown as a line like `image \"Logo\" (64x64)`; the \
+image itself comes after the result's text, the first time it's shown. state \
+sends the images of live islands again.";
 
 /// Added to [`INSTRUCTIONS`] when the agent starts hob.
 const BY_AGENT: &str = "
@@ -109,6 +115,8 @@ impl Bridge {
     fn call_tool(&mut self, params: &Value) -> Result<Value, (i64, String)> {
         let name = params["name"].as_str().unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
+        // Only those of this call's result.
+        self.images.clear();
         let result = match name {
             "run" => args_for(args).and_then(|a: RunArgs| self.run(&a.line, timeout(a.timeout))),
             "fill" => args_for(args).and_then(|a: FillArgs| self.fill(a.island, &a.fields)),
@@ -132,10 +140,31 @@ impl Bridge {
             Ok(text) => (text, false),
             Err(text) => (text, true),
         };
-        Ok(json!({
-            "content": [{"type": "text", "text": text}],
-            "isError": is_error,
-        }))
+        let mut content = vec![json!({"type": "text", "text": text})];
+        for IslandImage { island, image } in self.take_images() {
+            let data = image.data().expect("only images with data are sent");
+            let label = format!(
+                "Island #{island}, image {:?} ({}x{}):",
+                image.alt(),
+                data.width(),
+                data.height()
+            );
+            match crate::image::for_agent(data) {
+                Ok(file) => {
+                    content.push(json!({"type": "text", "text": label}));
+                    content.push(json!({
+                        "type": "image",
+                        "data": STANDARD.encode(&file.bytes),
+                        "mimeType": file.mime,
+                    }));
+                }
+                Err(e) => {
+                    let text = format!("{label} can't be shown: {e}");
+                    content.push(json!({"type": "text", "text": text}));
+                }
+            }
+        }
+        Ok(json!({"content": content, "isError": is_error}))
     }
 }
 

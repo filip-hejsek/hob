@@ -2454,8 +2454,10 @@ dependencies = [
 name = "hob-mcp"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "hob-core",
  "hob-headless",
+ "image",
  "kettle-ui",
  "kettle-ui-headless",
  "rustix 1.1.6",

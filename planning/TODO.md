@@ -53,8 +53,6 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   session with big images is slow to save.
 - hob-headless resends a live island's images with every change of the
   island; clients could get each image once.
-- hob-mcp could give the agent the images themselves (MCP image content),
-  not just the outline line.
 - Animated images show only their first frame.
 
 ## kettle-ui-iced

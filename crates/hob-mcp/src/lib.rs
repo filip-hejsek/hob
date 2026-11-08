@@ -13,11 +13,15 @@
 //! fixed one, or one the agent gives (see [`Launch`]). If restarting is
 //! allowed, hob ends when a command asks it to or the agent closes it, and
 //! after it ends (or crashes) the agent can start it again.
+//!
+//! Images in islands are sent along with their outline, each only the
+//! first time (see [`Bridge::take_images`]).
 
+pub mod image;
 pub mod mcp;
 mod process;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsString;
 use std::fmt::Write;
 use std::io;
@@ -25,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use hob_core::Level;
 use hob_headless::protocol::{BlockId, Call, IslandId, Notification};
-use kettle_ui::FrozenIsland;
+use kettle_ui::{FrozenIsland, Image, ImageKey};
 use serde_json::Value;
 
 use process::{Hob, HobEvent};
@@ -86,6 +90,19 @@ pub struct Bridge {
     events: Vec<Event>,
     /// Islands to show in the next report.
     to_show: BTreeSet<IslandId>,
+    /// Images of islands shown since [`Bridge::take_images`].
+    images: Vec<IslandImage>,
+    /// Images sent to the agent, which aren't sent again.
+    sent: HashSet<ImageKey>,
+}
+
+/// An image to send along with a tool result.
+#[derive(Clone, Debug)]
+pub struct IslandImage {
+    /// The island that shows it.
+    pub island: IslandId,
+    /// The image.
+    pub image: Image,
 }
 
 struct Block {
@@ -151,6 +168,8 @@ impl Bridge {
             islands: BTreeMap::new(),
             events: Vec::new(),
             to_show: BTreeSet::new(),
+            images: Vec::new(),
+            sent: HashSet::new(),
         }
     }
 
@@ -197,6 +216,7 @@ impl Bridge {
         self.blocks.clear();
         self.islands.clear();
         self.to_show.clear();
+        self.sent.clear();
         self.event(None, format!("hob started (PID {}): {shown}", hob.pid));
         self.hob = Some(hob);
         // Report it if it exits right away, e.g. because of bad arguments.
@@ -285,8 +305,14 @@ impl Bridge {
         }
     }
 
+    /// The images of the islands shown by tool results since the last call,
+    /// to send along with the result: those not sent before.
+    pub fn take_images(&mut self) -> Vec<IslandImage> {
+        std::mem::take(&mut self.images)
+    }
+
     /// What happened since the last report, then the commands still running
-    /// and all live islands.
+    /// and all live islands, with all their images.
     pub fn state(&mut self) -> ToolResult {
         self.settle();
         // Live islands are all shown below; this adds printed ones.
@@ -294,7 +320,7 @@ impl Bridge {
         let mut report = self.events_report();
         for id in to_show {
             if !self.islands[&id].live {
-                report += &self.show_island(id);
+                report += &self.show_island(id, false);
             }
         }
         let Some(hob) = &self.hob else {
@@ -319,7 +345,7 @@ impl Bridge {
             report += "No live islands.\n";
         }
         for id in live {
-            report += &self.show_island(id);
+            report += &self.show_island(id, true);
         }
         Ok(report)
     }
@@ -632,7 +658,7 @@ impl Bridge {
                 Focus::All => true,
             };
             if wanted || !island.shown {
-                report += &self.show_island(id);
+                report += &self.show_island(id, false);
             } else {
                 self.to_show.insert(id);
             }
@@ -666,10 +692,17 @@ impl Bridge {
         report
     }
 
-    /// An island's outline, which then counts as shown.
-    fn show_island(&mut self, id: IslandId) -> String {
+    /// An island's outline, which then counts as shown. Its images are
+    /// added to those to send: those not sent before, or all if `again`.
+    fn show_island(&mut self, id: IslandId, again: bool) -> String {
         let island = self.islands.get_mut(&id).expect("known island");
         island.shown = true;
+        let images = image::shown_images(&island.contents);
+        for image in images.into_iter().filter(|i| i.data().is_some()) {
+            if self.sent.insert(image.key()) || again {
+                self.images.push(IslandImage { island: id, image });
+            }
+        }
         let kind = if island.live { "live" } else { "frozen" };
         let mut text = format!("Island #{id} of [{}], {kind}:\n", island.block);
         for line in kettle_ui_headless::outline(&island.contents).lines() {

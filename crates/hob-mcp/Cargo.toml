@@ -11,8 +11,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+base64.workspace = true
 hob-core.workspace = true
 hob-headless.workspace = true
+image = { workspace = true, features = ["png", "jpeg"] }
 kettle-ui.workspace = true
 kettle-ui-headless.workspace = true
 serde.workspace = true

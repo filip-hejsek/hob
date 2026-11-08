@@ -25,6 +25,7 @@ const TESTS: &[(&str, fn())] = &[
     ),
     ("waits_for_commands", waits_for_commands),
     ("shows_changed_islands", shows_changed_islands),
+    ("sends_images", sends_images),
     ("reports_errors_to_the_agent", reports_errors_to_the_agent),
     ("agent_starts_and_closes_hob", agent_starts_and_closes_hob),
     ("exit_closes_hob", exit_closes_hob),
@@ -107,6 +108,21 @@ fn interpreter() -> Interpreter {
         eprintln!("crashing on purpose");
         std::process::exit(3);
     });
+    i.register(
+        "picture",
+        "Show a picture, and a caption to fill in",
+        |ctx, _| {
+            let dot = kettle_ui::Image::from_rgba(1, 1, &[255, 0, 0, 255], "Red dot")?;
+            let mut builder = IslandBuilder::new(column([
+                image("dot"),
+                text_field("caption", "Caption"),
+                submit_button("OK"),
+            ]));
+            builder.set_state("dot", dot);
+            ctx.show(builder)?;
+            Ok(())
+        },
+    );
     i.register("ask", "Ask for a name", |ctx, _| {
         let mut builder = IslandBuilder::new(column([
             text_field("name", "Name"),
@@ -168,14 +184,19 @@ fn request(bridge: &mut Bridge, method: &str, params: Value) -> Value {
 
 /// Calls a tool; returns its text, and whether it's an error.
 fn tool(bridge: &mut Bridge, name: &str, arguments: Value) -> (String, bool) {
+    let result = tool_result(bridge, name, arguments);
+    let text = result["content"][0]["text"].as_str().unwrap().to_owned();
+    (text, result["isError"].as_bool().unwrap())
+}
+
+/// Calls a tool; returns its result.
+fn tool_result(bridge: &mut Bridge, name: &str, arguments: Value) -> Value {
     let reply = request(
         bridge,
         "tools/call",
         json!({"name": name, "arguments": arguments}),
     );
-    let result = &reply["result"];
-    let text = result["content"][0]["text"].as_str().unwrap().to_owned();
-    (text, result["isError"].as_bool().unwrap())
+    reply["result"].clone()
 }
 
 /// The PID in "hob started (PID 123)".
@@ -474,4 +495,27 @@ fn without_restart() {
         text.contains("hob-mcp exits, since it can't start hob again"),
         "{text}"
     );
+}
+
+fn sends_images() {
+    let mut bridge = bridge();
+    let result = tool_result(&mut bridge, "run", json!({"line": "picture"}));
+    let content = result["content"].as_array().unwrap();
+    let text = content[0]["text"].as_str().unwrap();
+    assert!(text.contains("image \"Red dot\" (1x1)"), "{text}");
+    assert_eq!(content[1]["text"], "Island #2, image \"Red dot\" (1x1):");
+    assert_eq!(content[2]["type"], "image");
+    assert_eq!(content[2]["mimeType"], "image/png");
+    let data = content[2]["data"].as_str().unwrap();
+    assert!(data.starts_with("iVBORw0KGgo"), "not a PNG: {data}");
+    assert_eq!(content.len(), 3);
+
+    // Changing the island doesn't send the image again; state does.
+    let fields = json!({"island": 2, "fields": {"caption": "A dot"}});
+    let result = tool_result(&mut bridge, "fill", fields);
+    assert_eq!(result["content"].as_array().unwrap().len(), 1, "{result}");
+    let result = tool_result(&mut bridge, "state", json!({}));
+    let content = result["content"].as_array().unwrap();
+    assert_eq!(content.len(), 3, "{result}");
+    assert_eq!(content[2]["mimeType"], "image/png");
 }
