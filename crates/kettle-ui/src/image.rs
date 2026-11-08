@@ -386,6 +386,12 @@ impl ImageData {
     pub fn decode(&self) -> Result<Rgba, ImageError> {
         codec::decode(self)
     }
+
+    /// The original JPEG file, if the image is a JPEG, or JPEG XL made from
+    /// one by lossless recompression.
+    pub fn jpeg(&self) -> Result<Option<Vec<u8>>, ImageError> {
+        codec::jpeg(self)
+    }
 }
 
 impl fmt::Debug for ImageData {

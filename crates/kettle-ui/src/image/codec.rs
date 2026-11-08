@@ -204,6 +204,14 @@ pub(super) fn decode(data: &ImageData) -> Result<Rgba, ImageError> {
     })
 }
 
+pub(super) fn jpeg(data: &ImageData) -> Result<Option<Vec<u8>>, ImageError> {
+    match data.format {
+        ImageFormat::Jpeg => Ok(Some(data.bytes.to_vec())),
+        ImageFormat::Jxl => kettle_jxl::reconstruct_jpeg(&data.bytes).map_err(invalid),
+        _ => Ok(None),
+    }
+}
+
 fn invalid(e: impl ToString) -> ImageError {
     ImageError::Invalid(e.to_string())
 }
@@ -285,7 +293,7 @@ mod tests {
         assert_eq!((data.width(), data.height()), (64, 48));
         // Decodes to nearly the JPEG's pixels (decoders differ slightly in
         // rounding and upsampling).
-        let original = decode(&super::data(ImageFormat::Jpeg, 64, 48, jpeg)).unwrap();
+        let original = decode(&super::data(ImageFormat::Jpeg, 64, 48, jpeg.clone())).unwrap();
         let decoded = data.decode().unwrap();
         assert_eq!(original.pixels.len(), decoded.pixels.len());
         let total: u32 = (original.pixels.iter().zip(&decoded.pixels))
@@ -293,6 +301,9 @@ mod tests {
             .sum();
         let mean = total as f64 / original.pixels.len() as f64;
         assert!(mean < 1.0, "{mean}");
+        assert_eq!(data.jpeg().unwrap(), Some(jpeg));
+        let png = Image::from_rgba(2, 2, &gradient(2, 2), "").unwrap();
+        assert_eq!(png.data().unwrap().jpeg().unwrap(), None);
     }
 
     #[test]

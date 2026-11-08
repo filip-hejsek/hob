@@ -549,8 +549,11 @@ they're made from the notes whenever `todo` runs.
   image (by key) is sent only the first time an island showing it is shown,
   since images are big and an island resends them with every change;
   `state` sends those of live islands again, for an agent that lost them.
-  PNG, JPEG, GIF and WebP up to 1568 px and 1 MiB are sent as they are;
-  others (JPEG XL, which clients don't take, or bigger ones) are decoded,
+  PNG, JPEG, GIF and WebP up to 1568 px and 1 MiB are sent as they are, and
+  so are JPEGs kept recompressed as JPEG XL: libjxl reconstructs the
+  original file exactly (`ImageData::jpeg`), which is smaller than a PNG
+  and loses nothing. Others (JPEG XL, which clients don't take, or bigger
+  ones) are decoded,
   scaled down to 1568 px (models scale them to about that anyway), and sent
   as PNG, or as JPEG (on white) if the PNG is over 1 MiB. Rejected: only the
   outline line (the agent couldn't see what a command shows).

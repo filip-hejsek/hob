@@ -67,8 +67,9 @@ fn collect(island: &FrozenIsland, widget: &Widget, images: &mut Vec<Image>) {
 }
 
 /// The image as the agent gets it: as it is if MCP clients take its format
-/// and it's small enough, otherwise decoded, scaled down to at most 1568 px,
-/// and sent as PNG (or JPEG, if the PNG is over 1 MiB).
+/// and it's small enough (a JPEG recompressed as JPEG XL as the original
+/// JPEG), otherwise decoded, scaled down to at most 1568 px, and sent as
+/// PNG (or JPEG, if the PNG is over 1 MiB).
 pub fn for_agent(data: &ImageData) -> Result<AgentImage, String> {
     let mime = match data.format() {
         ImageFormat::Png => Some("image/png"),
@@ -77,12 +78,21 @@ pub fn for_agent(data: &ImageData) -> Result<AgentImage, String> {
         ImageFormat::Webp => Some("image/webp"),
         _ => None,
     };
-    let small = data.width().max(data.height()) <= MAX_SIDE && data.bytes().len() <= MAX_BYTES;
-    if let Some(mime) = mime
-        && small
-    {
-        let bytes = data.bytes().to_vec();
-        return Ok(AgentImage { mime, bytes });
+    if data.width().max(data.height()) <= MAX_SIDE {
+        if let Some(mime) = mime
+            && data.bytes().len() <= MAX_BYTES
+        {
+            let bytes = data.bytes().to_vec();
+            return Ok(AgentImage { mime, bytes });
+        }
+        // If it fails, decoding below reports what's wrong.
+        if data.format() == ImageFormat::Jxl
+            && let Ok(Some(jpeg)) = data.jpeg()
+            && jpeg.len() <= MAX_BYTES
+        {
+            let mime = "image/jpeg";
+            return Ok(AgentImage { mime, bytes: jpeg });
+        }
     }
     let rgba = data.decode().map_err(|e| e.to_string())?;
     let mut image = RgbaImage::from_raw(rgba.width, rgba.height, rgba.pixels)
@@ -162,6 +172,20 @@ mod tests {
         let sent = for_agent(data).unwrap();
         assert_eq!(sent.mime, "image/png");
         assert_eq!(decoded(&sent).into_raw(), pixels);
+    }
+
+    #[test]
+    fn recompressed_jpegs_are_sent_as_the_original() {
+        let rgb = RgbImage::from_fn(64, 48, |x, y| image::Rgb([x as u8 * 4, y as u8 * 5, 128]));
+        let mut jpeg = Vec::new();
+        JpegEncoder::new_with_quality(Cursor::new(&mut jpeg), 90)
+            .write_image(&rgb, 64, 48, ExtendedColorType::Rgb8)
+            .unwrap();
+        let image = Image::from_bytes(jpeg.clone(), "").unwrap();
+        let data = image.data().unwrap();
+        assert_eq!(data.format(), ImageFormat::Jxl);
+        let sent = for_agent(data).unwrap();
+        assert_eq!((sent.mime, sent.bytes), ("image/jpeg", jpeg));
     }
 
     #[test]

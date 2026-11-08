@@ -1,6 +1,6 @@
 //! Minimal bindings to the system libjxl (the JPEG XL reference library),
-//! for kettle-ui images: lossless encoding, lossless JPEG recompression,
-//! and decoding to 8-bit RGBA.
+//! for kettle-ui images: lossless encoding, lossless JPEG recompression
+//! (and reconstructing the JPEG), and decoding to 8-bit RGBA.
 //!
 //! The bindings are written by hand, for just the functions used here
 //! (the only maintained binding crate is GPL). The structs match libjxl's
@@ -233,6 +233,63 @@ pub fn decode_rgba(jxl: &[u8]) -> Result<Rgba, Error> {
     }
 }
 
+/// The JPEG file an image was made from by [`recompress_jpeg`], exactly;
+/// `None` if it wasn't made from a JPEG.
+pub fn reconstruct_jpeg(jxl: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+    // Recompression saves about a fifth, so this usually fits.
+    reconstruct_jpeg_into((64 * 1024).max(jxl.len() * 2), jxl)
+}
+
+/// [`reconstruct_jpeg`], starting with a buffer of `len` bytes.
+fn reconstruct_jpeg_into(len: usize, jxl: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+    let dec = Decoder::new(jxl, ffi::DEC_JPEG_RECONSTRUCTION | ffi::DEC_FULL_IMAGE)?;
+    let mut jpeg: Vec<u8> = Vec::new();
+    let mut started = false;
+    loop {
+        // SAFETY: `dec` is a live decoder whose input outlives it. The
+        // unwritten part of `jpeg` is handed to it with its exact length,
+        // and released before `jpeg` is resized or read.
+        match unsafe { ffi::JxlDecoderProcessInput(dec.dec) } {
+            ffi::DEC_JPEG_RECONSTRUCTION => {
+                jpeg = vec![0; len.max(1)];
+                started = true;
+                unsafe {
+                    check_dec(
+                        ffi::JxlDecoderSetJPEGBuffer(dec.dec, jpeg.as_mut_ptr(), jpeg.len()),
+                        "setting the JPEG output",
+                    )?;
+                }
+            }
+            ffi::DEC_JPEG_NEED_MORE_OUTPUT => {
+                let unused = unsafe { ffi::JxlDecoderReleaseJPEGBuffer(dec.dec) };
+                let done = jpeg.len() - unused;
+                jpeg.resize(jpeg.len() * 2, 0);
+                unsafe {
+                    check_dec(
+                        ffi::JxlDecoderSetJPEGBuffer(
+                            dec.dec,
+                            jpeg.as_mut_ptr().add(done),
+                            jpeg.len() - done,
+                        ),
+                        "setting the JPEG output",
+                    )?;
+                }
+            }
+            // Without reconstruction data, the decoder wants pixels instead.
+            ffi::DEC_NEED_IMAGE_OUT_BUFFER if !started => return Ok(None),
+            ffi::DEC_FULL_IMAGE | ffi::DEC_SUCCESS => {
+                if !started {
+                    return Ok(None);
+                }
+                let unused = unsafe { ffi::JxlDecoderReleaseJPEGBuffer(dec.dec) };
+                jpeg.truncate(jpeg.len() - unused);
+                return Ok(Some(jpeg));
+            }
+            _ => return Err(error("reconstructing the JPEG")),
+        }
+    }
+}
+
 fn check(status: ffi::JxlEncoderStatus, what: &str) -> Result<(), Error> {
     match status {
         ffi::ENC_SUCCESS => Ok(()),
@@ -417,8 +474,10 @@ mod ffi {
     pub(crate) type JxlDecoderStatus = i32;
     pub(crate) const DEC_SUCCESS: JxlDecoderStatus = 0;
     pub(crate) const DEC_NEED_IMAGE_OUT_BUFFER: JxlDecoderStatus = 5;
+    pub(crate) const DEC_JPEG_NEED_MORE_OUTPUT: JxlDecoderStatus = 6;
     pub(crate) const DEC_BASIC_INFO: JxlDecoderStatus = 0x40;
     pub(crate) const DEC_FULL_IMAGE: JxlDecoderStatus = 0x1000;
+    pub(crate) const DEC_JPEG_RECONSTRUCTION: JxlDecoderStatus = 0x2000;
 
     pub(crate) type JxlDataType = i32;
     pub(crate) const TYPE_UINT8: JxlDataType = 2;
@@ -607,6 +666,12 @@ mod ffi {
             buffer: *mut c_void,
             size: usize,
         ) -> JxlDecoderStatus;
+        pub(crate) fn JxlDecoderSetJPEGBuffer(
+            dec: *mut JxlDecoder,
+            data: *mut u8,
+            size: usize,
+        ) -> JxlDecoderStatus;
+        pub(crate) fn JxlDecoderReleaseJPEGBuffer(dec: *mut JxlDecoder) -> usize;
     }
 
     #[link(name = "jxl_threads")]
@@ -679,6 +744,29 @@ mod tests {
             assert!((18..=21).contains(&c), "{:?}", &decoded.pixels[4..8]);
         }
         assert_eq!(a, 255);
+    }
+
+    #[test]
+    fn recompressed_jpegs_are_reconstructed() {
+        let jpeg = include_bytes!("test.jpg");
+        let jxl = recompress_jpeg(jpeg).unwrap();
+        assert_eq!(reconstruct_jpeg(&jxl).unwrap().as_deref(), Some(&jpeg[..]));
+        // With a buffer that has to grow.
+        let small = reconstruct_jpeg_into(16, &jxl).unwrap();
+        assert_eq!(small.as_deref(), Some(&jpeg[..]));
+    }
+
+    #[test]
+    fn only_recompressed_jpegs_are_reconstructed() {
+        let layout = Layout {
+            width: 5,
+            height: 4,
+            channels: 4,
+            sixteen_bit: false,
+        };
+        let jxl = encode_lossless(&gradient(5, 4), layout, None).unwrap();
+        assert_eq!(reconstruct_jpeg(&jxl).unwrap(), None);
+        assert!(reconstruct_jpeg(b"not a jxl").is_err());
     }
 
     #[test]
