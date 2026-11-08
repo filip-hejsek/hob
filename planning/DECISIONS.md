@@ -319,7 +319,8 @@ and renders the island as an indented text outline.
 - Every command is registered with a one-line description (required, so
   `help` never has gaps), written as an imperative without a full stop:
   "Print the arguments". Bare `help` lists all commands with their
-  descriptions; `help COMMAND` shows one, with its usage and options if
+  descriptions, as a frozen island with a table (horizontal borders only,
+  no header row), so descriptions line up; `help COMMAND` shows one, with its usage and options if
   it declared its arguments. Commands see the registered
   commands through `ctx.commands()`.
 - Command names must start with a letter or digit (`char::is_alphanumeric`;

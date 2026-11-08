@@ -2387,6 +2387,7 @@ dependencies = [
  "futures-core",
  "jiff",
  "kettle-ui",
+ "kettle-ui-headless",
  "log",
  "serde",
  "serde_json",

@@ -5,8 +5,8 @@
 //! - `clear`: clears the scrollback.
 //! - `exit`: exits hob; if other commands are running, asks first, listing
 //!   them.
-//! - `help [COMMAND]`: lists all commands with their descriptions, or shows
-//!   the full help of one.
+//! - `help [COMMAND]`: lists all commands with their descriptions in a table,
+//!   or shows the full help of one.
 //! - `jobs`: lists the other commands still running, oldest first.
 //! - `messages [LEVEL]`: lists the log records the frontend has, oldest
 //!   first, from `LEVEL` up (`info` by default, so `messages debug` lists
@@ -20,7 +20,7 @@ use std::thread;
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, Zoned};
 
-use kettle_ui::widget::{button_danger, cancel_button, column, label, row};
+use kettle_ui::widget::{button_danger, cancel_button, column, label, row, table_horizontal};
 use kettle_ui::{IslandBuilder, Outcome};
 
 use crate::args::{Kind, Matches, Spec};
@@ -196,10 +196,10 @@ fn exit(ctx: &mut Context, _: &Matches) -> CommandResult {
 fn help(ctx: &mut Context, args: &Matches) -> CommandResult {
     match args.value("COMMAND") {
         None => {
-            let lines: Vec<String> = (ctx.commands())
-                .map(|(name, description)| format!("{name} — {description}"))
-                .collect();
-            ctx.print(lines.join("\n"));
+            let rows =
+                (ctx.commands()).map(|(name, description)| [label(name), label(description)]);
+            let table = table_horizontal(rows.collect::<Vec<_>>());
+            ctx.print_island(IslandBuilder::new(table).freeze()?);
         }
         Some(name) => match ctx.help(name) {
             Some(help) => ctx.print(help),
@@ -265,6 +265,8 @@ mod tests {
 
     use futures_core::Stream;
 
+    use kettle_ui_headless::outline;
+
     use super::*;
     use crate::Request;
 
@@ -324,10 +326,10 @@ mod tests {
                         show.into_parts().1.send(outcome.take().unwrap());
                     }
                     Request::Print(message) => output.push(message),
+                    Request::PrintIsland(island) => output.push(outline(&island)),
                     Request::Log(record) => output.push(record.to_string()),
                     Request::Clear => output.push("<clear>".to_owned()),
                     Request::Exit => output.push("<exit>".to_owned()),
-                    _ => panic!("unexpected request"),
                 },
                 std::task::Poll::Ready(None) => return output,
                 std::task::Poll::Pending => std::thread::sleep(Duration::from_millis(1)),
@@ -362,12 +364,25 @@ mod tests {
     fn help_lists_commands() {
         assert_eq!(
             run("help", vec![]),
-            ["! — Run a shell command: !COMMAND\n\
-              clear — Clear the scrollback\n\
-              exit — Exit hob\n\
-              help — List the commands, or describe one\n\
-              jobs — List the other running commands\n\
-              messages — List log messages, from LEVEL up (info by default)"]
+            ["table (horizontal borders)\n\
+              \x20 row\n\
+              \x20   label \"!\"\n\
+              \x20   label \"Run a shell command: !COMMAND\"\n\
+              \x20 row\n\
+              \x20   label \"clear\"\n\
+              \x20   label \"Clear the scrollback\"\n\
+              \x20 row\n\
+              \x20   label \"exit\"\n\
+              \x20   label \"Exit hob\"\n\
+              \x20 row\n\
+              \x20   label \"help\"\n\
+              \x20   label \"List the commands, or describe one\"\n\
+              \x20 row\n\
+              \x20   label \"jobs\"\n\
+              \x20   label \"List the other running commands\"\n\
+              \x20 row\n\
+              \x20   label \"messages\"\n\
+              \x20   label \"List log messages, from LEVEL up (info by default)\"\n"]
         );
         assert_eq!(
             run("help help", vec![]),
