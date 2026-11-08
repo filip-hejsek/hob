@@ -42,7 +42,9 @@ with the workaround used.
   user's notes aren't changed.
 - `hob-mcp-test-client` (in `tools/`) is an MCP client for people, with
   hob-gui as its GUI. It's not a default workspace member: the checks
-  below skip it, and changes elsewhere may break it for a while.
+  below skip it, and changes elsewhere may break it for a while. When
+  working on it, run them with `-p hob-mcp-test-client`, with and without
+  `--features http`.
 - kettle-ui is deliberately small: the widget tree is fixed once built, and
   spacing is fixed and styling options are minimal (see
   planning/DECISIONS.md). Don't add options without a need.

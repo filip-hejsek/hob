@@ -21,6 +21,10 @@ in ../DECISIONS.md.
   doesn't need to build or test it, and changes to them may break it for a
   while. Rejected: a separate workspace (a second copy of the iced patch,
   and of iced in its own `target/`).
+- The commands are in the crate's library (`register`, `Client`), and the
+  program only sets up the GUI, so tests can run them. The test program
+  is also the MCP server they connect to (`harness = false`, started with
+  `--server` and other modes), as in hob-mcp's tests.
 
 ## MCP
 
@@ -39,3 +43,34 @@ in ../DECISIONS.md.
 - Commands block on their own threads, so they reach rmcp's async API
   through a tokio runtime the program holds (`Handle::block_on`); iced
   doesn't need tokio.
+- The client introduces itself as `hob-mcp-test-client` (rmcp's default
+  is `rmcp`), with no capabilities yet.
+
+## Commands
+
+- `connect SERVER [ARG...]` starts the program SERVER in the working
+  directory and talks to it over stdio; with `http`, SERVER may be an
+  `http(s)://` URL instead. It prints the server's name and version, the
+  protocol version, what it offers (by capability) and its instructions.
+- One connection at a time. A new `connect` replaces the old connection
+  once it has succeeded, so a failed one leaves the old connection.
+  `disconnect` closes it. Rejected: refusing to connect while connected
+  (an extra step when switching servers).
+- A server's stderr is logged at info (target
+  `hob_mcp_test_client::server`), so `messages` shows it; servers log
+  routinely to stderr, so it doesn't belong in the scrollback. If
+  connecting fails, the last 50 lines (most likely why) are printed in
+  `connect`'s block.
+- When a request finds the connection closed (e.g. the server exited), the
+  connection is forgotten and the command says so; rmcp doesn't otherwise
+  report it.
+- The program closes the connection before it exits: rmcp kills a server
+  process it drops by spawning a task, which may not run while the runtime
+  shuts down.
+- `tools` lists the tools as a table (name, and title or first line of the
+  description), like `help`; `tools TOOL` shows one in full: description,
+  annotation hints, and the schemas as pretty JSON. JSON keys are sorted
+  (serde_json without `preserve_order`; enabling it here would change other
+  crates' JSON when built together). Tool names are completed from the
+  list last fetched (by `connect` or `tools`), since completion can't wait
+  for the server.

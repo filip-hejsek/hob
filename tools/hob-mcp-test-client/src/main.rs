@@ -1,19 +1,20 @@
 //! An MCP client for people: lets a user try an MCP server the way an agent
 //! would, with hob as the GUI. It has hob's generic builtins
-//! (`hob_core::builtins`, without the shell command), but none of hob's own
-//! commands.
+//! (`hob_core::builtins`, without the shell command) and the client's
+//! commands (see the library), but none of hob's own commands.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use hob_core::Interpreter;
+use hob_mcp_test_client::Client;
 
 fn main() -> ExitCode {
     if std::env::args_os().len() > 1 {
         eprintln!("usage: hob-mcp-test-client");
         return ExitCode::from(2);
     }
-    // Commands block on their own threads; they'll reach rmcp's async API
+    // Commands block on their own threads; they reach rmcp's async API
     // through this runtime.
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
@@ -22,22 +23,21 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let interpreter = interpreter(runtime.handle().clone());
+    let client = Client::new(runtime.handle().clone());
+    let mut interpreter = Interpreter::new();
+    hob_core::builtins::register(&mut interpreter);
+    hob_mcp_test_client::register(&mut interpreter, &client);
     let placeholder = "Type a command, or help";
-    match hob_gui::run(interpreter, session_path(), placeholder) {
+    let result = hob_gui::run(interpreter, session_path(), placeholder);
+    // Ends a server process, which dropping the runtime might not.
+    client.close();
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("hob-mcp-test-client: {e}");
             ExitCode::FAILURE
         }
     }
-}
-
-/// An interpreter with the client's commands.
-fn interpreter(_runtime: tokio::runtime::Handle) -> Interpreter {
-    let mut interpreter = Interpreter::new();
-    hob_core::builtins::register(&mut interpreter);
-    interpreter
 }
 
 /// Where the session is saved: `HOB_MCP_TEST_CLIENT_SESSION` if set,

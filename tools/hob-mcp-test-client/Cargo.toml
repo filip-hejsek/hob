@@ -20,5 +20,18 @@ http = ["rmcp/transport-streamable-http-client-reqwest", "rmcp/reqwest", "rmcp/a
 dirs.workspace = true
 hob-core.workspace = true
 hob-gui.workspace = true
+kettle-ui.workspace = true
+log.workspace = true
 rmcp = { version = "3.9", default-features = false, features = ["client", "transport-child-process"] }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["io-util", "process", "rt-multi-thread", "time"] }
+
+[dev-dependencies]
+futures-executor.workspace = true
+kettle-ui-headless.workspace = true
+rmcp = { version = "3.9", default-features = false, features = ["server", "transport-io"] }
+
+[[test]]
+name = "commands"
+harness = false
