@@ -105,8 +105,16 @@ struct Command {
 type Commands = Arc<BTreeMap<String, Command>>;
 
 /// The interpreter's working directory, shared with running commands so
-/// that they can change it.
-type Cwd = Arc<Mutex<PathBuf>>;
+/// that the last one started can change it.
+type Cwd = Arc<Mutex<SharedCwd>>;
+
+/// The interpreter's working directory, and which command may change it.
+struct SharedCwd {
+    path: PathBuf,
+    /// How many commands have been started: the number of the last one,
+    /// the only one that may change the directory.
+    started: u64,
+}
 
 /// Runs command lines by looking up registered commands.
 pub struct Interpreter {
@@ -127,13 +135,16 @@ impl Interpreter {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
         Self {
             commands: Commands::default(),
-            cwd: Arc::new(Mutex::new(cwd)),
+            cwd: Arc::new(Mutex::new(SharedCwd {
+                path: cwd,
+                started: 0,
+            })),
         }
     }
 
     /// The working directory, which commands started from now on get.
     pub fn cwd(&self) -> PathBuf {
-        lock(&self.cwd).clone()
+        lock(&self.cwd).path.clone()
     }
 
     /// Changes the working directory, for commands started from now on.
@@ -142,7 +153,7 @@ impl Interpreter {
     ///
     /// If the path is relative.
     pub fn set_cwd(&self, path: impl Into<PathBuf>) {
-        *lock(&self.cwd) = absolute(path.into());
+        lock(&self.cwd).path = absolute(path.into());
     }
 
     /// Registers a command. It gets the words after its name as arguments.
@@ -284,12 +295,18 @@ impl Interpreter {
             };
             (name, job)
         };
+        let (cwd, number) = {
+            let mut shared = lock(&self.cwd);
+            shared.started += 1;
+            (shared.path.clone(), shared.started)
+        };
         let (sender, receiver) = mpsc::unbounded();
         let mut ctx = Context {
             name: name.clone(),
             commands: self.commands.clone(),
-            cwd: self.cwd(),
+            cwd,
             shared_cwd: self.cwd.clone(),
+            number,
             sender,
         };
         thread::Builder::new()
@@ -317,7 +334,7 @@ fn is_prefix(name: &str) -> bool {
 
 /// Locks the working directory. Nothing can panic while it's locked, but
 /// a poisoned lock would still hold a valid path.
-fn lock(cwd: &Cwd) -> std::sync::MutexGuard<'_, PathBuf> {
+fn lock(cwd: &Cwd) -> std::sync::MutexGuard<'_, SharedCwd> {
     cwd.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -386,6 +403,8 @@ pub struct Context {
     cwd: PathBuf,
     /// The interpreter's working directory.
     shared_cwd: Cwd,
+    /// Which command this is, counting from 1 (see [`SharedCwd::started`]).
+    number: u64,
     sender: mpsc::UnboundedSender<Request>,
 }
 
@@ -414,16 +433,20 @@ impl Context {
         &self.cwd
     }
 
-    /// Changes the working directory, like `cd`: for this command, and for
-    /// commands started from now on. Commands already running keep theirs.
-    /// The path isn't checked or normalized.
+    /// Changes the working directory, like `cd`: for this command, and, if
+    /// no command has been started since this one, for commands started
+    /// from now on. Commands already running keep theirs. The path isn't
+    /// checked or normalized.
     ///
     /// # Panics
     ///
     /// If the path is relative; [`resolve`](Context::resolve) it first.
     pub fn set_cwd(&mut self, path: impl Into<PathBuf>) {
         self.cwd = absolute(path.into());
-        *lock(&self.shared_cwd) = self.cwd.clone();
+        let mut shared = lock(&self.shared_cwd);
+        if shared.started == self.number {
+            shared.path = self.cwd.clone();
+        }
     }
 
     /// Turns a path given by the user into one the command can use: relative
@@ -873,6 +896,44 @@ mod tests {
         i.set_cwd("/new");
         drop(show);
         assert_eq!(printed(&mut requests), "/old");
+    }
+
+    #[test]
+    fn only_the_last_command_started_changes_the_working_directory() {
+        let mut i = Interpreter::new();
+        i.set_cwd("/start");
+        i.register("later", "Test", |ctx, args| {
+            let _ = ctx.show(IslandBuilder::new(column([])));
+            ctx.set_cwd(ctx.resolve(&args[0]));
+            ctx.print(ctx.cwd().display().to_string());
+            Ok(())
+        });
+        i.register("pwd", "Test", |ctx, _| {
+            ctx.print(ctx.cwd().display().to_string());
+            Ok(())
+        });
+        let mut requests = i.run("later a").unwrap();
+        let Some(Request::Show(show)) = next(&mut requests) else {
+            panic!("expected Show");
+        };
+        // A command started later, even one that has finished, takes over.
+        let mut pwd = i.run("pwd").unwrap();
+        assert_eq!(printed(&mut pwd), "/start");
+        assert!(next(&mut pwd).is_none());
+        drop(show);
+        assert_eq!(printed(&mut requests), "/start/a");
+        assert!(next(&mut requests).is_none());
+        assert_eq!(i.cwd(), Path::new("/start"));
+
+        // With nothing started since, it changes the shared one.
+        let mut requests = i.run("later b").unwrap();
+        let Some(Request::Show(show)) = next(&mut requests) else {
+            panic!("expected Show");
+        };
+        drop(show);
+        assert_eq!(printed(&mut requests), "/start/b");
+        assert!(next(&mut requests).is_none());
+        assert_eq!(i.cwd(), Path::new("/start/b"));
     }
 
     #[test]

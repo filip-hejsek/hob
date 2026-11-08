@@ -349,7 +349,11 @@ and renders the island as an indented text outline.
   starts as the process's. Each command gets a snapshot when it starts
   (`ctx.cwd()`); `ctx.set_cwd` changes it for the command and for commands
   started later, but not for those already running, like a shell's
-  background jobs. It lives in hob-core, not hob-fs, because any command
+  background jobs. Only the last command started changes it for later
+  ones, even if that command has finished: starting a command takes the
+  right away from all earlier ones, which still change their own. So two
+  commands changing it concurrently don't race, and a slow command can't
+  undo a `cd` typed after it. It lives in hob-core, not hob-fs, because any command
   that takes a path needs it. `ctx.resolve(path)` makes a path absolute.
   It doesn't expand `~`, which the command line already did (as a shell
   does, so a quoted `~` stays), and doesn't normalize, so `..` in a path
