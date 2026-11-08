@@ -312,6 +312,7 @@ impl Interpreter {
         thread::Builder::new()
             .name(format!("hob command {name}"))
             .spawn(move || {
+                let _scope = logger::for_command(ctx.sender.clone());
                 let error = match panic::catch_unwind(AssertUnwindSafe(|| command(&mut ctx))) {
                     Ok(Ok(())) => return,
                     Ok(Err(e)) => e.to_string(),

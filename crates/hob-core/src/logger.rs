@@ -1,12 +1,55 @@
 //! A [`log`] backend for frontends: it sends the records of the `log` crate
 //! (from kettle-ui, the frontend itself, and dependencies) to the frontend,
-//! as [`LogRecord`]s.
+//! as [`LogRecord`]s. Records logged on a command's thread go into the
+//! command's block instead, like those of
+//! [`Context::error`](crate::Context::error) and friends.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-use crate::{Level, LogRecord};
+use crate::{Level, LogRecord, Request};
 use futures_channel::mpsc;
+
+thread_local! {
+    /// The requests of the command running on this thread, if any.
+    static COMMAND: RefCell<Option<mpsc::UnboundedSender<Request>>> =
+        const { RefCell::new(None) };
+}
+
+/// While it lives, records logged on this thread go to a command's
+/// requests; see [`for_command`].
+pub(crate) struct CommandScope(());
+
+/// Sends records logged on this thread to a command's requests, until the
+/// returned scope is dropped.
+pub(crate) fn for_command(sender: mpsc::UnboundedSender<Request>) -> CommandScope {
+    COMMAND.set(Some(sender));
+    CommandScope(())
+}
+
+impl Drop for CommandScope {
+    fn drop(&mut self) {
+        COMMAND.set(None);
+    }
+}
+
+/// Sends a record to the command running on this thread. Gives it back if
+/// there's none, or its frontend is gone.
+fn send_to_command(record: LogRecord) -> Result<(), LogRecord> {
+    // `try_with`: the thread-local may already be gone when a destructor
+    // logs at thread exit.
+    let sender = COMMAND.try_with(|command| command.borrow().clone());
+    let Ok(Some(sender)) = sender else {
+        return Err(record);
+    };
+    sender
+        .unbounded_send(Request::Log(record))
+        .map_err(|e| match e.into_inner() {
+            Request::Log(record) => record,
+            _ => unreachable!("sent a Log"),
+        })
+}
 
 /// Sends [`log`] records to the frontend. Records of our crates are logged
 /// from `level` up; records of dependencies only from warnings up, and they
@@ -95,6 +138,10 @@ impl log::Log for Logger {
             }
             entry = entry.ephemeral();
         }
+        // The frontend handles it like the command's own records.
+        let Err(entry) = send_to_command(entry) else {
+            return;
+        };
         if entry.level <= Level::Warn {
             eprintln!("hob: {entry} ({target})");
         }
@@ -152,5 +199,39 @@ mod tests {
             ("other", true),
         ];
         assert_eq!(received, expected.map(|(m, e)| (m.to_owned(), e)));
+    }
+
+    #[test]
+    fn records_on_a_command_thread_go_to_the_command() {
+        let (sender, mut receiver) = mpsc::unbounded();
+        let logger = Logger {
+            level: Level::Info,
+            sender,
+            seen: Mutex::default(),
+        };
+        let log = |message| {
+            let args = format_args!("{message}");
+            let record = log::Record::builder()
+                .level(log::Level::Info)
+                .target("hob_fs")
+                .args(args)
+                .build();
+            log::Log::log(&logger, &record);
+        };
+        let (command, mut requests) = mpsc::unbounded();
+        let scope = for_command(command);
+        log("in the command");
+        drop(scope);
+        log("after it");
+        let Ok(Request::Log(record)) = requests.try_recv() else {
+            panic!("expected Log");
+        };
+        assert_eq!(
+            (&*record.target, &*record.message),
+            ("hob_fs", "in the command")
+        );
+        assert!(requests.try_recv().is_err());
+        assert_eq!(receiver.try_recv().unwrap().message, "after it");
+        assert!(receiver.try_recv().is_err());
     }
 }

@@ -453,6 +453,12 @@ they're made from the notes whenever `todo` runs.
   hands the records to the frontend; hob-gui turns them into notices in the
   scrollback, outside any block. Errors and warnings also go to stderr. Not `tracing`: spans aren't needed, since commands log through
   their context.
+- Records logged on a command's thread (e.g. by a library it calls) go into
+  the command's block instead, as requests like those of `ctx.warn`, so the
+  frontend treats them the same (also for stderr). The command's thread
+  holds its request sender in a thread-local while it runs; other threads
+  it starts don't inherit it. Their target stays the module path, so
+  `messages` shows where they came from.
 - Our crates log from `info` up (`HOB_LOG` changes the level), dependencies
   from warnings up. Only error and warning notices are shown in the
   scrollback, and of dependencies only errors: their warnings are rarely
