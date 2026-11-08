@@ -12,6 +12,10 @@ TODO.md.
 
 - Text fields of a frozen island are low-contrast (iced's disabled style),
   which makes the result hard to read.
+- Some widgets' layout breaks when there is insufficient width.
+- Two updates in quick succession may cause unpleasant flicker, especially
+  if both change the layout. The fix is either to add some delay when
+  applying updates, or to implement atomic updates in `kettle-ui`.
 
 ## hob-headless and hob-cli
 
