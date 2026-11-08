@@ -54,6 +54,11 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - hob-headless resends a live island's images with every change of the
   island; clients could get each image once.
 - Animated images show only their first frame.
+- hob-mcp sends JPEGs (and recompressed ones, reconstructed) as they are,
+  with their Exif orientation tag. A client that ignores the tag shows a
+  rotated photo sideways, and the size in the outline (after orientation)
+  doesn't match. Unchecked whether MCP clients or the Claude API apply it;
+  if not, decode and rotate JPEGs whose orientation isn't the default.
 
 ## kettle-ui-iced
 
