@@ -15,9 +15,13 @@ use hob_mcp_test_client::Client;
 use kettle_ui::Outcome;
 use kettle_ui_headless::{Island, outline};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
-    Implementation, JsonObject, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
-    ServerConfig, Tool, ToolAnnotations,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, EmbeddedResource,
+    ErrorData, GetPromptRequestParams, GetPromptResponse, GetPromptResult, Implementation,
+    JsonObject, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+    ListToolsResult, PaginatedRequestParams, Prompt, PromptArgument, PromptMessage,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+    ResourceContents, ResourceTemplate, Role, ServerCapabilities, ServerConfig, Tool,
+    ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
@@ -43,6 +47,11 @@ const TESTS: &[(&str, fn())] = &[
         shows_images_and_structured_content,
     ),
     ("reports_tool_errors", reports_tool_errors),
+    ("lists_resources", lists_resources),
+    ("reads_resources", reads_resources),
+    ("lists_and_describes_prompts", lists_and_describes_prompts),
+    ("gets_prompts_through_a_form", gets_prompts_through_a_form),
+    ("gets_prompts_with_arguments", gets_prompts_with_arguments),
     #[cfg(not(feature = "http"))]
     ("needs_http_for_urls", needs_http_for_urls),
 ];
@@ -82,7 +91,12 @@ struct TestServer {
 
 impl ServerHandler for TestServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .enable_prompts()
+            .build();
+        ServerConfig::new(capabilities)
             .with_server_info(Implementation::new("test-server", "1.2.3"))
             .with_instructions("Use echo to repeat things.")
     }
@@ -163,6 +177,90 @@ impl ServerHandler for TestServer {
         };
         Ok(result.into())
     }
+
+    async fn list_resources(
+        &self,
+        _: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        let resources = vec![
+            Resource::new("test://hello", "hello.txt").with_title("Greeting"),
+            Resource::new("test://pixel", "pixel.png"),
+            Resource::new("test://both", "both"),
+        ];
+        Ok(ListResourcesResult::with_all_items(resources))
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        let template = ResourceTemplate::new("test://items/{id}", "item");
+        Ok(ListResourceTemplatesResult::with_all_items(vec![template]))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        let contents = match request.uri.as_str() {
+            "test://hello" => vec![hello()],
+            "test://pixel" => {
+                vec![ResourceContents::blob(PIXEL, "test://pixel").with_mime_type("image/png")]
+            }
+            "test://both" => vec![
+                ResourceContents::text("A", "test://a"),
+                ResourceContents::blob("AAAA", "test://b"),
+            ],
+            _ => return Err(ErrorData::resource_not_found("no such resource", None)),
+        };
+        Ok(ReadResourceResult::new(contents).into())
+    }
+
+    async fn list_prompts(
+        &self,
+        _: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        let arguments = vec![
+            PromptArgument::new("name")
+                .with_description("Who to greet")
+                .with_required(true),
+            PromptArgument::new("mood").with_title("Mood"),
+        ];
+        let prompts = vec![
+            Prompt::new("greet", Some("Greet someone.\nNicely."), Some(arguments)),
+            Prompt::new("plain", None::<String>, None),
+        ];
+        Ok(ListPromptsResult::with_all_items(prompts))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, ErrorData> {
+        let arguments = request.arguments.unwrap_or_default();
+        let text = |name: &str| arguments.get(name).and_then(|v| v.as_str()).unwrap_or("");
+        let result = match request.name.as_str() {
+            "greet" => GetPromptResult::new(vec![
+                PromptMessage::new_text(Role::User, format!("Greet {}.", text("name"))),
+                PromptMessage::new_text(Role::Assistant, format!("Hello{}!", text("mood"))),
+            ])
+            .with_description("A greeting"),
+            "plain" => GetPromptResult::new(vec![
+                PromptMessage::new(Role::User, ContentBlock::image(PIXEL, "image/png")),
+                PromptMessage::new(
+                    Role::Assistant,
+                    ContentBlock::Resource(EmbeddedResource::new(hello())),
+                ),
+            ]),
+            _ => return Err(ErrorData::invalid_params("no such prompt", None)),
+        };
+        Ok(result.into())
+    }
 }
 
 /// A 1x1 PNG, base64-encoded.
@@ -170,6 +268,10 @@ const PIXEL: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN
 
 fn object(value: serde_json::Value) -> JsonObject {
     value.as_object().unwrap().clone()
+}
+
+fn hello() -> ResourceContents {
+    ResourceContents::text("Hello!", "test://hello")
 }
 
 /// Serves `server` on stdio, until the client closes it.
@@ -249,7 +351,10 @@ fn connects_and_lists_tools() {
         output[0].starts_with("Connected to test-server 1.2.3, using MCP "),
         "{output:?}"
     );
-    assert!(output[0].ends_with(".\nIt offers: tools."), "{output:?}");
+    assert!(
+        output[0].ends_with(".\nIt offers: tools, resources, prompts."),
+        "{output:?}"
+    );
     assert_eq!(output[1], "Instructions:\nUse echo to repeat things.");
     assert_eq!(
         h.run("tools"),
@@ -509,5 +614,136 @@ fn reports_tool_errors() {
     assert_eq!(
         h.run("call fail"),
         ["It broke.", "error: the tool reported an error"]
+    );
+}
+
+fn lists_resources() {
+    let h = Harness::new();
+    h.connect("--server");
+    assert_eq!(
+        h.run("resources"),
+        ["column\n\
+          \x20 label \"Resources:\"\n\
+          \x20 table (horizontal borders)\n\
+          \x20   row\n\
+          \x20     label \"test://hello\"\n\
+          \x20     label \"Greeting\"\n\
+          \x20   row\n\
+          \x20     label \"test://pixel\"\n\
+          \x20     label \"pixel.png\"\n\
+          \x20   row\n\
+          \x20     label \"test://both\"\n\
+          \x20     label \"both\"\n\
+          \x20 label \"Templates:\"\n\
+          \x20 table (horizontal borders)\n\
+          \x20   row\n\
+          \x20     label \"test://items/{id}\"\n\
+          \x20     label \"item\"\n"]
+    );
+}
+
+fn reads_resources() {
+    let h = Harness::new();
+    h.connect("--server");
+    assert_eq!(h.run("read test://hello"), ["Hello!"]);
+    assert_eq!(
+        h.run("read test://pixel"),
+        ["image \"image/png image test://pixel\" (1x1)\n"]
+    );
+    assert_eq!(
+        h.run("read test://both"),
+        ["test://a:\nA", "test://b:\nbinary data, 3 bytes"]
+    );
+    let output = h.run("read test://nope");
+    assert_eq!(output.len(), 1, "{output:?}");
+    assert!(output[0].starts_with("error: "), "{output:?}");
+    let completion = h.interpreter.complete("read test://h");
+    assert_eq!(completion.line, "read test://hello ");
+    let completion = h.interpreter.complete("prompts g");
+    assert_eq!(completion.line, "prompts greet ");
+}
+
+fn lists_and_describes_prompts() {
+    let h = Harness::new();
+    h.connect("--server");
+    assert_eq!(
+        h.run("prompts"),
+        ["table (horizontal borders)\n\
+          \x20 row\n\
+          \x20   label \"greet\"\n\
+          \x20   label \"Greet someone.\"\n\
+          \x20 row\n\
+          \x20   label \"plain\"\n\
+          \x20   label \"\"\n"]
+    );
+    assert_eq!(
+        h.run("prompts greet"),
+        ["greet\n\
+          \n\
+          Greet someone.\n\
+          Nicely.\n\
+          \n\
+          Arguments:\n\
+          - name (required): Who to greet\n\
+          - mood: Mood"]
+    );
+    assert_eq!(h.run("prompts plain"), ["plain\n\nArguments: none"]);
+    assert_eq!(h.run("prompts nope"), ["error: no prompt \"nope\""]);
+}
+
+fn gets_prompts_through_a_form() {
+    let h = Harness::new();
+    h.connect("--server");
+    let output = h.run_with("prompt greet", |island| {
+        island.type_text("arg0", "Ada").unwrap();
+        island.press("Get").unwrap()
+    });
+    assert_eq!(
+        output,
+        [
+            "column\n\
+             \x20 label \"Get prompt greet\"\n\
+             \x20 column\n\
+             \x20   label \"name (required)\"\n\
+             \x20   label \"Who to greet\"\n\
+             \x20   text_field arg0: \"\"\n\
+             \x20 column\n\
+             \x20   label \"mood: Mood\"\n\
+             \x20   text_field arg1: \"\"\n\
+             \x20 row\n\
+             \x20   button \"Get\"\n\
+             \x20   button \"Cancel\"\n",
+            "Description: A greeting",
+            "User:\nGreet Ada.",
+            "Assistant:\nHello!",
+        ]
+    );
+    let output = h.run_with("prompt greet", |island| island.press("Cancel").unwrap());
+    assert_eq!(output[1], "Cancelled.");
+}
+
+fn gets_prompts_with_arguments() {
+    let h = Harness::new();
+    h.connect("--server");
+    assert_eq!(
+        h.run("prompt greet name=Ada 'mood=, dear'"),
+        [
+            "Description: A greeting",
+            "User:\nGreet Ada.",
+            "Assistant:\nHello, dear!",
+        ]
+    );
+    assert_eq!(
+        h.run("prompt greet Ada"),
+        ["error: expected NAME=VALUE, not \"Ada\""]
+    );
+    // Without arguments: not asked for any.
+    assert_eq!(
+        h.run("prompt plain"),
+        [
+            "User:",
+            "image \"image/png image from plain\" (1x1)\n",
+            "Assistant:\nResource test://hello:\nHello!",
+        ]
     );
 }

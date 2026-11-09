@@ -78,7 +78,8 @@ in ../DECISIONS.md.
   (serde_json without `preserve_order`; enabling it here would change other
   crates' JSON when built together). Tool names are completed from the
   list last fetched (by `connect` or `tools`), since completion can't wait
-  for the server.
+  for the server. The same goes for resource URIs and prompt names:
+  `connect` lists all three (stopping at the first failure).
 - `call TOOL` asks for the arguments through a form built from the tool's
   input schema: one field per property, alphabetically (serde_json has
   already lost the schema's order). Strings and numbers get a text field,
@@ -99,3 +100,17 @@ in ../DECISIONS.md.
   embedded resources and links described (with text resources' text), then
   the structured content as pretty JSON. A result marked as an error makes
   the command fail after showing it.
+- Content is shown the same way wherever it appears (tool results, prompt
+  messages, resources): text as it is, images (including binary resources
+  with an `image/` type) in an island, other binary data by type and size.
+- The commands come in pairs, as MCP's requests do: `tools`/`call`,
+  `resources`/`read`, `prompts`/`prompt`. `resources` shows resources and
+  templates (by URI, and title or name) in one island; a failure to list
+  the templates is only a warning, since some servers don't implement it.
+  `read URI` takes any URI, so a template is read by typing its URI filled
+  in. When a read returns several contents, each is headed by its URI.
+- `prompt NAME` asks for the arguments in a form (text fields, since
+  prompt arguments are strings; empty ones are left out); `prompt NAME
+  NAME=VALUE...` gives them without asking, like `call TOOL JSON`. A
+  prompt without arguments is got without asking. The messages are shown
+  under their role ("User:", "Assistant:"), after the description.

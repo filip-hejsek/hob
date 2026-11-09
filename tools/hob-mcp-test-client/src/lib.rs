@@ -10,6 +10,11 @@
 //! - `tools [TOOL]`: lists the server's tools, or describes one.
 //! - `call TOOL [JSON]`: calls a tool, with arguments filled in through a
 //!   form built from its input schema, or given as a JSON object.
+//! - `resources`: lists the server's resources and resource templates.
+//! - `read URI`: reads a resource.
+//! - `prompts [PROMPT]`: lists the server's prompts, or describes one.
+//! - `prompt PROMPT [NAME=VALUE...]`: gets a prompt, with arguments filled
+//!   in through a form, or given as NAME=VALUE.
 //!
 //! What a server writes to stderr is logged (info, so `messages` shows it).
 //! If it fails to connect, its stderr so far is printed too.
@@ -21,14 +26,17 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 mod call;
+mod content;
+mod prompt;
 
 use hob_core::args::{Kind, Matches, Spec};
 use hob_core::{CommandResult, Context, Interpreter};
 use kettle_ui::IslandBuilder;
-use kettle_ui::widget::{label, table_horizontal};
+use kettle_ui::widget::{column, label, table_horizontal};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, ClientCapabilities, ClientConfig, Implementation,
-    ServerCapabilities, ServerPeerInfo, Tool,
+    CallToolRequestParams, CallToolResponse, ClientCapabilities, ClientConfig,
+    GetPromptRequestParams, GetPromptResponse, Implementation, Prompt, ReadResourceRequestParams,
+    ReadResourceResponse, Resource, ServerCapabilities, ServerPeerInfo, Tool,
 };
 use rmcp::service::{Peer, RunningService, ServiceError};
 use rmcp::transport::TokioChildProcess;
@@ -61,9 +69,18 @@ type BoxError = Box<dyn Error + Send + Sync>;
 pub struct Client {
     runtime: Handle,
     connection: Mutex<Option<Connection>>,
-    /// The names of the server's tools, as last listed, for completion.
-    tool_names: Arc<Mutex<Vec<String>>>,
+    /// What the server offers, as last listed, for completion.
+    names: Arc<Mutex<Names>>,
     next_id: AtomicU64,
+}
+
+/// The names of what a server offers, for completion.
+#[derive(Default)]
+struct Names {
+    tools: Vec<String>,
+    /// The resources' URIs.
+    resources: Vec<String>,
+    prompts: Vec<String>,
 }
 
 struct Connection {
@@ -82,7 +99,7 @@ impl Client {
         Arc::new(Client {
             runtime,
             connection: Mutex::new(None),
-            tool_names: Arc::new(Mutex::new(Vec::new())),
+            names: Arc::default(),
             next_id: AtomicU64::new(0),
         })
     }
@@ -96,7 +113,7 @@ impl Client {
     }
 
     fn close_connection(&self, mut connection: Connection) {
-        lock(&self.tool_names).clear();
+        *lock(&self.names) = Names::default();
         let close = connection.service.close_with_timeout(CLOSE_TIMEOUT);
         let _ = self.runtime.block_on(close);
     }
@@ -130,12 +147,23 @@ impl Client {
         if let Some(instructions) = &info.instructions {
             ctx.print(format!("Instructions:\n{instructions}"));
         }
-        if info.capabilities.tools.is_some() {
-            // For completion.
-            match self.request(id, peer.list_all_tools()) {
-                Ok(tools) => self.remember_tools(&tools),
-                Err(e) => ctx.warn(format!("can't list the tools: {e}")),
+        // For completion. Stops at the first failure: the server may be gone.
+        let capabilities = &info.capabilities;
+        let listed = (|| {
+            if capabilities.tools.is_some() {
+                self.list_tools(&peer, id).map_err(|e| ("tools", e))?;
             }
+            if capabilities.resources.is_some() {
+                self.list_resources(&peer, id)
+                    .map_err(|e| ("resources", e))?;
+            }
+            if capabilities.prompts.is_some() {
+                self.list_prompts(&peer, id).map_err(|e| ("prompts", e))?;
+            }
+            Ok(())
+        })();
+        if let Err((what, e)) = listed {
+            ctx.warn(format!("can't list the {what}: {e}"));
         }
         Ok(())
     }
@@ -257,19 +285,132 @@ impl Client {
         call::show_result(ctx, name, &result)
     }
 
+    fn resources(&self, ctx: &mut Context, _: &Matches) -> CommandResult {
+        let (peer, id) = self.peer()?;
+        let resources = self.list_resources(&peer, id)?;
+        let templates = match self.request(id, peer.list_all_resource_templates()) {
+            Ok(templates) => templates,
+            Err(e) => {
+                ctx.warn(format!("can't list the resource templates: {e}"));
+                Vec::new()
+            }
+        };
+        if resources.is_empty() && templates.is_empty() {
+            ctx.print("The server has no resources.");
+            return Ok(());
+        }
+        let rows = (resources.iter())
+            .map(|r| [label(&*r.uri), label(r.title.as_deref().unwrap_or(&r.name))]);
+        let resources = table_horizontal(rows.collect::<Vec<_>>());
+        let island = if templates.is_empty() {
+            resources
+        } else {
+            let rows = (templates.iter()).map(|t| {
+                [
+                    label(&*t.uri_template),
+                    label(t.title.as_deref().unwrap_or(&t.name)),
+                ]
+            });
+            column([
+                label("Resources:"),
+                resources,
+                label("Templates:"),
+                table_horizontal(rows.collect::<Vec<_>>()),
+            ])
+        };
+        ctx.print_island(IslandBuilder::new(island).freeze()?);
+        Ok(())
+    }
+
+    fn read(&self, ctx: &mut Context, args: &Matches) -> CommandResult {
+        let uri = args.value("URI").ok_or("no URI")?;
+        let (peer, id) = self.peer()?;
+        require(&peer, "resources", |c| c.resources.is_some())?;
+        let params = ReadResourceRequestParams::new(uri);
+        let result = match self.request(id, peer.read_resource_once(params))? {
+            ReadResourceResponse::Complete(result) => result,
+            ReadResourceResponse::InputRequired(_) => {
+                return Err("the server asked for more input, which isn't supported yet".into());
+            }
+            _ => return Err("the server's response is of an unknown kind".into()),
+        };
+        if result.contents.is_empty() {
+            ctx.print("The resource is empty.");
+        }
+        // Several contents (e.g. a directory's files) are told apart by URI.
+        let several = result.contents.len() > 1;
+        for contents in &result.contents {
+            let heading = several.then(|| format!("{}:", content::uri(contents)));
+            content::show_resource(ctx, heading.as_deref(), contents);
+        }
+        Ok(())
+    }
+
+    fn prompts(&self, ctx: &mut Context, args: &Matches) -> CommandResult {
+        let (peer, id) = self.peer()?;
+        let prompts = self.list_prompts(&peer, id)?;
+        match args.value("PROMPT") {
+            None if prompts.is_empty() => ctx.print("The server has no prompts."),
+            None => {
+                let rows = (prompts.iter()).map(|p| [label(&*p.name), label(prompt_summary(p))]);
+                let table = table_horizontal(rows.collect::<Vec<_>>());
+                ctx.print_island(IslandBuilder::new(table).freeze()?);
+            }
+            Some(name) => ctx.print(prompt::describe(find_prompt(&prompts, name)?)),
+        }
+        Ok(())
+    }
+
+    fn prompt(&self, ctx: &mut Context, args: &Matches) -> CommandResult {
+        let name = args.value("PROMPT").ok_or("no prompt")?;
+        let given = args.values("ARG");
+        let (peer, id) = self.peer()?;
+        let arguments = if given.is_empty() {
+            let prompts = self.list_prompts(&peer, id)?;
+            match prompt::ask(ctx, find_prompt(&prompts, name)?)? {
+                Some(arguments) => arguments,
+                None => {
+                    ctx.print("Cancelled.");
+                    return Ok(());
+                }
+            }
+        } else {
+            prompt::parse_assignments(given)?
+        };
+        let params = GetPromptRequestParams::new(name).with_arguments(arguments);
+        let result = match self.request(id, peer.get_prompt_once(params))? {
+            GetPromptResponse::Complete(result) => result,
+            GetPromptResponse::InputRequired(_) => {
+                return Err("the server asked for more input, which isn't supported yet".into());
+            }
+            _ => return Err("the server's response is of an unknown kind".into()),
+        };
+        prompt::show(ctx, name, &result);
+        Ok(())
+    }
+
     /// Lists the server's tools (and remembers them for completion).
     fn list_tools(&self, peer: &Peer<RoleClient>, id: u64) -> Result<Vec<Tool>, BoxError> {
-        let offers_tools = (peer.peer_info()).is_some_and(|info| info.capabilities.tools.is_some());
-        if !offers_tools {
-            return Err("the server doesn't offer tools".into());
-        }
+        require(peer, "tools", |c| c.tools.is_some())?;
         let tools = self.request(id, peer.list_all_tools())?;
-        self.remember_tools(&tools);
+        lock(&self.names).tools = tools.iter().map(|t| t.name.to_string()).collect();
         Ok(tools)
     }
 
-    fn remember_tools(&self, tools: &[Tool]) {
-        *lock(&self.tool_names) = tools.iter().map(|tool| tool.name.to_string()).collect();
+    /// Lists the server's resources (and remembers them for completion).
+    fn list_resources(&self, peer: &Peer<RoleClient>, id: u64) -> Result<Vec<Resource>, BoxError> {
+        require(peer, "resources", |c| c.resources.is_some())?;
+        let resources = self.request(id, peer.list_all_resources())?;
+        lock(&self.names).resources = resources.iter().map(|r| r.uri.clone()).collect();
+        Ok(resources)
+    }
+
+    /// Lists the server's prompts (and remembers them for completion).
+    fn list_prompts(&self, peer: &Peer<RoleClient>, id: u64) -> Result<Vec<Prompt>, BoxError> {
+        require(peer, "prompts", |c| c.prompts.is_some())?;
+        let prompts = self.request(id, peer.list_all_prompts())?;
+        lock(&self.names).prompts = prompts.iter().map(|p| p.name.clone()).collect();
+        Ok(prompts)
     }
 
     /// The connection's peer, to send requests to, and the connection's id.
@@ -292,7 +433,7 @@ impl Client {
                 let mut connection = lock(&self.connection);
                 if connection.as_ref().is_some_and(|c| c.id == id) {
                     let name = connection.take().map(|c| c.name).unwrap_or_default();
-                    lock(&self.tool_names).clear();
+                    *lock(&self.names) = Names::default();
                     return Err(format!("{name} has disconnected").into());
                 }
                 Err(ServiceError::TransportClosed.into())
@@ -324,11 +465,13 @@ pub fn register(interpreter: &mut Interpreter, client: &Arc<Client>) {
     interpreter.register_spec(
         "tools",
         "List the server's tools, or describe one",
-        Spec::new().arg("TOOL", tool_kind(client)).optional(),
+        Spec::new()
+            .arg("TOOL", names_kind(client, |n| &n.tools))
+            .optional(),
         move |ctx, args| c.tools(ctx, args),
     );
     let spec = Spec::new()
-        .arg("TOOL", tool_kind(client))
+        .arg("TOOL", names_kind(client, |n| &n.tools))
         .arg("JSON", Kind::Text)
         .optional()
         .repeated();
@@ -339,12 +482,76 @@ pub fn register(interpreter: &mut Interpreter, client: &Arc<Client>) {
         spec,
         move |ctx, args| c.call(ctx, args),
     );
+    let c = client.clone();
+    interpreter.register_spec(
+        "resources",
+        "List the server's resources and resource templates",
+        Spec::new(),
+        move |ctx, args| c.resources(ctx, args),
+    );
+    let c = client.clone();
+    interpreter.register_spec(
+        "read",
+        "Read a resource",
+        Spec::new().arg("URI", names_kind(client, |n| &n.resources)),
+        move |ctx, args| c.read(ctx, args),
+    );
+    let c = client.clone();
+    interpreter.register_spec(
+        "prompts",
+        "List the server's prompts, or describe one",
+        Spec::new()
+            .arg("PROMPT", names_kind(client, |n| &n.prompts))
+            .optional(),
+        move |ctx, args| c.prompts(ctx, args),
+    );
+    let spec = Spec::new()
+        .arg("PROMPT", names_kind(client, |n| &n.prompts))
+        .arg("ARG", Kind::Text)
+        .optional()
+        .repeated();
+    let c = client.clone();
+    interpreter.register_spec(
+        "prompt",
+        "Get a prompt: fill in its arguments, or give them as NAME=VALUE",
+        spec,
+        move |ctx, args| c.prompt(ctx, args),
+    );
 }
 
-/// A tool's name, completed from the tools last listed.
-fn tool_kind(client: &Client) -> Kind {
-    let names = client.tool_names.clone();
-    Kind::custom(move |_| lock(&names).clone())
+/// Names completed from those last listed (`which` of them).
+fn names_kind(client: &Client, which: fn(&Names) -> &Vec<String>) -> Kind {
+    let names = client.names.clone();
+    Kind::custom(move |_| which(&lock(&names)).clone())
+}
+
+/// Fails unless the server offers `what` (by `offered`, from its
+/// capabilities).
+fn require(
+    peer: &Peer<RoleClient>,
+    what: &str,
+    offered: fn(&ServerCapabilities) -> bool,
+) -> Result<(), BoxError> {
+    match peer
+        .peer_info()
+        .is_some_and(|info| offered(&info.capabilities))
+    {
+        true => Ok(()),
+        false => Err(format!("the server doesn't offer {what}").into()),
+    }
+}
+
+fn find_prompt<'a>(prompts: &'a [Prompt], name: &str) -> Result<&'a Prompt, BoxError> {
+    let prompt = prompts.iter().find(|prompt| prompt.name == name);
+    prompt.ok_or_else(|| format!("no prompt {name:?}").into())
+}
+
+/// A prompt in one line: its title, or the first line of its description.
+fn prompt_summary(prompt: &Prompt) -> String {
+    let description = prompt.description.as_deref().and_then(|d| d.lines().next());
+    (prompt.title.as_deref().or(description))
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn find_tool<'a>(tools: &'a [Tool], name: &str) -> Result<&'a Tool, BoxError> {

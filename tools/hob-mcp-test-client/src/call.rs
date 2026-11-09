@@ -3,18 +3,16 @@
 
 use std::sync::Arc;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use hob_core::{CommandResult, Context};
 use kettle_ui::widget::{
     Widget, button, cancel_button, checkbox, column, label, row, state, submit_button, text_area,
     text_field,
 };
-use kettle_ui::{Fields, Image, Inputs, IslandBuilder, Outcome};
-use rmcp::model::{CallToolResult, ContentBlock, ImageContent, JsonObject, ResourceContents, Tool};
+use kettle_ui::{Fields, Inputs, IslandBuilder, Outcome};
+use rmcp::model::{CallToolResult, JsonObject, Tool};
 use serde_json::Value;
 
-use crate::{BoxError, pretty};
+use crate::{BoxError, content, pretty};
 
 /// One argument in the form: a property of the input schema.
 struct Param {
@@ -333,36 +331,8 @@ fn parse(kind: ParamKind, text: &str) -> Result<Value, String> {
 /// Shows what tool `name` returned: its content, then its structured
 /// content. Fails if the tool reported an error.
 pub(crate) fn show_result(ctx: &Context, name: &str, result: &CallToolResult) -> CommandResult {
-    for content in &result.content {
-        match content {
-            ContentBlock::Text(text) => ctx.print(text.text.as_str()),
-            ContentBlock::Image(content) => show_image(ctx, name, content),
-            ContentBlock::Audio(audio) => {
-                ctx.print(format!("Audio: {}, {}", audio.mime_type, size(&audio.data)));
-            }
-            ContentBlock::Resource(embedded) => match &embedded.resource {
-                ResourceContents::TextResourceContents { uri, text, .. } => {
-                    ctx.print(format!("Resource {uri}:\n{text}"));
-                }
-                ResourceContents::BlobResourceContents {
-                    uri,
-                    mime_type,
-                    blob,
-                    ..
-                } => {
-                    let mime_type = mime_type.as_deref().unwrap_or("binary data");
-                    ctx.print(format!("Resource {uri}: {mime_type}, {}", size(blob)));
-                }
-                _ => ctx.print("A resource of an unknown kind"),
-            },
-            ContentBlock::ResourceLink(resource) => {
-                ctx.print(format!(
-                    "Link to resource {} ({})",
-                    resource.uri, resource.name
-                ));
-            }
-            _ => ctx.print("Content of an unknown kind"),
-        }
+    for block in &result.content {
+        content::show_block(ctx, name, None, block);
     }
     if let Some(structured) = &result.structured_content {
         ctx.print(format!("Structured content:\n{}", pretty(structured)));
@@ -374,28 +344,4 @@ pub(crate) fn show_result(ctx: &Context, name: &str, result: &CallToolResult) ->
         return Err("the tool reported an error".into());
     }
     Ok(())
-}
-
-fn show_image(ctx: &Context, name: &str, content: &ImageContent) {
-    let mime_type = &content.mime_type;
-    let alt = format!("{mime_type} image from {name}");
-    let image = BASE64.decode(&content.data).map_err(|e| e.to_string());
-    let image = image.and_then(|bytes| Image::from_bytes(bytes, alt).map_err(|e| e.to_string()));
-    let island = image.and_then(|image| {
-        let mut island = IslandBuilder::new(kettle_ui::widget::image("image"));
-        island.set_state("image", image);
-        island.freeze().map_err(|e| e.to_string())
-    });
-    match island {
-        Ok(island) => ctx.print_island(island),
-        Err(e) => ctx.print(format!("Image ({mime_type}), which can't be shown: {e}")),
-    }
-}
-
-/// The size of base64 `data`, in bytes.
-fn size(data: &str) -> String {
-    match BASE64.decode(data) {
-        Ok(bytes) => format!("{} bytes", bytes.len()),
-        Err(e) => format!("invalid base64 ({e})"),
-    }
 }

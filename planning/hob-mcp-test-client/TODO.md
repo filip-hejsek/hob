@@ -2,10 +2,16 @@
 
 Decisions are in DECISIONS.md here.
 
-- Next: resources, prompts, and showing server notifications (logging,
-  progress, list changes; the tool list isn't refreshed on changes yet).
-- `call` doesn't support the server asking for more input (MRTR's
-  `input_required`) or making the call a task; both fail with a message.
+- Next: showing server notifications (logging, progress, list changes;
+  the lists used for completion aren't refreshed on changes yet), and
+  resource subscriptions.
+- `call`, `read` and `prompt` don't support the server asking for more
+  input (MRTR's `input_required`), and `call` doesn't follow a call made a
+  task; both fail with a message.
+- Completions (`completion/complete`) aren't used: they could suggest
+  values in the prompt form, and fill in a resource template's variables
+  (a form for templates would beat typing the URI).
+- Binary resources can't be saved to a file.
 - `call`'s form: nested objects are entered as JSON, not as fields of
   their own, and there's no picker for choices (`enum`).
 - No timeouts or cancellation: a server that doesn't answer blocks the
