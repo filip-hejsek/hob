@@ -31,7 +31,7 @@ The project is split into these parts:
 - **hob-git** — Git commands, using gitoxide rather than the `git` program:
   `git status`, `git log`, `git branch`, `git diff`.
 - **hob-notes** — notes and TODO items, kept in SQLite: `note`, `title`,
-  `todo`, `done`.
+  `todo`, `done`, `notes`.
 - **hob-mcp-test-client** (in `tools/`) — an MCP client for people: try
   an MCP server the way an agent would, with hob as the GUI. Built only
   on request (`cargo build -p hob-mcp-test-client`, `--features http` for
@@ -69,9 +69,11 @@ Notes are kept in the platform's data directory (e.g.
 `~/.local/share/hob/notes.sqlite`); set `HOB_NOTES` to use another file,
 e.g. when trying hob out (also through hob-mcp), so real notes aren't
 touched. `note` takes a note (the arguments, or it asks), and `title`
-names the last one. `todo` offers a few things to do now: TODO notes
-(whose title or text starts with "todo") to work on, and unnamed notes to
-name. Picking a TODO note makes it active, until `done`.
+names the last one (or `-n ID`). `todo` offers a few things to do now:
+TODO notes (whose title or text starts with the word "todo") to work on,
+and unnamed notes to name. Picking a TODO note makes it active, until
+`done` (which also takes an ID). `notes` lists the notes; `notes show`,
+`edit`, `delete` and `reopen` act on one, given as `3` or `#3`.
 
 `hob --preview [FILE]` shows a saved session (by default, the current one)
 read-only: nothing runs, and the file isn't changed.

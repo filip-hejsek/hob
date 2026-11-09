@@ -310,7 +310,11 @@ and renders the island as an indented text outline.
   completer) for completion. Kept small on purpose: no defaults, value
   types or validators beyond choices (commands parse values with
   `Matches::parse`). Plain `register` stays for commands that take free
-  text (`echo`, `confirm`). Rejected: clap (a big dependency with its own
+  text (`echo`, `confirm`); `Spec::no_options` makes every word an
+  operand (even `-x` and `--`), for free text that should still have a
+  usage line (`note`). After subcommands, `optional()` makes the
+  subcommand optional (`notes` alone lists, like `notes list`).
+  Rejected: clap (a big dependency with its own
   help style, made for process arguments), and only a completion callback
   per command (no shared parsing, usage or help).
 - Tab completion (`Interpreter::complete`) completes the word at the end
@@ -437,8 +441,10 @@ named like git's so they're familiar; `!git ...` still runs the real one.
 
 ## Note commands (hob-notes)
 
-`note`, `title`, `todo` and `done`. Notes are stored; TODO items aren't,
-they're made from the notes whenever `todo` runs.
+`note` is the quick way to write something down, `todo` and `done` the
+way to work, and `notes` (`list`, `show`, `edit`, `delete`, `reopen`)
+manages what's stored. Notes are stored; TODO items aren't, they're made
+from the notes whenever `todo` runs.
 
 - Notes are kept in SQLite, through rusqlite with SQLite bundled (built
   from source), so there's no new system library to find; unlike libjxl,
@@ -451,24 +457,81 @@ they're made from the notes whenever `todo` runs.
   their own threads), with a 5 s busy timeout. `note` opens it before
   asking for the text, so a broken database doesn't lose what was typed.
 - The schema version is SQLite's `user_version`; a database from a newer
-  version is refused rather than misread.
-- A note is created unnamed (`title` NULL); `title` names, or renames,
-  the note with the highest id. Without arguments `note` asks with a text
-  area and `title` with a text field (showing the old title). Text and
-  titles are trimmed when saved; empty ones are errors.
-- A TODO note is one whose title or text starts with "todo", ignoring
-  case, checked with SQL `LIKE 'todo%'` (ASCII case only). Literally a
-  prefix: "todos" counts too.
+  version is refused rather than misread. Version 2 makes `id`
+  `AUTOINCREMENT`, so ids aren't reused and a `#3` in the scrollback never
+  means another note later. Version 1 databases are migrated by rebuilding
+  the table in one transaction, keeping the notes, their ids and the
+  active one.
+- Commands: `note [TEXT…]` takes a note; without arguments it asks, with
+  an optional title field above a text area. Its text is free-form: words
+  starting with `-` (and `--`) are part of it. `title [-n ID] [TITLE…]`
+  names (or renames) the last note, or the one given; without a title it
+  asks with a text field showing the old one. `done [ID]` marks the
+  active note done, or the open or active TODO note given, without it
+  having to be picked first. `notes` (or `notes list [--all] [--todo]`)
+  shows a table (horizontal borders) of the notes, oldest first: `#ID`,
+  state (`todo`, `active`, `done`, or empty for a plain note), and the
+  title or the start of the text; done notes only with `--all`, and only
+  TODO notes with `--todo`; "No notes." if there's nothing to show.
+  `notes show ID` prints a heading (`#ID: title`, or `#ID` if unnamed; then
+  state, creation time and the time it was done, in local time), then the
+  whole text, as plain output. `notes edit ID` asks with the title field
+  and text area filled in; an empty title makes the note unnamed again.
+  `notes delete [-y] ID` asks first (an island describing the note, a
+  danger button "Delete" and Cancel) unless `-y`; deleting is for good.
+  `notes reopen ID` makes a done or active TODO note open again.
+- Text and titles are trimmed when saved; an empty text is an error, and
+  so is an empty title given to `title`.
+- An ID is written `3` or `#3` (output shows `#3`). `#` isn't special on
+  hob's command line: only a line *starting* with a special character
+  runs a prefix command, and the ID is never the first word. An ID that
+  doesn't exist is the error "there's no note #3".
+- Every command is registered with a `Spec`, so `help` shows a usage line
+  for each. `note` uses `Spec::no_options` (free text), and `notes` an
+  optional subcommand (`Spec::optional` after the subcommands); see
+  hob-core.
+- Every island that's cancelled prints one line saying nothing happened:
+  "Not saved.", "Not named.", "Nothing picked.", "Not deleted.".
+- A TODO note is one whose title or text starts with the word "todo", in
+  any ASCII case: what follows must be the end or not a letter or digit,
+  so "TODO: x", "todo x" and "todo" count, "todos" and "todoist" don't.
+  Checked in Rust, in one place (`Note::is_todo`), not with SQL `LIKE`.
 - A note has a `status` (open, active or done), used only by TODO notes.
   At most one is active (a partial unique index): picking another makes
-  the old one open again. `done` marks the active one done, with a time.
+  the old one open again. Done notes record when. `done ID` and `notes
+  reopen ID` on a note that isn't a TODO note are errors saying so; so is
+  `done` on one already done, and `reopen` on one that's open.
 - TODO items come from sources, each giving its items oldest first: open
-  TODO notes (to work on) and unnamed notes (to name). An unnamed TODO note
-  gives both. `todo` offers 3, taken from the sources in turn, so many
-  unnamed notes don't hide the TODOs. They're plain buttons with keys
-  `a`–`c` (so Enter picks none), plus "Not now"; the active note is shown
-  above them and not offered. Picking a naming item asks for the title
-  right away.
+  TODO notes (to work on) and unnamed notes that aren't TODO notes (to
+  name). An unnamed TODO note is offered once, to do: its text says what
+  it is, and `title` can still name it. `todo` offers 3, taken from the
+  sources in turn, so many unnamed notes don't hide the TODOs. They're
+  plain buttons with keys `a`–`c` (so Enter picks none), plus "Not now";
+  the active note is shown above them and not offered. Picking a naming
+  item asks for the title right away.
+- Writes check what's in the database, not what was read before an island
+  was shown: each change reads the note and writes it in one immediate
+  transaction (`Db::change`). Picking "Do" for a note done, deleted or no
+  longer a TODO note meanwhile, or saving an edit, a title or a deletion
+  of a note deleted meanwhile, is an error saying what happened (an
+  edit's text is lost; rare enough). Edits made by two commands at once:
+  the last one saved wins.
+
+Rejected:
+
+- Everything as subcommands of `note` (`note add`, `note list`): `note
+  buy milk` must stay one step, and free-form text can't share a position
+  with subcommand names.
+- Top-level `show`, `edit`, `delete`: too general as names for commands
+  about notes only.
+- `title ID TITLE…` with a positional ID: ambiguous with a title that
+  starts with a number.
+- A separate `notes title ID`: `title -n` and `notes edit` cover it.
+- Marking deleted notes instead of removing them: nothing would use the
+  marks yet.
+- An explicit TODO flag instead of the "todo" prefix: the prefix is what
+  makes `note todo call the plumber` one step.
+- The prefix checked with `LIKE 'todo%'` (version 1): "todos" counted too.
 
 ## Logging
 
