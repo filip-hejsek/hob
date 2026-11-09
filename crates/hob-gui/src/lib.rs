@@ -741,22 +741,12 @@ impl Shell {
             request => request,
         };
         let island_id = self.next_id();
-        let config = self.config.clone();
         let Some(block) = self.block_mut(block) else {
             return Task::none();
         };
         let entry = match request {
-            Request::Print(message) => {
-                // Also on stdout, e.g. for scripts.
-                println!("{message}");
-                Entry::Text(message)
-            }
-            Request::Log(record) => {
-                if record.level <= Level::Warn {
-                    eprintln!("{}: {}: {record}", config.log_prefix, record.target);
-                }
-                Entry::Log(record)
-            }
+            Request::Print(message) => Entry::Text(message),
+            Request::Log(record) => Entry::Log(record),
             Request::PrintIsland(island) => Entry::Frozen(island),
             Request::LogRecords(_)
             | Request::RunningCommands(_)

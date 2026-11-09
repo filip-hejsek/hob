@@ -468,8 +468,14 @@ they're made from the notes whenever `todo` runs.
 - Everything else uses the `log` crate (nearly all dependencies do; winit's
   `tracing` events reach it too). A backend in hob-core (`hob_core::logger`)
   hands the records to the frontend; hob-gui turns them into notices in the
-  scrollback, outside any block. Errors and warnings also go to stderr. Not
-  `tracing`: spans aren't needed, since commands log through their context.
+  scrollback, outside any block. Not `tracing`: spans aren't needed, since
+  commands log through their context.
+- Errors and warnings of the `log` crate also go to stderr, printed by the
+  logger itself, so records logged after the frontend stops reading aren't
+  lost. Commands' own records (`ctx.error` and friends) don't: they're
+  often user errors (e.g. a typo in a command), not signs of a problem, and
+  stderr lacks the context of which command they came from. For the same
+  reason, what commands print doesn't go to stdout either.
 - Lines on stderr start with the program's name and `: `, as is usual for
   Unix tools. Crates that print to stderr themselves name it in a
   `LOG_PREFIX` constant. The logger takes the prefix when installed, and
@@ -481,7 +487,8 @@ they're made from the notes whenever `todo` runs.
   likely, e.g. a log file); it could also send the messages elsewhere.
 - Records logged on a command's thread (e.g. by a library it calls) go into
   the command's block instead, as requests like those of `ctx.warn`, so the
-  frontend treats them the same (also for stderr). The command's thread
+  frontend treats them the same (but they still go to stderr, being from
+  the `log` crate). The command's thread
   holds its request sender in a thread-local while it runs; other threads
   it starts don't inherit it. Their target stays the module path, so
   `messages` shows where they came from.
@@ -651,7 +658,6 @@ Works like a terminal: a scrollback with the prompt below it.
   handles one run of children added or removed (see ICED_WISHLIST.md),
   while `clear` can remove blocks on both sides of a running one.
 - A line with an unknown command is still added, with the error.
-- What commands print also goes to stdout.
 - The session (history and scrollback) is saved as versioned JSON after every
   change to the scrollback and on window close, and restored on start. Live
   islands are saved frozen, as they are at that moment. The file is in the

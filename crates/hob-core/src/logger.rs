@@ -53,7 +53,8 @@ fn send_to_command(record: LogRecord) -> Result<(), LogRecord> {
 
 /// Sends [`log`] records to the frontend. Records of our crates are logged
 /// from `level` up; records of dependencies only from warnings up, and they
-/// are ephemeral, and logged only once. Errors and warnings also go to stderr.
+/// are ephemeral, and logged only once. Errors and warnings also go to stderr,
+/// also those logged on a command's thread.
 struct Logger {
     level: Level,
     sender: mpsc::UnboundedSender<LogRecord>,
@@ -150,13 +151,15 @@ impl log::Log for Logger {
             }
             entry = entry.ephemeral();
         }
+        // Here, not in the frontend: commands' own records aren't printed,
+        // and records logged after the frontend stops reading would be lost.
+        if entry.level <= Level::Warn {
+            eprintln!("{}: {entry} ({target})", self.stderr_prefix);
+        }
         // The frontend handles it like the command's own records.
         let Err(entry) = send_to_command(entry) else {
             return;
         };
-        if entry.level <= Level::Warn {
-            eprintln!("{}: {entry} ({target})", self.stderr_prefix);
-        }
         // Only fails once the shell is gone.
         let _ = self.sender.unbounded_send(entry);
     }
