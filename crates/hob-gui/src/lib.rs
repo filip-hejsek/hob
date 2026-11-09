@@ -375,9 +375,8 @@ impl Shell {
             Ok(Some(session)) => session,
             Ok(None) if self.is_preview() => {
                 let message = format!("There's no saved session at {}.", path.display());
-                eprintln!("{}: {message}", self.config.log_prefix);
-                self.scrollback
-                    .push(Item::Notice(LogRecord::new(Level::Error, TARGET, message)));
+                let notice = self.error_notice(message);
+                self.scrollback.push(Item::Notice(notice));
                 return;
             }
             Ok(None) => return,
@@ -391,9 +390,8 @@ impl Shell {
                         Err(e) => message += &format!("; couldn't move it aside: {e}"),
                     }
                 }
-                eprintln!("{}: {message}", self.config.log_prefix);
-                self.scrollback
-                    .push(Item::Notice(LogRecord::new(Level::Error, TARGET, message)));
+                let notice = self.error_notice(message);
+                self.scrollback.push(Item::Notice(notice));
                 return;
             }
         };
@@ -448,12 +446,19 @@ impl Shell {
                 if self.save_error.as_ref() == Some(&message) {
                     return;
                 }
-                eprintln!("{}: {message}", self.config.log_prefix);
                 self.save_error = Some(message.clone());
-                LogRecord::new(Level::Error, TARGET, message).ephemeral()
+                self.error_notice(message).ephemeral()
             }
         };
         self.scrollback.push(Item::Notice(notice));
+    }
+
+    /// An error notice of the shell's own, also printed to stderr. Not
+    /// logged with the `log` crate, since its records come back as notices
+    /// that aren't ephemeral, and later than the shell's own.
+    fn error_notice(&self, message: String) -> LogRecord {
+        eprintln!("{}: {message}", self.config.log_prefix);
+        LogRecord::new(Level::Error, TARGET, message)
     }
 
     /// The items of the scrollback that are saved, as saved, with their
