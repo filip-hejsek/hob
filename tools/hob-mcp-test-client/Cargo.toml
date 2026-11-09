@@ -19,6 +19,7 @@ default = []
 http = ["rmcp/transport-streamable-http-client-reqwest", "rmcp/reqwest", "rmcp/auth"]
 
 [dependencies]
+base64.workspace = true
 dirs.workspace = true
 hob-core.workspace = true
 hob-gui.workspace = true

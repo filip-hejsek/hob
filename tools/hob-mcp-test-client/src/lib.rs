@@ -8,6 +8,8 @@
 //!   connection replaces the old one.
 //! - `disconnect`: closes the connection.
 //! - `tools [TOOL]`: lists the server's tools, or describes one.
+//! - `call TOOL [JSON]`: calls a tool, with arguments filled in through a
+//!   form built from its input schema, or given as a JSON object.
 //!
 //! What a server writes to stderr is logged (info, so `messages` shows it).
 //! If it fails to connect, its stderr so far is printed too.
@@ -18,12 +20,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+mod call;
+
 use hob_core::args::{Kind, Matches, Spec};
 use hob_core::{CommandResult, Context, Interpreter};
 use kettle_ui::IslandBuilder;
 use kettle_ui::widget::{label, table_horizontal};
 use rmcp::model::{
-    ClientCapabilities, ClientConfig, Implementation, ServerCapabilities, ServerPeerInfo, Tool,
+    CallToolRequestParams, CallToolResponse, ClientCapabilities, ClientConfig, Implementation,
+    ServerCapabilities, ServerPeerInfo, Tool,
 };
 use rmcp::service::{Peer, RunningService, ServiceError};
 use rmcp::transport::TokioChildProcess;
@@ -206,12 +211,7 @@ impl Client {
 
     fn tools(&self, ctx: &mut Context, args: &Matches) -> CommandResult {
         let (peer, id) = self.peer()?;
-        let offers_tools = (peer.peer_info()).is_some_and(|info| info.capabilities.tools.is_some());
-        if !offers_tools {
-            return Err("the server doesn't offer tools".into());
-        }
-        let tools = self.request(id, peer.list_all_tools())?;
-        self.remember_tools(&tools);
+        let tools = self.list_tools(&peer, id)?;
         match args.value("TOOL") {
             None if tools.is_empty() => ctx.print("The server has no tools."),
             None => {
@@ -220,12 +220,52 @@ impl Client {
                 ctx.print_island(IslandBuilder::new(table).freeze()?);
             }
             Some(name) => {
-                let tool = (tools.iter().find(|tool| tool.name == name))
-                    .ok_or_else(|| format!("no tool {name:?}"))?;
-                ctx.print(describe_tool(tool));
+                ctx.print(describe_tool(find_tool(&tools, name)?));
             }
         }
         Ok(())
+    }
+
+    fn call(&self, ctx: &mut Context, args: &Matches) -> CommandResult {
+        let name = args.value("TOOL").ok_or("no tool")?;
+        let json = args.values("JSON");
+        let (peer, id) = self.peer()?;
+        let arguments = if json.is_empty() {
+            let tools = self.list_tools(&peer, id)?;
+            match call::ask(ctx, find_tool(&tools, name)?)? {
+                Some(arguments) => arguments,
+                None => {
+                    ctx.print("Not called.");
+                    return Ok(());
+                }
+            }
+        } else {
+            // Not checked against the tool's schema: that's the server's job.
+            call::parse_object(&json.join(" "))?
+        };
+        let params = CallToolRequestParams::new(name.to_owned()).with_arguments(arguments);
+        let result = match self.request(id, peer.call_tool_once(params))? {
+            CallToolResponse::Complete(result) => result,
+            CallToolResponse::InputRequired(_) => {
+                return Err("the server asked for more input, which isn't supported yet".into());
+            }
+            CallToolResponse::Task(_) => {
+                return Err("the server made the call a task, which isn't supported yet".into());
+            }
+            _ => return Err("the server's response is of an unknown kind".into()),
+        };
+        call::show_result(ctx, name, &result)
+    }
+
+    /// Lists the server's tools (and remembers them for completion).
+    fn list_tools(&self, peer: &Peer<RoleClient>, id: u64) -> Result<Vec<Tool>, BoxError> {
+        let offers_tools = (peer.peer_info()).is_some_and(|info| info.capabilities.tools.is_some());
+        if !offers_tools {
+            return Err("the server doesn't offer tools".into());
+        }
+        let tools = self.request(id, peer.list_all_tools())?;
+        self.remember_tools(&tools);
+        Ok(tools)
     }
 
     fn remember_tools(&self, tools: &[Tool]) {
@@ -280,15 +320,36 @@ pub fn register(interpreter: &mut Interpreter, client: &Arc<Client>) {
         Spec::new(),
         move |ctx, args| c.disconnect(ctx, args),
     );
-    let names = client.tool_names.clone();
-    let tool = Kind::custom(move |_| lock(&names).clone());
     let c = client.clone();
     interpreter.register_spec(
         "tools",
         "List the server's tools, or describe one",
-        Spec::new().arg("TOOL", tool).optional(),
+        Spec::new().arg("TOOL", tool_kind(client)).optional(),
         move |ctx, args| c.tools(ctx, args),
     );
+    let spec = Spec::new()
+        .arg("TOOL", tool_kind(client))
+        .arg("JSON", Kind::Text)
+        .optional()
+        .repeated();
+    let c = client.clone();
+    interpreter.register_spec(
+        "call",
+        "Call a tool: fill in its arguments, or give them as a JSON object",
+        spec,
+        move |ctx, args| c.call(ctx, args),
+    );
+}
+
+/// A tool's name, completed from the tools last listed.
+fn tool_kind(client: &Client) -> Kind {
+    let names = client.tool_names.clone();
+    Kind::custom(move |_| lock(&names).clone())
+}
+
+fn find_tool<'a>(tools: &'a [Tool], name: &str) -> Result<&'a Tool, BoxError> {
+    let tool = tools.iter().find(|tool| tool.name == name);
+    tool.ok_or_else(|| format!("no tool {name:?}").into())
 }
 
 /// How the client introduces itself to servers.

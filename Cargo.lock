@@ -2615,6 +2615,7 @@ dependencies = [
 name = "hob-mcp-test-client"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dirs",
  "futures-executor",
  "hob-core",

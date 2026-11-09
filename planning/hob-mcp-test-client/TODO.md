@@ -2,11 +2,12 @@
 
 Decisions are in DECISIONS.md here.
 
-- Next: `call TOOL`, through an island built from the tool's input schema
-  (with a fallback to editing raw JSON arguments), showing the result's
-  content (text, images, structured content).
-- Then resources, prompts, and showing server notifications (logging,
+- Next: resources, prompts, and showing server notifications (logging,
   progress, list changes; the tool list isn't refreshed on changes yet).
+- `call` doesn't support the server asking for more input (MRTR's
+  `input_required`) or making the call a task; both fail with a message.
+- `call`'s form: nested objects are entered as JSON, not as fields of
+  their own, and there's no picker for choices (`enum`).
 - No timeouts or cancellation: a server that doesn't answer blocks the
   command until `disconnect` closes the connection.
 - OAuth isn't used yet (the `http` feature includes rmcp's `auth`): a

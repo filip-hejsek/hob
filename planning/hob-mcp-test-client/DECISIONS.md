@@ -79,3 +79,23 @@ in ../DECISIONS.md.
   crates' JSON when built together). Tool names are completed from the
   list last fetched (by `connect` or `tools`), since completion can't wait
   for the server.
+- `call TOOL` asks for the arguments through a form built from the tool's
+  input schema: one field per property, alphabetically (serde_json has
+  already lost the schema's order). Strings and numbers get a text field,
+  booleans a checkbox, anything else (objects, arrays, unions, no type) a
+  text area holding JSON. A type with `null` is entered as the other type.
+  Choices (`enum`) and defaults are shown as the placeholder. The form
+  shows the arguments it makes as JSON, live, and what's wrong with them
+  (e.g. "count: not an integer"); submitting a form with problems shows it
+  again. A tool without parameters is called without asking.
+- In the form, an empty field is left out (so the tool uses its default),
+  and a checkbox is sent only if it's required or differs from the default
+  (false if none). Required fields aren't enforced: the server checks the
+  arguments, as it would an agent's. Anything the form can't express (an
+  empty string, `null`, arguments outside the schema) goes through "Edit as
+  JSON", which turns the arguments so far into a JSON text area, or
+  `call TOOL JSON`, which sends the JSON object given without asking.
+- The result is shown in order: text as it is, images in an island,
+  embedded resources and links described (with text resources' text), then
+  the structured content as pretty JSON. A result marked as an error makes
+  the command fail after showing it.
