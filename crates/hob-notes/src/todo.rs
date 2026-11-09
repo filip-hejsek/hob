@@ -57,6 +57,7 @@ fn interleave<T>(sources: Vec<Vec<T>>, n: usize) -> Vec<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tag::Tag;
 
     #[test]
     fn sources_take_turns() {
@@ -71,9 +72,9 @@ mod tests {
     fn an_unnamed_todo_note_is_offered_once() {
         let dir = tempfile::tempdir().unwrap();
         let mut db = Db::open(&dir.path().join("notes.sqlite")).unwrap();
-        db.add(None, "todo call Ada", &[]).unwrap();
-        db.add(None, "todos are fun", &[]).unwrap();
+        db.add(None, "call Ada", Some(Tag::Todo), &[]).unwrap();
+        db.add(None, "todos are fun", None, &[]).unwrap();
         let labels: Vec<_> = pick(&db, 3).unwrap().iter().map(Item::label).collect();
-        assert_eq!(labels, ["Do #1: todo call Ada", "Name #2: todos are fun"]);
+        assert_eq!(labels, ["Do #1: call Ada", "Name #2: todos are fun"]);
     }
 }

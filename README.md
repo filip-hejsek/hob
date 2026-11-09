@@ -70,8 +70,9 @@ Notes are kept in the platform's data directory (e.g.
 e.g. when trying hob out (also through hob-mcp), so real notes aren't
 touched. `note` takes a note (the arguments, or it asks), and `title`
 names the last one (or `-n ID`). `todo` offers a few things to do now:
-TODO notes (whose title or text starts with the word "todo") to work on,
-and unnamed notes to name. Picking a TODO note makes it active, until
+TODO notes to work on, and unnamed notes to name. A note is a TODO note
+if it's tagged `todo`: its title (or, without a title, its text) starts
+with the word "todo", which is then taken out (`note todo: call Ada`). Picking a TODO note makes it active, until
 `done` (which also takes an ID). `notes` lists the notes; `notes show`,
 `edit`, `delete` and `reopen` act on one, given as `3` or `#3`. `notes
 categories` defines categories; a note's are checked in the `notes edit`

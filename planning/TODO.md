@@ -150,6 +150,8 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - Categories can be set only through the islands; maybe `note -c NAME
   TEXT…` (but `note`'s text is free-form, so no options yet).
 - Edits by two commands at once aren't detected (the last one wins).
+- `todo` is the only tag. More tags with a meaning, and maybe tags the
+  user defines; `notes show` and `notes list` would then show tags.
 
 ## Logging
 

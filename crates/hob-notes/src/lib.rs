@@ -3,12 +3,14 @@
 //!
 //! Notes are kept in an SQLite database. `note` takes one, `title` names
 //! one, and `notes` lists, shows, edits, deletes or reopens them, and
-//! manages the categories notes can be in. TODO
-//! items aren't stored: `todo` makes them from the notes each time (TODO
-//! notes to work on, unnamed notes to name), and offers a few; `done`
+//! manages the categories notes can be in. A note can have a tag, written
+//! as the first word of its title (or text); `todo` makes it a TODO note.
+//! TODO items aren't stored: `todo` makes them from the notes each time
+//! (TODO notes to work on, unnamed notes to name), and offers a few; `done`
 //! finishes the one picked.
 
 mod db;
+mod tag;
 mod todo;
 
 use std::path::PathBuf;
@@ -20,6 +22,7 @@ use kettle_ui::widget::*;
 use kettle_ui::{Fields, IslandBuilder, Outcome};
 
 use crate::db::{Category, Change, Db, Note, Status};
+use crate::tag::Tagged;
 use crate::todo::Item;
 
 /// How many items `todo` offers.
@@ -150,7 +153,7 @@ fn note(ctx: &mut Context, args: &Matches, db: &mut Db) -> CommandResult {
         let categories = db.categories()?;
         match ctx.show(note_island(&categories))? {
             Outcome::Submitted(fields) => (
-                optional(fields.text("title")),
+                fields.text("title").to_owned(),
                 fields.text("text").to_owned(),
                 checked(&fields, &categories),
             ),
@@ -160,13 +163,10 @@ fn note(ctx: &mut Context, args: &Matches, db: &mut Db) -> CommandResult {
             }
         }
     } else {
-        (None, words.join(" "), Vec::new())
+        (String::new(), words.join(" "), Vec::new())
     };
-    let text = text.trim();
-    if text.is_empty() {
-        return Err("the note is empty".into());
-    }
-    let id = db.add(title.as_deref(), text, &categories)?;
+    let note = tagged(&title, &text)?;
+    let id = db.add(note.title.as_deref(), &note.text, note.tag, &categories)?;
     ctx.print(format!("Saved note #{id}."));
     Ok(())
 }
@@ -202,7 +202,8 @@ fn ask_title(ctx: &mut Context, db: &mut Db, note: &Note) -> CommandResult {
     }
 }
 
-/// Names note `id`; `missing` says why it can't if there's no such note.
+/// Names note `id`, and tags it if the title starts with a tag; `missing`
+/// says why it can't if there's no such note.
 fn set_title(
     ctx: &mut Context,
     db: &mut Db,
@@ -211,12 +212,19 @@ fn set_title(
     missing: fn(i64) -> String,
 ) -> CommandResult {
     let title = title.trim();
+    let (tag, title) = match tag::split(title) {
+        Some((tag, title)) => (Some(tag), title),
+        None => (None, title),
+    };
     if title.is_empty() {
         return Err("the title is empty".into());
     }
     db.change(id, |note| {
         note.ok_or_else(|| missing(id))?;
-        Ok(Change::Title(Some(title.to_owned())))
+        Ok(Change::Title {
+            title: title.to_owned(),
+            tag,
+        })
     })?;
     ctx.print(format!("Named note #{id}: {title}"));
     Ok(())
@@ -416,7 +424,7 @@ fn details(note: &Note) -> String {
 fn edit(ctx: &mut Context, db: &mut Db, note: &Note) -> CommandResult {
     let categories = db.categories()?;
     let mut island = note_island(&categories);
-    island.set_text("title", note.title.as_deref().unwrap_or(""));
+    island.set_text("title", &written_title(note));
     island.set_text("text", &note.text);
     for category in &categories {
         if note.categories.contains(&category.name) {
@@ -430,17 +438,14 @@ fn edit(ctx: &mut Context, db: &mut Db, note: &Note) -> CommandResult {
             return Ok(());
         }
     };
-    let title = optional(fields.text("title"));
-    let text = fields.text("text").trim();
-    if text.is_empty() {
-        return Err("the note is empty".into());
-    }
+    let Tagged { title, text, tag } = tagged(fields.text("title"), fields.text("text"))?;
     let id = note.id;
     db.change(id, |note| {
         note.ok_or_else(|| deleted(id))?;
         Ok(Change::Edit {
             title,
-            text: text.to_owned(),
+            text,
+            tag,
             categories: checked(&fields, &categories),
         })
     })?;
@@ -640,9 +645,23 @@ fn deleted(id: i64) -> String {
     format!("note #{id} was deleted meanwhile")
 }
 
-/// A trimmed title, or `None` if it's empty.
-fn optional(title: &str) -> Option<String> {
-    Some(title.trim().to_owned()).filter(|t| !t.is_empty())
+/// A note's title and text as typed, with the tag taken out; the text
+/// can't be empty.
+fn tagged(title: &str, text: &str) -> Result<Tagged, String> {
+    let note = tag::parse(title, text);
+    if note.text.is_empty() {
+        return Err("the note is empty".into());
+    }
+    Ok(note)
+}
+
+/// A note's title as it's typed: its tag, if any, comes first.
+fn written_title(note: &Note) -> String {
+    match (note.tag, &note.title) {
+        (Some(tag), Some(title)) => format!("{}: {title}", tag.name()),
+        (Some(tag), None) => tag.name().to_owned(),
+        (None, title) => title.clone().unwrap_or_default(),
+    }
 }
 
 /// A note's state, as `notes` shows it: `todo`, `active`, `done`, or empty

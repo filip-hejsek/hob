@@ -3,13 +3,16 @@
 use std::path::Path;
 use std::time::Duration;
 
+use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
+
+use crate::tag::{self, Tag};
 
 /// A command's error.
 pub(crate) type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// The schema version (SQLite's `user_version`) this code reads and writes.
-const VERSION: i32 = 3;
+const VERSION: i32 = 4;
 
 /// The notes table, as of version 2. A note's `status` matters only for
 /// TODO notes; at most one note is active. Ids aren't reused
@@ -43,6 +46,10 @@ CREATE TABLE note_categories (
 CREATE INDEX note_categories_category ON note_categories (category);
 ";
 
+/// Version 4 adds tags, by name. Notes made before get theirs from
+/// [`migrate_tags`].
+const TAGS: &str = "ALTER TABLE notes ADD COLUMN tag TEXT;";
+
 /// Version 1 to 2: rebuilds the table with `AUTOINCREMENT`, keeping
 /// everything (ids too). Its index goes first, as index names are global.
 const MIGRATE_1: &str = "
@@ -60,7 +67,7 @@ DROP TABLE notes_v1;
 /// The columns [`Note::from_row`] reads, from `notes`. Times are shown in
 /// local time; category names are joined with newlines, which they can't
 /// contain.
-const COLUMNS: &str = "id, title, text, status, \
+const COLUMNS: &str = "id, title, text, tag, status, \
     strftime('%Y-%m-%d %H:%M', created, 'localtime'), \
     strftime('%Y-%m-%d %H:%M', done, 'localtime'), \
     (SELECT group_concat(c.name, char(10) ORDER BY c.name) \
@@ -92,6 +99,8 @@ pub(crate) struct Note {
     /// `None` until it's named.
     pub(crate) title: Option<String>,
     pub(crate) text: String,
+    /// Not part of the title or text.
+    pub(crate) tag: Option<Tag>,
     pub(crate) status: Status,
     /// When it was made, in local time (`YYYY-MM-DD HH:MM`).
     pub(crate) created: String,
@@ -103,33 +112,40 @@ pub(crate) struct Note {
 
 impl Note {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        let status: String = row.get(3)?;
+        let tag = match row.get::<_, Option<String>>(3)? {
+            Some(name) => Some(Tag::from_name(&name).ok_or_else(|| {
+                let error = format!("unknown tag {name:?}");
+                rusqlite::Error::FromSqlConversionFailure(3, Type::Text, error.into())
+            })?),
+            None => None,
+        };
+        let status: String = row.get(4)?;
         Ok(Note {
             id: row.get(0)?,
             title: row.get(1)?,
             text: row.get(2)?,
+            tag,
             status: match status.as_str() {
                 "active" => Status::Active,
                 "done" => Status::Done,
                 _ => Status::Open,
             },
-            created: row.get(4)?,
-            done: row.get(5)?,
-            categories: (row.get::<_, Option<String>>(6)?)
+            created: row.get(5)?,
+            done: row.get(6)?,
+            categories: (row.get::<_, Option<String>>(7)?)
                 .map(|names| names.split('\n').map(str::to_owned).collect())
                 .unwrap_or_default(),
         })
     }
 
-    /// Whether it's a TODO note: its title or text starts with the word
-    /// "todo", in any ASCII case.
+    /// Whether it's a TODO note: it has the tag `todo`.
     pub(crate) fn is_todo(&self) -> bool {
-        self.title.as_deref().is_some_and(starts_with_todo) || starts_with_todo(&self.text)
+        self.tag == Some(Tag::Todo)
     }
 }
 
-/// Whether `text` starts with the word "todo": "TODO: x", "todo x" and
-/// "todo" do, "todos" doesn't.
+/// Whether `text` starts with the word "todo", as TODO notes did before
+/// version 4: "TODO: x", "todo x", "todo-x" and "todo" do, "todos" doesn't.
 fn starts_with_todo(text: &str) -> bool {
     let Some(rest) = text.get(4..) else {
         return false;
@@ -146,13 +162,15 @@ pub(crate) struct Category {
 
 /// A change to a note, made by [`Db::change`].
 pub(crate) enum Change {
-    /// Names it, or makes it unnamed again.
-    Title(Option<String>),
-    /// Replaces its title, text and categories (by id; ids of categories
-    /// deleted meanwhile are left out).
+    /// Names it, and sets its tag if one is given (keeping the old one
+    /// otherwise).
+    Title { title: String, tag: Option<Tag> },
+    /// Replaces its title, text, tag and categories (by id; ids of
+    /// categories deleted meanwhile are left out).
     Edit {
         title: Option<String>,
         text: String,
+        tag: Option<Tag>,
         categories: Vec<i64>,
     },
     /// Sets its status. Making it active puts the one active before back
@@ -188,12 +206,13 @@ impl Db {
         &mut self,
         title: Option<&str>,
         text: &str,
+        tag: Option<Tag>,
         categories: &[i64],
     ) -> rusqlite::Result<i64> {
         let tx = self.0.transaction()?;
         tx.execute(
-            "INSERT INTO notes (title, text) VALUES (?1, ?2)",
-            params![title, text],
+            "INSERT INTO notes (title, text, tag) VALUES (?1, ?2, ?3)",
+            params![title, text, tag.map(Tag::name)],
         )?;
         let id = tx.last_insert_rowid();
         set_categories(&tx, id, categories)?;
@@ -374,20 +393,21 @@ fn set_categories(tx: &Transaction<'_>, id: i64, categories: &[i64]) -> rusqlite
 
 fn apply(tx: &Transaction<'_>, id: i64, change: Change) -> rusqlite::Result<()> {
     match change {
-        Change::Title(title) => {
+        Change::Title { title, tag } => {
             tx.execute(
-                "UPDATE notes SET title = ?2 WHERE id = ?1",
-                params![id, title],
+                "UPDATE notes SET title = ?2, tag = coalesce(?3, tag) WHERE id = ?1",
+                params![id, title, tag.map(Tag::name)],
             )?;
         }
         Change::Edit {
             title,
             text,
+            tag,
             categories,
         } => {
             tx.execute(
-                "UPDATE notes SET title = ?2, text = ?3 WHERE id = ?1",
-                params![id, title, text],
+                "UPDATE notes SET title = ?2, text = ?3, tag = ?4 WHERE id = ?1",
+                params![id, title, text, tag.map(Tag::name)],
             )?;
             set_categories(tx, id, &categories)?;
         }
@@ -424,9 +444,10 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let sql = match version {
         VERSION => return Ok(()),
-        0 => format!("{NOTES}{CATEGORIES}"),
-        1 => format!("{MIGRATE_1}{NOTES}{MIGRATE_1_COPY}{CATEGORIES}"),
-        2 => CATEGORIES.to_owned(),
+        0 => format!("{NOTES}{CATEGORIES}{TAGS}"),
+        1 => format!("{MIGRATE_1}{NOTES}{MIGRATE_1_COPY}{CATEGORIES}{TAGS}"),
+        2 => format!("{CATEGORIES}{TAGS}"),
+        3 => TAGS.to_owned(),
         _ => {
             return Err(format!(
                 "the database has version {version}; this hob knows only up to {VERSION}"
@@ -434,9 +455,39 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
         }
     };
     tx.execute_batch(&sql)
+        .and_then(|()| migrate_tags(&tx))
         .and_then(|()| tx.pragma_update(None, "user_version", VERSION))
         .and_then(|()| tx.commit())
         .map_err(|e| e.to_string())
+}
+
+/// Tags the notes that were TODO notes before version 4 (their title or
+/// text started with "todo"), and takes the tag out of the title, or else
+/// out of the text, where it's written as tags are now. A text that would
+/// be left empty keeps it.
+fn migrate_tags(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    let notes: Vec<(i64, Option<String>, String)> = {
+        let mut statement = tx.prepare("SELECT id, title, text FROM notes")?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for (id, mut title, mut text) in notes {
+        if !(title.as_deref().is_some_and(starts_with_todo) || starts_with_todo(&text)) {
+            continue;
+        }
+        if let Some((_, rest)) = title.as_deref().and_then(tag::split) {
+            title = Some(rest.to_owned()).filter(|t| !t.is_empty());
+        } else if let Some((_, rest)) = tag::split(&text)
+            && !rest.is_empty()
+        {
+            text = rest.to_owned();
+        }
+        tx.execute(
+            "UPDATE notes SET title = ?2, text = ?3, tag = ?4 WHERE id = ?1",
+            params![id, title, text, Tag::Todo.name()],
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -460,8 +511,8 @@ mod tests {
     #[test]
     fn one_note_is_active() {
         let (mut db, _dir) = db();
-        let a = db.add(None, "todo a", &[]).unwrap();
-        let b = db.add(None, "todo b", &[]).unwrap();
+        let a = db.add(None, "a", Some(Tag::Todo), &[]).unwrap();
+        let b = db.add(None, "b", Some(Tag::Todo), &[]).unwrap();
         set(&mut db, a, Change::Status(Status::Active));
         set(&mut db, b, Change::Status(Status::Active));
         assert_eq!(db.active().unwrap().unwrap().id, b);
@@ -477,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_is_a_word() {
+    fn todo_was_a_word() {
         for text in ["TODO: x", "todo x", "todo", "ToDo", "todo-x", "todo_x"] {
             assert!(starts_with_todo(text), "{text}");
         }
@@ -489,21 +540,46 @@ mod tests {
     }
 
     #[test]
-    fn todo_notes_by_title_or_text() {
+    fn todo_notes_by_tag() {
         let (mut db, _dir) = db();
-        let a = db.add(None, "TODO: call", &[]).unwrap();
-        let b = db.add(None, "plain", &[]).unwrap();
-        let c = db.add(None, "not todo", &[]).unwrap();
-        db.add(None, "todos", &[]).unwrap();
-        set(&mut db, b, Change::Title(Some("ToDo later".into())));
+        let a = db.add(None, "call", Some(Tag::Todo), &[]).unwrap();
+        let b = db.add(None, "plain", None, &[]).unwrap();
+        let c = db.add(None, "todo: not parsed here", None, &[]).unwrap();
+        let title = |tag| Change::Title {
+            title: "Later".into(),
+            tag,
+        };
+        set(&mut db, b, title(Some(Tag::Todo)));
+        // A title without a tag keeps the old one.
+        set(&mut db, b, title(None));
+        assert_eq!(db.get(b).unwrap().unwrap().tag, Some(Tag::Todo));
         assert_eq!(ids(db.open_todos().unwrap()), [a, b]);
-        assert_eq!(ids(db.unnamed().unwrap()), [c, c + 1]);
+        assert_eq!(ids(db.unnamed().unwrap()), [c]);
+        // An edit sets it exactly.
+        let edit = Change::Edit {
+            title: None,
+            text: "x".into(),
+            tag: None,
+            categories: Vec::new(),
+        };
+        set(&mut db, a, edit);
+        assert_eq!(ids(db.open_todos().unwrap()), [b]);
+    }
+
+    #[test]
+    fn unknown_tags_are_errors() {
+        let (db, _dir) = db();
+        (db.0)
+            .execute("INSERT INTO notes (text, tag) VALUES ('x', 'later')", [])
+            .unwrap();
+        let error = db.all().unwrap_err().to_string();
+        assert!(error.contains(r#"unknown tag "later""#), "{error}");
     }
 
     #[test]
     fn changes_see_what_is_stored() {
         let (mut db, _dir) = db();
-        let a = db.add(Some("A"), "text", &[]).unwrap();
+        let a = db.add(Some("A"), "text", None, &[]).unwrap();
         set(&mut db, a, Change::Delete);
         let error = db.change(a, |note| {
             assert!(note.is_none());
@@ -516,10 +592,10 @@ mod tests {
     #[test]
     fn ids_are_not_reused() {
         let (mut db, _dir) = db();
-        db.add(None, "a", &[]).unwrap();
-        let b = db.add(None, "b", &[]).unwrap();
+        db.add(None, "a", None, &[]).unwrap();
+        let b = db.add(None, "b", None, &[]).unwrap();
         set(&mut db, b, Change::Delete);
-        assert_eq!(db.add(None, "c", &[]).unwrap(), b + 1);
+        assert_eq!(db.add(None, "c", None, &[]).unwrap(), b + 1);
     }
 
     /// A version 1 database, as that version made it.
@@ -555,6 +631,16 @@ mod tests {
         assert!(notes[0].done.is_some());
         assert_eq!(notes[1].title.as_deref(), Some("Two"));
         assert_eq!(notes[2].text, "third");
+        // TODO notes got their tag.
+        assert_eq!(
+            (notes[0].text.as_str(), notes[0].tag),
+            ("first", Some(Tag::Todo))
+        );
+        assert_eq!(
+            (notes[1].text.as_str(), notes[1].tag),
+            ("second", Some(Tag::Todo))
+        );
+        assert_eq!(notes[2].tag, None);
         assert_eq!(db.active().unwrap().unwrap().id, 2);
         let version: i32 = (db.0)
             .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -568,7 +654,7 @@ mod tests {
         );
         // Ids aren't reused, even of the last note deleted.
         set(&mut db, 5, Change::Delete);
-        assert_eq!(db.add(None, "new", &[]).unwrap(), 6);
+        assert_eq!(db.add(None, "new", None, &[]).unwrap(), 6);
         drop(db);
         // Opening it again changes nothing.
         let db = Db::open(&path).unwrap();
@@ -591,9 +677,51 @@ mod tests {
         assert_eq!(db.get(3).unwrap().unwrap().text, "kept");
         db.add_categories(&["a".into()]).unwrap();
         let a = db.category("A").unwrap().unwrap().id;
-        let id = db.add(None, "new", &[a]).unwrap();
+        let id = db.add(None, "new", None, &[a]).unwrap();
         assert_eq!(id, 4);
         assert_eq!(db.get(id).unwrap().unwrap().categories, ["a"]);
+    }
+
+    #[test]
+    fn migrates_version_3() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.sqlite");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(&format!("{NOTES}{CATEGORIES}")).unwrap();
+        conn.execute_batch(
+            "PRAGMA user_version = 3;
+            INSERT INTO notes (id, title, text) VALUES
+                (1, 'TODO: Call', 'todo: then write'),
+                (2, 'todo', 'only the title'),
+                (3, 'Named', 'Todo  in the text'),
+                (4, NULL, 'todo'),
+                (5, NULL, 'todo-x is old style'),
+                (6, NULL, 'todos'),
+                (7, 'Plain', 'text');",
+        )
+        .unwrap();
+        drop(conn);
+        let db = Db::open(&path).unwrap();
+        let notes: Vec<_> = (db.all().unwrap().into_iter())
+            .map(|n| (n.title, n.text, n.tag.is_some()))
+            .collect();
+        let note = |title: Option<&str>, text: &str, todo| {
+            (title.map(str::to_owned), text.to_owned(), todo)
+        };
+        assert_eq!(
+            notes,
+            [
+                // The tag goes from the title only.
+                note(Some("Call"), "todo: then write", true),
+                note(None, "only the title", true),
+                note(Some("Named"), "in the text", true),
+                // A text left empty, or not a tag now, is kept.
+                note(None, "todo", true),
+                note(None, "todo-x is old style", true),
+                note(None, "todos", false),
+                note(Some("Plain"), "text", false),
+            ]
+        );
     }
 
     #[test]
@@ -601,7 +729,7 @@ mod tests {
         let (mut db, _dir) = db();
         db.add_categories(&["b".into(), "A".into()]).unwrap();
         let ids: Vec<_> = db.categories().unwrap().iter().map(|c| c.id).collect();
-        let note = db.add(None, "x", &[ids[0], ids[1], 99]).unwrap();
+        let note = db.add(None, "x", None, &[ids[0], ids[1], 99]).unwrap();
         // Sorted in any case; the unknown id is left out.
         assert_eq!(db.get(note).unwrap().unwrap().categories, ["A", "b"]);
         assert!(db.delete_category(ids[0]).unwrap());

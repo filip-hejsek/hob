@@ -492,10 +492,31 @@ from the notes whenever `todo` runs.
   hob-core.
 - Every island that's cancelled prints one line saying nothing happened:
   "Not saved.", "Not named.", "Nothing picked.", "Not deleted.".
-- A TODO note is one whose title or text starts with the word "todo", in
-  any ASCII case: what follows must be the end or not a letter or digit,
-  so "TODO: x", "todo x" and "todo" count, "todos" and "todoist" don't.
-  Checked in Rust, in one place (`Note::is_todo`), not with SQL `LIKE`.
+- Tags (version 4): a note has at most one, stored in a `tag` column by
+  name. Tags are defined in code (`Tag`), each with a meaning; the only
+  one so far is `todo`, which makes a TODO note. A name has only letters
+  and `-`, and is matched in any case.
+- A tag is written as the first word of the title, or of the text when
+  the title is empty (a text's first word isn't a tag if there's a
+  title): a word of letters and `-` naming a tag, then the end,
+  whitespace or `:`. So "TODO: x" and "todo x" have one; "todos",
+  "todo-x" and "todo2" don't. The tag (with its `:`) is taken out when
+  saved, and stored only as the tag; a title left empty makes the note
+  unnamed, and a text left empty is an error (`note todo`). Output
+  doesn't show tags, except as a TODO note's state.
+- `note` and `notes edit` set the tag from what's typed, so an edit can
+  take it out; the edit island shows the tag at the start of the title
+  field (`todo: Title`, or `todo` alone if unnamed), so saving unchanged
+  keeps it. `title` sets
+  the tag only if the new title starts with one, and keeps the old tag
+  otherwise (renaming doesn't untag); a title that's only a tag is
+  empty, an error.
+- Version 3 databases are migrated in Rust: notes that were TODO notes by
+  the old rule (title or text starting with the word "todo", followed by
+  anything but a letter or digit) get the tag, and it's taken out of the
+  title, or else the text, where the new rule finds it (the text, even if
+  there's a title, so no TODO note is lost; a text that would be left
+  empty keeps it). Other notes are left alone.
 - A note has a `status` (open, active or done), used only by TODO notes.
   At most one is active (a partial unique index): picking another makes
   the old one open again. Done notes record when. `done ID` and `notes
@@ -554,6 +575,11 @@ Rejected:
 - An explicit TODO flag instead of the "todo" prefix: the prefix is what
   makes `note todo call the plumber` one step.
 - The prefix checked with `LIKE 'todo%'` (version 1): "todos" counted too.
+- Keeping the "todo" prefix in the title or text and checking it on every
+  read (up to version 3): the tag cluttered every title and preview, and
+  a text's "todo" counted even when the title said what the note was.
+- A separate tag field in the islands: writing it in the title keeps
+  `note todo x` and the islands the same.
 
 ## Logging
 

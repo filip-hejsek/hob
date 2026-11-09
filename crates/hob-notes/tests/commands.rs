@@ -245,9 +245,9 @@ fn todo_takes_items_from_each_source_in_turn() {
         assert_eq!(
             offered(island),
             [
-                r#""Do #3: TODO: three" [a]"#,
+                r#""Do #3: three" [a]"#,
                 r#""Name #1: one" [b]"#,
-                r#""Do #4: todo four" [c]"#,
+                r#""Do #4: four" [c]"#,
                 r#""Not now""#,
             ]
         );
@@ -257,20 +257,22 @@ fn todo_takes_items_from_each_source_in_turn() {
 }
 
 #[test]
-fn todo_is_a_word() {
+fn a_tag_is_a_word() {
     let (hob, _dir) = setup();
-    for text in ["todos are fun", "todoist", "TODO: x", "todo x", "todo"] {
+    for text in ["todos are fun", "todoist", "TODO: x", "todo-x y", "todo y"] {
         run(&hob, &format!("note '{text}'"));
     }
     run(&hob, "title -n 1 Todos");
+    // The tag is taken out, so nothing's left.
+    assert_eq!(run(&hob, "note todo:"), ["error: the note is empty"]);
     // An unnamed TODO note is offered only to do, not also to name.
     let output = run_answering(&hob, "todo", |island| {
         assert_eq!(
             offered(island),
             [
-                r#""Do #3: TODO: x" [a]"#,
+                r#""Do #3: x" [a]"#,
                 r#""Name #2: todoist" [b]"#,
-                r#""Do #4: todo x" [c]"#,
+                r#""Do #5: y" [c]"#,
                 r#""Not now""#,
             ]
         );
@@ -279,8 +281,30 @@ fn todo_is_a_word() {
     assert_eq!(output, ["Nothing picked."]);
     assert_eq!(
         listed(&hob, "notes list --todo"),
-        ["#3 todo TODO: x", "#4 todo todo x", "#5 todo todo"]
+        ["#3 todo x", "#5 todo y"]
     );
+}
+
+#[test]
+fn a_tag_in_the_text_counts_only_without_a_title() {
+    let (hob, _dir) = setup();
+    for title in ["Plain", "", "todo: Tagged"] {
+        run_answering(&hob, "note", |island| {
+            island.type_text("title", title).unwrap();
+            island.type_text("text", "todo x").unwrap();
+            island.press("Save").unwrap()
+        });
+    }
+    assert_eq!(
+        listed(&hob, "notes"),
+        ["#1  Plain", "#2 todo x", "#3 todo Tagged"]
+    );
+    assert_eq!(shown(&run(&hob, "notes show 3")).2, "todo x");
+    // `title` tags a note if the title has a tag, and keeps its tag if not.
+    assert_eq!(run(&hob, "title -n 1 TODO later"), ["Named note #1: later"]);
+    assert_eq!(run(&hob, "title -n 1 Later"), ["Named note #1: Later"]);
+    assert_eq!(run(&hob, "title -n 1 todo"), ["error: the title is empty"]);
+    assert_eq!(listed(&hob, "notes list --todo")[0], "#1 todo Later");
 }
 
 #[test]
@@ -292,34 +316,34 @@ fn todo_works_on_a_note_until_done() {
     run(&hob, "title Todo feed cat");
 
     let output = run_answering(&hob, "todo", |island| {
-        island.press("Do #1: Todo water plants").unwrap()
+        island.press("Do #1: water plants").unwrap()
     });
     assert_eq!(
         output,
-        ["Working on #1: Todo water plants; run done when it's done."]
+        ["Working on #1: water plants; run done when it's done."]
     );
 
     // The active note isn't offered again.
     run_answering(&hob, "todo", |island| {
         let outline = island.to_string();
-        assert!(outline.contains(r#"label "Working on #1: Todo water plants""#));
+        assert!(outline.contains(r#"label "Working on #1: water plants""#));
         assert_eq!(
             offered(island),
-            [r#""Do #2: Todo feed cat" [a]"#, r#""Not now""#]
+            [r#""Do #2: feed cat" [a]"#, r#""Not now""#]
         );
-        island.press("Do #2: Todo feed cat").unwrap()
+        island.press("Do #2: feed cat").unwrap()
     });
 
     // Picking another one put the first back.
-    assert_eq!(run(&hob, "done"), ["Done: #2: Todo feed cat"]);
+    assert_eq!(run(&hob, "done"), ["Done: #2: feed cat"]);
     run_answering(&hob, "todo", |island| {
         assert_eq!(
             offered(island),
-            [r#""Do #1: Todo water plants" [a]"#, r#""Not now""#]
+            [r#""Do #1: water plants" [a]"#, r#""Not now""#]
         );
-        island.press("Do #1: Todo water plants").unwrap()
+        island.press("Do #1: water plants").unwrap()
     });
-    assert_eq!(run(&hob, "done"), ["Done: #1: Todo water plants"]);
+    assert_eq!(run(&hob, "done"), ["Done: #1: water plants"]);
     assert_eq!(run(&hob, "todo"), ["Nothing to do."]);
 }
 
@@ -329,13 +353,11 @@ fn done_takes_an_id() {
     run(&hob, "note todo: a");
     run(&hob, "note todo: b");
     run(&hob, "note plain");
-    run_answering(&hob, "todo", |island| {
-        island.press("Do #1: todo: a").unwrap()
-    });
+    run_answering(&hob, "todo", |island| island.press("Do #1: a").unwrap());
     // An open one, without picking it first.
-    assert_eq!(run(&hob, "done '#2'"), ["Done: #2: todo: b"]);
+    assert_eq!(run(&hob, "done '#2'"), ["Done: #2: b"]);
     // The active one, by its ID.
-    assert_eq!(run(&hob, "done 1"), ["Done: #1: todo: a"]);
+    assert_eq!(run(&hob, "done 1"), ["Done: #1: a"]);
     assert_eq!(run(&hob, "done 1"), ["error: #1 is already done"]);
     assert_eq!(run(&hob, "done 3"), ["error: #3 isn't a TODO note"]);
     assert_eq!(run(&hob, "done 4"), ["error: there's no note #4"]);
@@ -368,12 +390,10 @@ fn nothing_else_to_do() {
     let (hob, _dir) = setup();
     run(&hob, "note todo: rest");
     run(&hob, "title todo: rest");
-    run_answering(&hob, "todo", |island| {
-        island.press("Do #1: todo: rest").unwrap()
-    });
+    run_answering(&hob, "todo", |island| island.press("Do #1: rest").unwrap());
     assert_eq!(
         run(&hob, "todo"),
-        ["Nothing else to do; working on #1: todo: rest."]
+        ["Nothing else to do; working on #1: rest."]
     );
 }
 
@@ -390,14 +410,14 @@ fn notes_lists_them() {
     );
     run(&hob, "title -n 1 Plain");
     run_answering(&hob, "todo", |island| {
-        island.press("Do #3: todo: active").unwrap()
+        island.press("Do #3: active").unwrap()
     });
     run(&hob, "done 4");
     let preview = "long line that goes on and on, much longer than fi…";
     let not_done = [
         "#1  Plain".to_owned(),
-        "#2 todo todo: open".to_owned(),
-        "#3 active todo: active".to_owned(),
+        "#2 todo open".to_owned(),
+        "#3 active active".to_owned(),
         format!("#5  {preview}"),
     ];
     assert_eq!(listed(&hob, "notes"), not_done);
@@ -406,23 +426,19 @@ fn notes_lists_them() {
         listed(&hob, "notes list --all"),
         [
             "#1  Plain",
-            "#2 todo todo: open",
-            "#3 active todo: active",
-            "#4 done todo: finished",
+            "#2 todo open",
+            "#3 active active",
+            "#4 done finished",
             &format!("#5  {preview}"),
         ]
     );
     assert_eq!(
         listed(&hob, "notes list --todo"),
-        ["#2 todo todo: open", "#3 active todo: active"]
+        ["#2 todo open", "#3 active active"]
     );
     assert_eq!(
         listed(&hob, "notes list --todo --all"),
-        [
-            "#2 todo todo: open",
-            "#3 active todo: active",
-            "#4 done todo: finished"
-        ]
+        ["#2 todo open", "#3 active active", "#4 done finished"]
     );
     // The table has horizontal borders.
     let output = run(&hob, "notes");
@@ -448,7 +464,7 @@ fn notes_list_only_done() {
     run(&hob, "done 1");
     assert_eq!(run(&hob, "notes"), ["No notes."]);
     assert_eq!(run(&hob, "notes list --todo"), ["No notes."]);
-    assert_eq!(listed(&hob, "notes list --all"), ["#1 done todo x"]);
+    assert_eq!(listed(&hob, "notes list --all"), ["#1 done x"]);
 }
 
 /// Whether `details` is the details line of a note: its state (if any), and
@@ -484,8 +500,8 @@ fn notes_show_prints_a_note() {
     let (hob, _dir) = setup();
     run(&hob, "note plain");
     run_answering(&hob, "note", |island| {
-        island.type_text("title", "Shopping").unwrap();
-        island.type_text("text", "TODO: buy\n\nmilk").unwrap();
+        island.type_text("title", "TODO: Shopping").unwrap();
+        island.type_text("text", "buy\n\nmilk").unwrap();
         island.press("Save").unwrap()
     });
     let (heading, details, text) = shown(&run(&hob, "notes show 1"));
@@ -494,7 +510,7 @@ fn notes_show_prints_a_note() {
     let (heading, details, text) = shown(&run(&hob, "notes show '#2'"));
     assert_eq!(
         (heading.as_str(), text.as_str()),
-        ("#2: Shopping", "TODO: buy\n\nmilk")
+        ("#2: Shopping", "buy\n\nmilk")
     );
     check_details(&details, "todo", false);
     run(&hob, "done 2");
@@ -516,22 +532,35 @@ fn notes_edit_changes_a_note() {
     let output = run_answering(&hob, "notes edit 1", |island| {
         assert_eq!(island.fields().text("title"), "One");
         assert_eq!(island.fields().text("text"), "first");
-        island.type_text("title", " Uno ").unwrap();
+        island.type_text("title", " todo: Uno ").unwrap();
         island.type_text("text", " todo: first\nreally ").unwrap();
         island.press("Save").unwrap()
     });
     assert_eq!(output, ["Saved note #1."]);
     let (heading, details, text) = shown(&run(&hob, "notes show 1"));
     assert_eq!(heading, "#1: Uno");
+    // With a title, the text's tag is just text.
     assert_eq!(text, "todo: first\nreally");
     check_details(&details, "todo", false);
 
-    // An empty title makes it unnamed again.
+    // The tag is shown before the title. An empty title makes it unnamed
+    // again, so the tag comes from the text.
     run_answering(&hob, "notes edit 1", |island| {
+        assert_eq!(island.fields().text("title"), "todo: Uno");
         island.type_text("title", "").unwrap();
         island.press("Save").unwrap()
     });
-    assert_eq!(shown(&run(&hob, "notes show 1")).0, "#1");
+    let (heading, details, text) = shown(&run(&hob, "notes show 1"));
+    assert_eq!((heading.as_str(), text.as_str()), ("#1", "first\nreally"));
+    check_details(&details, "todo", false);
+
+    // Unnamed, the tag is shown alone; taking it out untags the note.
+    run_answering(&hob, "notes edit 1", |island| {
+        assert_eq!(island.fields().text("title"), "todo");
+        island.type_text("title", "").unwrap();
+        island.press("Save").unwrap()
+    });
+    check_details(&shown(&run(&hob, "notes show 1")).1, "", false);
 
     let output = run_answering(&hob, "notes edit 1", |island| {
         island.type_text("text", "  ").unwrap();
@@ -543,7 +572,7 @@ fn notes_edit_changes_a_note() {
         island.press("Cancel").unwrap()
     });
     assert_eq!(output, ["Not saved."]);
-    assert_eq!(shown(&run(&hob, "notes show 1")).2, "todo: first\nreally");
+    assert_eq!(shown(&run(&hob, "notes show 1")).2, "first\nreally");
     assert_eq!(run(&hob, "notes edit 2"), ["error: there's no note #2"]);
 }
 
@@ -554,10 +583,7 @@ fn notes_delete_asks_first() {
     run(&hob, "note b");
     let output = run_answering(&hob, "notes delete 1", |island| {
         let outline = island.to_string();
-        assert!(
-            outline.contains(r#"label "Delete #1: todo: a?""#),
-            "{outline}"
-        );
+        assert!(outline.contains(r#"label "Delete #1: a?""#), "{outline}");
         assert!(outline.contains(r#"label "todo, created "#), "{outline}");
         assert!(outline.contains(r#"button "Delete" (danger)"#), "{outline}");
         island.press("Cancel").unwrap()
@@ -585,17 +611,15 @@ fn notes_reopen() {
     run(&hob, "note todo: b");
     run(&hob, "note plain");
     run(&hob, "done 1");
-    assert_eq!(run(&hob, "notes reopen 1"), ["Reopened #1: todo: a"]);
+    assert_eq!(run(&hob, "notes reopen 1"), ["Reopened #1: a"]);
     let (_, details, _) = shown(&run(&hob, "notes show 1"));
     check_details(&details, "todo", false);
     assert_eq!(run(&hob, "notes reopen 1"), ["error: #1 is already open"]);
-    run_answering(&hob, "todo", |island| {
-        island.press("Do #2: todo: b").unwrap()
-    });
-    assert_eq!(run(&hob, "notes reopen 2"), ["Reopened #2: todo: b"]);
+    run_answering(&hob, "todo", |island| island.press("Do #2: b").unwrap());
+    assert_eq!(run(&hob, "notes reopen 2"), ["Reopened #2: b"]);
     assert_eq!(
         listed(&hob, "notes list --todo"),
-        ["#1 todo todo: a", "#2 todo todo: b"]
+        ["#1 todo a", "#2 todo b"]
     );
     assert_eq!(run(&hob, "notes reopen 3"), ["error: #3 isn't a TODO note"]);
     assert_eq!(run(&hob, "notes reopen 4"), ["error: there's no note #4"]);
@@ -608,22 +632,22 @@ fn picking_rechecks_the_note() {
     run(&hob, "note todo: b");
     run(&hob, "note todo: c");
     let output = run_answering(&hob, "todo", |island| {
-        assert_eq!(run(&hob, "done 1"), ["Done: #1: todo: a"]);
-        island.press("Do #1: todo: a").unwrap()
+        assert_eq!(run(&hob, "done 1"), ["Done: #1: a"]);
+        island.press("Do #1: a").unwrap()
     });
     assert_eq!(output, ["error: note #1 was marked done meanwhile"]);
     let output = run_answering(&hob, "todo", |island| {
         assert_eq!(run(&hob, "notes delete -y 2"), ["Deleted note #2."]);
-        island.press("Do #2: todo: b").unwrap()
+        island.press("Do #2: b").unwrap()
     });
     assert_eq!(output, ["error: note #2 was deleted meanwhile"]);
     let output = run_answering(&hob, "todo", |island| {
         let edited = run_answering(&hob, "notes edit 3", |island| {
-            island.type_text("text", "c").unwrap();
+            island.type_text("title", "").unwrap();
             island.press("Save").unwrap()
         });
         assert_eq!(edited, ["Saved note #3."]);
-        island.press("Do #3: todo: c").unwrap()
+        island.press("Do #3: c").unwrap()
     });
     assert_eq!(output, ["error: note #3 isn't a TODO note any more"]);
     assert!(
@@ -891,17 +915,14 @@ fn notes_list_by_category() {
         });
     }
     run(&hob, "done 4");
-    assert_eq!(
-        listed(&hob, "notes list -c WORK"),
-        ["#1 todo todo report work"]
-    );
+    assert_eq!(listed(&hob, "notes list -c WORK"), ["#1 todo report work"]);
     assert_eq!(
         listed(&hob, "notes list --all --category=work"),
-        ["#1 todo todo report work", "#4 done todo old report work"]
+        ["#1 todo report work", "#4 done old report work"]
     );
     assert_eq!(
         listed(&hob, "notes list --todo -c home"),
-        ["#2 todo todo dishes home"]
+        ["#2 todo dishes home"]
     );
     assert_eq!(
         run(&hob, "notes list -c nope"),
