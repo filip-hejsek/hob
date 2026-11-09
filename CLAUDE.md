@@ -38,8 +38,8 @@ with the workaround used.
   `hob-git` Git commands, and `hob-notes` note commands. Like `hob-core`,
   they must not depend on any GUI toolkit.
 - When trying hob, set `HOB_NOTES` to a scratch file (e.g. start
-  `["env", "HOB_NOTES=...", "target/debug/hob", "--headless"]`), so the
-  user's notes aren't changed.
+  `["env", "HOB_NOTES=...", "target/debug/hob", "--headless"]`), so each
+  try starts without notes and leaves none in the default file.
 - `hob-mcp-test-client` (in `tools/`) is an MCP client for people, with
   hob-gui as its GUI. It's not a default workspace member: the checks
   below skip it, and changes elsewhere may break it for a while. When
