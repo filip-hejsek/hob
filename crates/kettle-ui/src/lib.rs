@@ -67,7 +67,7 @@ pub use model::{Built, Inputs, Job, JobResult, Model, Outcome, StateUpdate, Upda
 
 use widget::{Kind, Text, Widget};
 
-/// The program name that starts lines logged to stderr.
+/// The name that starts warnings printed to stderr when no logger is installed.
 const LOG_PREFIX: &str = "kettle-ui";
 
 /// Why [`IslandBuilder::build`] failed.
