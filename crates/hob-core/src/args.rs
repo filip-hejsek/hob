@@ -39,6 +39,10 @@ pub struct Spec {
     options: Vec<Opt>,
     args: Vec<Arg>,
     subcommands: Vec<Subcommand>,
+    /// Whether the subcommand can be left out.
+    subcommand_optional: bool,
+    /// Whether every word is an operand ([`no_options`](Spec::no_options)).
+    no_options: bool,
     /// What [`short`](Spec::short), [`optional`](Spec::optional) and
     /// [`repeated`](Spec::repeated) change.
     last: Option<Last>,
@@ -48,6 +52,7 @@ pub struct Spec {
 enum Last {
     Opt,
     Arg,
+    Subcommand,
 }
 
 #[derive(Clone)]
@@ -164,6 +169,7 @@ impl Spec {
     }
 
     fn push_opt(mut self, long: &str, value: Option<(String, Kind)>, help: &str) -> Self {
+        assert!(!self.no_options, "a spec with no_options() has no options");
         assert!(
             !long.is_empty() && !long.starts_with('-') && !long.contains(['=', ' ']),
             "bad option name {long:?}"
@@ -227,8 +233,26 @@ impl Spec {
 
     /// Makes the argument just added optional. Arguments after it must be
     /// optional too.
+    ///
+    /// After a subcommand, makes the subcommand optional instead: without an
+    /// operand, [`Matches::subcommand`] is `None`.
     pub fn optional(mut self) -> Self {
-        self.last_arg().optional = true;
+        match self.last {
+            Some(Last::Subcommand) => self.subcommand_optional = true,
+            _ => self.last_arg().optional = true,
+        }
+        self
+    }
+
+    /// Takes every word as an operand, even one starting with `-`, and `--`:
+    /// for free text, such as `note buy -2 eggs`.
+    ///
+    /// # Panics
+    ///
+    /// If the spec has options.
+    pub fn no_options(mut self) -> Self {
+        assert!(self.options.is_empty(), "a spec with options");
+        self.no_options = true;
         self
     }
 
@@ -257,7 +281,7 @@ impl Spec {
             description: description.to_owned(),
             spec,
         });
-        self.last = None;
+        self.last = Some(Last::Subcommand);
         self
     }
 
@@ -273,7 +297,7 @@ impl Spec {
     fn parse_inner(&self, words: &[String], path: &str) -> Result<Matches, ParseError> {
         let mut matches = Matches::new(self);
         let mut operands = Vec::new();
-        let mut options_done = false;
+        let mut options_done = self.no_options;
         let mut words = words.iter();
         while let Some(word) = words.next() {
             if options_done || !operands.is_empty() || word == "-" || !word.starts_with('-') {
@@ -328,7 +352,10 @@ impl Spec {
         }
         if !self.subcommands.is_empty() {
             let Some(name) = operands.first() else {
-                return Err(here("missing subcommand".to_owned()));
+                return match self.subcommand_optional {
+                    true => Ok(matches),
+                    false => Err(here("missing subcommand".to_owned())),
+                };
             };
             let sub = (self.subcommands.iter())
                 .find(|s| &s.name == name)
@@ -382,8 +409,10 @@ impl Spec {
             .map(|sub| format!("{}{}", sub.name, sub.spec.synopsis()))
             .collect();
         if !subs.is_empty() {
-            s += " ";
-            s += &subs.join(" | ");
+            match self.subcommand_optional {
+                true => s += &format!(" [{}]", subs.join(" | ")),
+                false => s += &format!(" {}", subs.join(" | ")),
+            }
         }
         s
     }
@@ -441,7 +470,7 @@ impl Spec {
     /// options are skipped. `None` if a subcommand is unknown.
     pub(crate) fn expect(&self, words: &[String]) -> Option<Expect<'_>> {
         let mut operands = 0;
-        let mut options_done = false;
+        let mut options_done = self.no_options;
         let mut words = words.iter();
         while let Some(word) = words.next() {
             if options_done || operands > 0 || word == "-" || !word.starts_with('-') {
@@ -612,8 +641,8 @@ impl Matches {
             .transpose()
     }
 
-    /// The subcommand given, and its matches. A spec with subcommands always
-    /// has one.
+    /// The subcommand given, and its matches. A spec with subcommands has
+    /// one, unless they're [optional](Spec::optional) and none was given.
     pub fn subcommand(&self) -> Option<(&str, &Matches)> {
         (self.subcommand.as_ref()).map(|(name, matches)| (name.as_str(), &**matches))
     }
@@ -765,6 +794,29 @@ mod tests {
             error("log -x"),
             "unknown option -x; usage: git log [-n N] [REV]"
         );
+    }
+
+    #[test]
+    fn optional_subcommands() {
+        let spec = git().optional();
+        let m = spec.parse(&words(""), "git").unwrap();
+        assert!(m.subcommand().is_none());
+        let m = spec.parse(&words("status"), "git").unwrap();
+        assert_eq!(m.subcommand().unwrap().0, "status");
+        assert_eq!(spec.usage("git"), "usage: git [status | log [-n N] [REV]]");
+    }
+
+    #[test]
+    fn no_options_takes_every_word() {
+        let spec = Spec::new()
+            .arg("TEXT", Kind::Text)
+            .optional()
+            .repeated()
+            .no_options();
+        let m = spec.parse(&words("-x -- --y a"), "note").unwrap();
+        assert_eq!(m.values("TEXT"), ["-x", "--", "--y", "a"]);
+        assert_eq!(spec.usage("note"), "usage: note [TEXT...]");
+        assert!(spec.expect(&words("-x")).unwrap().options.is_empty());
     }
 
     #[test]
