@@ -126,7 +126,8 @@ fn every_command_has_a_usage_line() {
     assert_eq!(usage("done"), "usage: done [ID]");
     assert_eq!(
         usage("notes"),
-        "usage: notes [list [--all] [--todo] | show ID | edit ID | delete [-y] ID | reopen ID]"
+        "usage: notes [list [--all] [--todo] [-c NAME] | show ID | edit ID | delete [-y] ID \
+         | reopen ID | categories [list | add NAME... | rename NAME NEW | delete [-y] NAME]]"
     );
 }
 
@@ -431,14 +432,12 @@ fn notes_lists_them() {
     );
     assert_eq!(
         run(&hob, "notes list -x"),
-        ["error: unknown option -x; usage: notes list [--all] [--todo]"]
+        ["error: unknown option -x; usage: notes list [--all] [--todo] [-c NAME]"]
     );
-    assert_eq!(
-        run(&hob, "notes frob"),
-        [
-            "error: unknown subcommand \"frob\"; usage: notes [list [--all] [--todo] \
-             | show ID | edit ID | delete [-y] ID | reopen ID]"
-        ]
+    let error = run(&hob, "notes frob");
+    assert!(
+        error[0].starts_with("error: unknown subcommand \"frob\"; usage: notes [list "),
+        "{error:?}"
     );
 }
 
@@ -683,6 +682,253 @@ fn last_edit_wins() {
     });
     assert_eq!(output, ["Saved note #1."]);
     assert_eq!(shown(&run(&hob, "notes show 1")).2, "second");
+}
+
+/// Categories as `notes categories` shows them: `name count` per row.
+fn categories(interpreter: &Interpreter) -> Vec<String> {
+    listed(interpreter, "notes categories")
+}
+
+/// The checkboxes of an island, as `name [x]` or `name [ ]`.
+fn boxes(island: &Island) -> Vec<String> {
+    (island.to_string().lines())
+        .filter_map(|line| line.trim().strip_prefix("checkbox "))
+        .map(|line| {
+            let (_, rest) = line.split_once(": ").unwrap();
+            let (mark, name) = rest.split_once("] ").unwrap();
+            format!("{} {mark}]", name.trim_matches('"'))
+        })
+        .collect()
+}
+
+#[test]
+fn categories_are_defined() {
+    let (hob, _dir) = setup();
+    assert_eq!(run(&hob, "notes categories"), ["No categories."]);
+    assert_eq!(
+        run(&hob, "notes categories add work 'at home'"),
+        [r#"Added category "work"."#, r#"Added category "at home"."#]
+    );
+    assert_eq!(categories(&hob), ["at home no notes", "work no notes"]);
+    assert_eq!(listed(&hob, "notes categories list"), categories(&hob));
+    assert_eq!(
+        run(&hob, "notes categories add new WORK"),
+        [r#"error: there's already a category "work""#]
+    );
+    assert_eq!(
+        run(&hob, "notes categories add x X"),
+        [r#"error: category "X" is given twice"#]
+    );
+    assert_eq!(
+        run(&hob, "notes categories add ' '"),
+        ["error: the category name is empty"]
+    );
+    assert_eq!(
+        run(&hob, "notes categories add 'a\tb'"),
+        [r#"error: invalid category name "a\tb""#]
+    );
+    // Nothing was added by the failed commands.
+    assert_eq!(categories(&hob).len(), 2);
+    assert_eq!(
+        run(&hob, "notes categories add"),
+        ["error: missing NAME; usage: notes categories add NAME..."]
+    );
+
+    assert_eq!(
+        run(&hob, "notes categories rename Work job"),
+        [r#"Renamed category "work" to "job"."#]
+    );
+    assert_eq!(
+        run(&hob, "notes categories rename job Job"),
+        [r#"Renamed category "job" to "Job"."#]
+    );
+    assert_eq!(
+        run(&hob, "notes categories rename job 'AT HOME'"),
+        [r#"error: there's already a category "at home""#]
+    );
+    assert_eq!(
+        run(&hob, "notes categories rename x y"),
+        [r#"error: there's no category "x""#]
+    );
+    assert_eq!(categories(&hob), ["at home no notes", "Job no notes"]);
+}
+
+#[test]
+fn categories_are_deleted() {
+    let (hob, _dir) = setup();
+    run(&hob, "notes categories add a b");
+    run(&hob, "note x");
+    run_answering(&hob, "notes edit 1", |island| {
+        island.set_checked("category-1", true).unwrap();
+        island.set_checked("category-2", true).unwrap();
+        island.press("Save").unwrap()
+    });
+    let output = run_answering(&hob, "notes categories delete A", |island| {
+        let outline = island.to_string();
+        assert!(
+            outline.contains(r#"label "Delete category \"a\"?""#),
+            "{outline}"
+        );
+        assert!(
+            outline.contains(r#"label "It's taken off 1 note.""#),
+            "{outline}"
+        );
+        island.press("Cancel").unwrap()
+    });
+    assert_eq!(output, ["Not deleted."]);
+    let output = run_answering(&hob, "notes categories delete a", |island| {
+        island.press("Delete").unwrap()
+    });
+    assert_eq!(output, [r#"Deleted category "a"."#]);
+    assert_eq!(listed(&hob, "notes"), ["#1  x b"]);
+    assert_eq!(
+        run(&hob, "notes categories delete -y b"),
+        [r#"Deleted category "b"."#]
+    );
+    assert_eq!(listed(&hob, "notes"), ["#1  x"]);
+    assert_eq!(
+        run(&hob, "notes categories delete -y b"),
+        [r#"error: there's no category "b""#]
+    );
+    assert_eq!(run(&hob, "notes categories"), ["No categories."]);
+}
+
+#[test]
+fn notes_edit_has_a_checkbox_per_category() {
+    let (hob, _dir) = setup();
+    run(&hob, "note shopping");
+    // Without categories, there are no checkboxes.
+    run_answering(&hob, "notes edit 1", |island| {
+        let outline = island.to_string();
+        assert!(!outline.contains("Categories"), "{outline}");
+        assert_eq!(boxes(island), Vec::<String>::new());
+        island.press("Cancel").unwrap()
+    });
+
+    run(&hob, "notes categories add work home");
+    let output = run_answering(&hob, "notes edit 1", |island| {
+        assert!(island.to_string().contains(r#"label "Categories:""#));
+        // Sorted by name.
+        assert_eq!(boxes(island), ["home [ ]", "work [ ]"]);
+        island.set_checked("category-2", true).unwrap();
+        island.press("Save").unwrap()
+    });
+    assert_eq!(output, ["Saved note #1."]);
+    let [shown] = &run(&hob, "notes show 1")[..] else {
+        panic!()
+    };
+    let lines: Vec<_> = shown.lines().collect();
+    assert_eq!(lines[0], "#1");
+    assert_eq!(lines[2..], ["Categories: home", "", "shopping"]);
+    assert_eq!(categories(&hob), ["home 1 note", "work no notes"]);
+
+    // The edit island shows the note's categories checked.
+    run_answering(&hob, "notes edit 1", |island| {
+        assert_eq!(boxes(island), ["home [x]", "work [ ]"]);
+        island.set_checked("category-1", true).unwrap();
+        island.press("Save").unwrap()
+    });
+    assert_eq!(listed(&hob, "notes"), ["#1  shopping home, work"]);
+    run_answering(&hob, "notes edit 1", |island| {
+        assert_eq!(boxes(island), ["home [x]", "work [x]"]);
+        island.set_checked("category-2", false).unwrap();
+        island.press("Save").unwrap()
+    });
+    assert_eq!(listed(&hob, "notes"), ["#1  shopping work"]);
+    // Cancelling changes nothing.
+    run_answering(&hob, "notes edit 1", |island| {
+        island.set_checked("category-1", false).unwrap();
+        island.press("Cancel").unwrap()
+    });
+    assert_eq!(listed(&hob, "notes"), ["#1  shopping work"]);
+}
+
+#[test]
+fn note_island_has_a_checkbox_per_category() {
+    let (hob, _dir) = setup();
+    run(&hob, "notes categories add home");
+    let output = run_answering(&hob, "note", |island| {
+        assert_eq!(boxes(island), ["home [ ]"]);
+        island.type_text("text", "milk").unwrap();
+        island.set_checked("category-1", true).unwrap();
+        island.press("Save").unwrap()
+    });
+    assert_eq!(output, ["Saved note #1."]);
+    // From arguments, it's in none.
+    run(&hob, "note eggs");
+    assert_eq!(listed(&hob, "notes"), ["#1  milk home", "#2  eggs "]);
+}
+
+#[test]
+fn a_category_deleted_while_editing_is_left_out() {
+    let (hob, _dir) = setup();
+    run(&hob, "notes categories add a b");
+    run(&hob, "note x");
+    let output = run_answering(&hob, "notes edit 1", |island| {
+        island.set_checked("category-1", true).unwrap();
+        island.set_checked("category-2", true).unwrap();
+        run(&hob, "notes categories delete -y a");
+        island.press("Save").unwrap()
+    });
+    assert_eq!(output, ["Saved note #1."]);
+    assert_eq!(listed(&hob, "notes"), ["#1  x b"]);
+}
+
+#[test]
+fn notes_list_by_category() {
+    let (hob, _dir) = setup();
+    run(&hob, "notes categories add work home");
+    for text in ["todo report", "todo dishes", "plain", "todo old report"] {
+        run(&hob, &format!("note '{text}'"));
+    }
+    // Ids: work is 1, home 2.
+    for (id, category) in [(1, 1), (2, 2), (4, 1)] {
+        run_answering(&hob, &format!("notes edit {id}"), |island| {
+            island
+                .set_checked(&format!("category-{category}"), true)
+                .unwrap();
+            island.press("Save").unwrap()
+        });
+    }
+    run(&hob, "done 4");
+    assert_eq!(
+        listed(&hob, "notes list -c WORK"),
+        ["#1 todo todo report work"]
+    );
+    assert_eq!(
+        listed(&hob, "notes list --all --category=work"),
+        ["#1 todo todo report work", "#4 done todo old report work"]
+    );
+    assert_eq!(
+        listed(&hob, "notes list --todo -c home"),
+        ["#2 todo todo dishes home"]
+    );
+    assert_eq!(
+        run(&hob, "notes list -c nope"),
+        [r#"error: there's no category "nope""#]
+    );
+    // Notes without categories, listed alone, get no column for them.
+    let output = run(&hob, "notes list --all");
+    assert_eq!(output[0].matches("row").count(), 4);
+    run(&hob, "notes categories delete -y work");
+    run(&hob, "notes categories delete -y home");
+    let table = &run(&hob, "notes")[0];
+    let labels = table.matches("label").count();
+    assert_eq!(labels, 3 * 3, "{table}");
+}
+
+#[test]
+fn deleting_a_note_takes_it_out_of_its_categories() {
+    let (hob, _dir) = setup();
+    run(&hob, "notes categories add a");
+    run_answering(&hob, "note", |island| {
+        island.type_text("text", "x").unwrap();
+        island.set_checked("category-1", true).unwrap();
+        island.press("Save").unwrap()
+    });
+    assert_eq!(categories(&hob), ["a 1 note"]);
+    run(&hob, "notes delete -y 1");
+    assert_eq!(categories(&hob), ["a no notes"]);
 }
 
 #[test]

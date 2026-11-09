@@ -70,9 +70,9 @@ mod tests {
     #[test]
     fn an_unnamed_todo_note_is_offered_once() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::open(&dir.path().join("notes.sqlite")).unwrap();
-        db.add(None, "todo call Ada").unwrap();
-        db.add(None, "todos are fun").unwrap();
+        let mut db = Db::open(&dir.path().join("notes.sqlite")).unwrap();
+        db.add(None, "todo call Ada", &[]).unwrap();
+        db.add(None, "todos are fun", &[]).unwrap();
         let labels: Vec<_> = pick(&db, 3).unwrap().iter().map(Item::label).collect();
         assert_eq!(labels, ["Do #1: todo call Ada", "Name #2: todos are fun"]);
     }

@@ -73,7 +73,9 @@ names the last one (or `-n ID`). `todo` offers a few things to do now:
 TODO notes (whose title or text starts with the word "todo") to work on,
 and unnamed notes to name. Picking a TODO note makes it active, until
 `done` (which also takes an ID). `notes` lists the notes; `notes show`,
-`edit`, `delete` and `reopen` act on one, given as `3` or `#3`.
+`edit`, `delete` and `reopen` act on one, given as `3` or `#3`. `notes
+categories` defines categories; a note's are checked in the `notes edit`
+island, and `notes list -c NAME` lists the notes in one.
 
 `hob --preview [FILE]` shows a saved session (by default, the current one)
 read-only: nothing runs, and the file isn't changed.

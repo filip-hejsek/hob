@@ -9,12 +9,13 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehav
 pub(crate) type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// The schema version (SQLite's `user_version`) this code reads and writes.
-const VERSION: i32 = 2;
+const VERSION: i32 = 3;
 
-/// Version 2. A note's `status` matters only for TODO notes; at most one
-/// note is active. Ids aren't reused (`AUTOINCREMENT`), so an id in the
-/// scrollback never means another note later.
-const SCHEMA: &str = "
+/// The notes table, as of version 2. A note's `status` matters only for
+/// TODO notes; at most one note is active. Ids aren't reused
+/// (`AUTOINCREMENT`), so an id in the scrollback never means another note
+/// later.
+const NOTES: &str = "
 CREATE TABLE notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT,
@@ -24,6 +25,22 @@ CREATE TABLE notes (
     done TEXT
 );
 CREATE UNIQUE INDEX notes_one_active ON notes (status) WHERE status = 'active';
+";
+
+/// Version 3 adds categories. Names are unique in any ASCII case. Deleting
+/// a note or a category deletes its links (foreign keys are turned on for
+/// each connection).
+const CATEGORIES: &str = "
+CREATE TABLE categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE
+);
+CREATE TABLE note_categories (
+    note INTEGER NOT NULL REFERENCES notes (id) ON DELETE CASCADE,
+    category INTEGER NOT NULL REFERENCES categories (id) ON DELETE CASCADE,
+    PRIMARY KEY (note, category)
+) WITHOUT ROWID;
+CREATE INDEX note_categories_category ON note_categories (category);
 ";
 
 /// Version 1 to 2: rebuilds the table with `AUTOINCREMENT`, keeping
@@ -40,10 +57,15 @@ INSERT INTO notes (id, title, text, status, created, done)
 DROP TABLE notes_v1;
 ";
 
-/// The columns [`Note::from_row`] reads. Times are shown in local time.
+/// The columns [`Note::from_row`] reads, from `notes`. Times are shown in
+/// local time; category names are joined with newlines, which they can't
+/// contain.
 const COLUMNS: &str = "id, title, text, status, \
     strftime('%Y-%m-%d %H:%M', created, 'localtime'), \
-    strftime('%Y-%m-%d %H:%M', done, 'localtime')";
+    strftime('%Y-%m-%d %H:%M', done, 'localtime'), \
+    (SELECT group_concat(c.name, char(10) ORDER BY c.name) \
+        FROM note_categories nc JOIN categories c ON c.id = nc.category \
+        WHERE nc.note = notes.id)";
 
 /// A note's status. Only TODO notes are meant to be active or done.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +97,8 @@ pub(crate) struct Note {
     pub(crate) created: String,
     /// When it was done, like `created`.
     pub(crate) done: Option<String>,
+    /// The names of its categories, sorted.
+    pub(crate) categories: Vec<String>,
 }
 
 impl Note {
@@ -91,6 +115,9 @@ impl Note {
             },
             created: row.get(4)?,
             done: row.get(5)?,
+            categories: (row.get::<_, Option<String>>(6)?)
+                .map(|names| names.split('\n').map(str::to_owned).collect())
+                .unwrap_or_default(),
         })
     }
 
@@ -110,12 +137,24 @@ fn starts_with_todo(text: &str) -> bool {
     text[..4].eq_ignore_ascii_case("todo") && !rest.starts_with(char::is_alphanumeric)
 }
 
+/// A category notes can be in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Category {
+    pub(crate) id: i64,
+    pub(crate) name: String,
+}
+
 /// A change to a note, made by [`Db::change`].
 pub(crate) enum Change {
     /// Names it, or makes it unnamed again.
     Title(Option<String>),
-    /// Replaces its title and text.
-    Edit { title: Option<String>, text: String },
+    /// Replaces its title, text and categories (by id; ids of categories
+    /// deleted meanwhile are left out).
+    Edit {
+        title: Option<String>,
+        text: String,
+        categories: Vec<i64>,
+    },
     /// Sets its status. Making it active puts the one active before back
     /// to open; making it done records the time, other statuses clear it.
     Status(Status),
@@ -137,17 +176,29 @@ impl Db {
         // Commands run concurrently, each with its own connection.
         conn.busy_timeout(Duration::from_secs(5))
             .map_err(|e| fail(&e))?;
+        // Off by default, and only settable outside transactions.
+        conn.pragma_update(None, "foreign_keys", true)
+            .map_err(|e| fail(&e))?;
         migrate(&mut conn).map_err(|e| fail(&e))?;
         Ok(Db(conn))
     }
 
-    /// Adds a note; returns its id.
-    pub(crate) fn add(&self, title: Option<&str>, text: &str) -> rusqlite::Result<i64> {
-        self.0.execute(
+    /// Adds a note, in the categories given (by id); returns its id.
+    pub(crate) fn add(
+        &mut self,
+        title: Option<&str>,
+        text: &str,
+        categories: &[i64],
+    ) -> rusqlite::Result<i64> {
+        let tx = self.0.transaction()?;
+        tx.execute(
             "INSERT INTO notes (title, text) VALUES (?1, ?2)",
             params![title, text],
         )?;
-        Ok(self.0.last_insert_rowid())
+        let id = tx.last_insert_rowid();
+        set_categories(&tx, id, categories)?;
+        tx.commit()?;
+        Ok(id)
     }
 
     /// The note with this id, if there is one.
@@ -209,6 +260,66 @@ impl Db {
         Ok(note)
     }
 
+    /// All categories, by name.
+    pub(crate) fn categories(&self) -> rusqlite::Result<Vec<Category>> {
+        let mut statement = (self.0).prepare("SELECT id, name FROM categories ORDER BY name")?;
+        let categories = statement.query_map([], Category::from_row)?;
+        categories.collect()
+    }
+
+    /// The category with this name, in any ASCII case.
+    pub(crate) fn category(&self, name: &str) -> rusqlite::Result<Option<Category>> {
+        category(&self.0, name)
+    }
+
+    /// How many notes are in category `id`.
+    pub(crate) fn category_size(&self, id: i64) -> rusqlite::Result<i64> {
+        (self.0).query_row(
+            "SELECT count(*) FROM note_categories WHERE category = ?1",
+            [id],
+            |row| row.get(0),
+        )
+    }
+
+    /// Adds categories, all or none; fails if one exists already.
+    pub(crate) fn add_categories(&mut self, names: &[String]) -> Result<(), Error> {
+        let tx = (self.0).transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for name in names {
+            if let Some(old) = category(&tx, name)? {
+                return Err(format!("there's already a category {:?}", old.name).into());
+            }
+            tx.execute("INSERT INTO categories (name) VALUES (?1)", [name])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Renames category `id`; fails if another one has the name, or it was
+    /// deleted.
+    pub(crate) fn rename_category(&mut self, id: i64, name: &str) -> Result<(), Error> {
+        let tx = (self.0).transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(old) = category(&tx, name)?
+            && old.id != id
+        {
+            return Err(format!("there's already a category {:?}", old.name).into());
+        }
+        let changed = tx.execute(
+            "UPDATE categories SET name = ?2 WHERE id = ?1",
+            params![id, name],
+        )?;
+        if changed == 0 {
+            return Err("the category was deleted meanwhile".into());
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Deletes category `id`, taking it off its notes; returns whether it
+    /// was there.
+    pub(crate) fn delete_category(&self, id: i64) -> rusqlite::Result<bool> {
+        Ok((self.0).execute("DELETE FROM categories WHERE id = ?1", [id])? > 0)
+    }
+
     fn one(&self, sql: &str) -> rusqlite::Result<Option<Note>> {
         self.0.query_row(sql, [], Note::from_row).optional()
     }
@@ -229,6 +340,38 @@ fn get(conn: &Connection, id: i64) -> rusqlite::Result<Option<Note>> {
     .optional()
 }
 
+impl Category {
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Category {
+            id: row.get(0)?,
+            name: row.get(1)?,
+        })
+    }
+}
+
+fn category(conn: &Connection, name: &str) -> rusqlite::Result<Option<Category>> {
+    conn.query_row(
+        "SELECT id, name FROM categories WHERE name = ?1",
+        [name],
+        Category::from_row,
+    )
+    .optional()
+}
+
+/// Puts note `id` in exactly these categories, leaving out ids that don't
+/// exist.
+fn set_categories(tx: &Transaction<'_>, id: i64, categories: &[i64]) -> rusqlite::Result<()> {
+    tx.execute("DELETE FROM note_categories WHERE note = ?1", [id])?;
+    for category in categories {
+        tx.execute(
+            "INSERT OR IGNORE INTO note_categories (note, category) \
+                SELECT ?1, id FROM categories WHERE id = ?2",
+            [id, *category],
+        )?;
+    }
+    Ok(())
+}
+
 fn apply(tx: &Transaction<'_>, id: i64, change: Change) -> rusqlite::Result<()> {
     match change {
         Change::Title(title) => {
@@ -237,11 +380,16 @@ fn apply(tx: &Transaction<'_>, id: i64, change: Change) -> rusqlite::Result<()> 
                 params![id, title],
             )?;
         }
-        Change::Edit { title, text } => {
+        Change::Edit {
+            title,
+            text,
+            categories,
+        } => {
             tx.execute(
                 "UPDATE notes SET title = ?2, text = ?3 WHERE id = ?1",
                 params![id, title, text],
             )?;
+            set_categories(tx, id, &categories)?;
         }
         Change::Status(status) => {
             if status == Status::Active {
@@ -276,8 +424,9 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let sql = match version {
         VERSION => return Ok(()),
-        0 => SCHEMA.to_owned(),
-        1 => format!("{MIGRATE_1}{SCHEMA}{MIGRATE_1_COPY}"),
+        0 => format!("{NOTES}{CATEGORIES}"),
+        1 => format!("{MIGRATE_1}{NOTES}{MIGRATE_1_COPY}{CATEGORIES}"),
+        2 => CATEGORIES.to_owned(),
         _ => {
             return Err(format!(
                 "the database has version {version}; this hob knows only up to {VERSION}"
@@ -311,8 +460,8 @@ mod tests {
     #[test]
     fn one_note_is_active() {
         let (mut db, _dir) = db();
-        let a = db.add(None, "todo a").unwrap();
-        let b = db.add(None, "todo b").unwrap();
+        let a = db.add(None, "todo a", &[]).unwrap();
+        let b = db.add(None, "todo b", &[]).unwrap();
         set(&mut db, a, Change::Status(Status::Active));
         set(&mut db, b, Change::Status(Status::Active));
         assert_eq!(db.active().unwrap().unwrap().id, b);
@@ -342,10 +491,10 @@ mod tests {
     #[test]
     fn todo_notes_by_title_or_text() {
         let (mut db, _dir) = db();
-        let a = db.add(None, "TODO: call").unwrap();
-        let b = db.add(None, "plain").unwrap();
-        let c = db.add(None, "not todo").unwrap();
-        db.add(None, "todos").unwrap();
+        let a = db.add(None, "TODO: call", &[]).unwrap();
+        let b = db.add(None, "plain", &[]).unwrap();
+        let c = db.add(None, "not todo", &[]).unwrap();
+        db.add(None, "todos", &[]).unwrap();
         set(&mut db, b, Change::Title(Some("ToDo later".into())));
         assert_eq!(ids(db.open_todos().unwrap()), [a, b]);
         assert_eq!(ids(db.unnamed().unwrap()), [c, c + 1]);
@@ -354,7 +503,7 @@ mod tests {
     #[test]
     fn changes_see_what_is_stored() {
         let (mut db, _dir) = db();
-        let a = db.add(Some("A"), "text").unwrap();
+        let a = db.add(Some("A"), "text", &[]).unwrap();
         set(&mut db, a, Change::Delete);
         let error = db.change(a, |note| {
             assert!(note.is_none());
@@ -367,10 +516,10 @@ mod tests {
     #[test]
     fn ids_are_not_reused() {
         let (mut db, _dir) = db();
-        db.add(None, "a").unwrap();
-        let b = db.add(None, "b").unwrap();
+        db.add(None, "a", &[]).unwrap();
+        let b = db.add(None, "b", &[]).unwrap();
         set(&mut db, b, Change::Delete);
-        assert_eq!(db.add(None, "c").unwrap(), b + 1);
+        assert_eq!(db.add(None, "c", &[]).unwrap(), b + 1);
     }
 
     /// A version 1 database, as that version made it.
@@ -419,11 +568,47 @@ mod tests {
         );
         // Ids aren't reused, even of the last note deleted.
         set(&mut db, 5, Change::Delete);
-        assert_eq!(db.add(None, "new").unwrap(), 6);
+        assert_eq!(db.add(None, "new", &[]).unwrap(), 6);
         drop(db);
         // Opening it again changes nothing.
         let db = Db::open(&path).unwrap();
         assert_eq!(ids(db.all().unwrap()), [1, 2, 6]);
+    }
+
+    #[test]
+    fn migrates_version_2() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.sqlite");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(NOTES).unwrap();
+        conn.execute_batch(
+            "PRAGMA user_version = 2;
+            INSERT INTO notes (id, text) VALUES (3, 'kept');",
+        )
+        .unwrap();
+        drop(conn);
+        let mut db = Db::open(&path).unwrap();
+        assert_eq!(db.get(3).unwrap().unwrap().text, "kept");
+        db.add_categories(&["a".into()]).unwrap();
+        let a = db.category("A").unwrap().unwrap().id;
+        let id = db.add(None, "new", &[a]).unwrap();
+        assert_eq!(id, 4);
+        assert_eq!(db.get(id).unwrap().unwrap().categories, ["a"]);
+    }
+
+    #[test]
+    fn deleting_takes_notes_out_of_categories() {
+        let (mut db, _dir) = db();
+        db.add_categories(&["b".into(), "A".into()]).unwrap();
+        let ids: Vec<_> = db.categories().unwrap().iter().map(|c| c.id).collect();
+        let note = db.add(None, "x", &[ids[0], ids[1], 99]).unwrap();
+        // Sorted in any case; the unknown id is left out.
+        assert_eq!(db.get(note).unwrap().unwrap().categories, ["A", "b"]);
+        assert!(db.delete_category(ids[0]).unwrap());
+        assert_eq!(db.get(note).unwrap().unwrap().categories, ["b"]);
+        assert_eq!(db.category_size(ids[1]).unwrap(), 1);
+        set(&mut db, note, Change::Delete);
+        assert_eq!(db.category_size(ids[1]).unwrap(), 0);
     }
 
     #[test]

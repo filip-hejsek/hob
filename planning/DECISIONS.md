@@ -442,8 +442,8 @@ named like git's so they're familiar; `!git ...` still runs the real one.
 ## Note commands (hob-notes)
 
 `note` is the quick way to write something down, `todo` and `done` the
-way to work, and `notes` (`list`, `show`, `edit`, `delete`, `reopen`)
-manages what's stored. Notes are stored; TODO items aren't, they're made
+way to work, and `notes` (`list`, `show`, `edit`, `delete`, `reopen`,
+`categories`) manages what's stored. Notes are stored; TODO items aren't, they're made
 from the notes whenever `todo` runs.
 
 - Notes are kept in SQLite, through rusqlite with SQLite bundled (built
@@ -516,6 +516,28 @@ from the notes whenever `todo` runs.
   of a note deleted meanwhile, is an error saying what happened (an
   edit's text is lost; rare enough). Edits made by two commands at once:
   the last one saved wins.
+- Categories (version 3): a `categories` table (names unique in any ASCII
+  case, `COLLATE NOCASE`) and a `note_categories` link table whose rows go
+  with their note or category (`ON DELETE CASCADE`; foreign keys are
+  turned on for each connection). Version 2 databases just get the new
+  tables. A note's category names are read with it, joined with newlines
+  in one subquery, so names can't have control characters; they're also
+  trimmed, and can't be empty.
+- `notes categories [list | add NAME… | rename NAME NEW | delete [-y]
+  NAME]` manages them; alone it lists them in a table with how many notes
+  each has ("No categories." if none). Names are matched in any case. `add`
+  adds all or none (a name that exists, or given twice, is an error);
+  `rename` may change only the case; `delete` asks first, saying how many
+  notes it's taken off, unless `-y`.
+- A note's categories are set in the `notes edit` island: a "Categories:"
+  label and a checkbox per category (by name), below the text area, none
+  if there are no categories. The `note` island has them too; `note TEXT`
+  puts the note in none. Checkboxes are keyed `category-ID`, not by name.
+  Saving sets the note's categories to those checked, in the same
+  transaction as the text; categories deleted meanwhile are left out.
+- `notes show` prints a `Categories: a, b` line after the details when the
+  note has any; `notes list` adds a column with them when a note listed
+  has any, and `-c/--category NAME` lists only the notes in one.
 
 Rejected:
 
@@ -523,7 +545,7 @@ Rejected:
   buy milk` must stay one step, and free-form text can't share a position
   with subcommand names.
 - Top-level `show`, `edit`, `delete`: too general as names for commands
-  about notes only.
+  about notes only. The same goes for a top-level `categories`.
 - `title ID TITLE…` with a positional ID: ambiguous with a title that
   starts with a number.
 - A separate `notes title ID`: `title -n` and `notes edit` cover it.

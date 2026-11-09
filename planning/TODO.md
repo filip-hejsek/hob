@@ -145,7 +145,10 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - More TODO sources (e.g. Git: uncommitted changes), and a better choice
   of which 3 items to offer than oldest first, in turn.
 - `notes list` shows everything at once; no search, paging or sorting.
-- Completing IDs (`notes show <Tab>`), with the notes' titles.
+- Completing IDs (`notes show <Tab>`), with the notes' titles, and
+  category names (`notes list -c <Tab>`).
+- Categories can be set only through the islands; maybe `note -c NAME
+  TEXT…` (but `note`'s text is free-form, so no options yet).
 - Edits by two commands at once aren't detected (the last one wins).
 
 ## Logging
