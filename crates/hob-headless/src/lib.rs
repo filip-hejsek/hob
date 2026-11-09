@@ -26,11 +26,11 @@ use serde_json::Value;
 
 use protocol::{BlockId, Call, ErrorObject, IslandId, Notification, RunResult, code};
 
-/// The program name that starts lines logged to stderr.
+/// The default [`Options::log_prefix`], also used by the [`client`].
 const LOG_PREFIX: &str = "hob";
 
 /// How [`serve_with`] behaves.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Options {
     /// Whether islands sent to the client keep the paths of images read
@@ -38,6 +38,18 @@ pub struct Options {
     /// the same machine can use the file. Off by default: the client may be
     /// elsewhere, or the paths private. The image data is sent either way.
     pub image_paths: bool,
+    /// Starts the server's messages on stderr, followed by `: `. Defaults to
+    /// `hob`.
+    pub log_prefix: String,
+}
+
+impl Default for Options {
+    fn default() -> Options {
+        Options {
+            image_paths: false,
+            log_prefix: LOG_PREFIX.to_owned(),
+        }
+    }
 }
 
 /// Serves `interpreter` to a client, with the default [`Options`]: reads
@@ -66,9 +78,9 @@ pub fn serve_with(
     thread::Builder::new()
         .name("hob-headless input".into())
         .spawn(move || read_input(input, input_events))?;
-    let early_log = hob_core::logger::early_log_stderr(LOG_PREFIX);
+    let early_log = hob_core::logger::early_log_stderr(&options.log_prefix);
     let log_level = hob_core::logger::level_from_env(early_log);
-    if let Some(records) = hob_core::logger::install(log_level, LOG_PREFIX.into()) {
+    if let Some(records) = hob_core::logger::install(log_level, options.log_prefix.clone()) {
         let events = events.clone();
         thread::Builder::new()
             .name("hob-headless log".into())

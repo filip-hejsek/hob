@@ -55,6 +55,7 @@ fn main() -> ExitCode {
             let interpreter = interpreter();
             let mut options = hob_headless::Options::default();
             options.image_paths = std::env::var_os("HOB_IMAGE_PATHS").is_some_and(|v| v == "1");
+            options.log_prefix = LOG_PREFIX.to_owned();
             hob_headless::serve_with(interpreter, std::io::stdin(), std::io::stdout(), options)
                 .map_err(|e| e.to_string())
         }

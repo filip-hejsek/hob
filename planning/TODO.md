@@ -160,6 +160,10 @@ Only the first parts are done; the rest is still to be designed.
 - Record times are only shown by `messages`, in local time (UTC if the
   system time zone can't be found).
 - `messages` could filter by source, or colour its output.
+- hob-headless's client prints its errors (e.g. a bad message from the
+  headless frontend) with hob-headless's `LOG_PREFIX`, so hob-cli and
+  hob-mcp label them `hob:`. It could take the prefix from its user, as
+  the server does.
 
 ## hob-gui (shell)
 

@@ -489,7 +489,7 @@ they're made from the notes whenever `todo` runs.
 - Lines on stderr start with the program's name and `: `, as is usual for
   Unix tools. Crates that print to stderr themselves name it in a
   `LOG_PREFIX` constant. The logger takes the prefix when installed, and
-  hob-gui takes it from its user, so that hob-mcp-test-client's lines
+  hob-gui and hob-headless take it from their user, so that hob-mcp-test-client's lines
   don't say `hob`. Messages from before the logger is installed (e.g. a bad
   `HOB_LOG`) go to an early log, a function which prints them to stderr.
   Functions that run that early take it as a parameter, rather than the
