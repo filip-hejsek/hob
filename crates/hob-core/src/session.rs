@@ -16,8 +16,9 @@ use crate::LogRecord;
 /// version 2 had no images.
 const VERSION: u32 = 3;
 
-/// A frontend's state worth keeping across restarts: the prompt history and
-/// the scrollback. Saved as JSON, without ephemeral log records.
+/// A frontend's state worth keeping across restarts: the prompt history,
+/// the scrollback, and the name of the program that saved it. Saved as JSON,
+/// without ephemeral log records.
 ///
 /// Images are saved once each, in a table by [`ImageKey`] at the end of the
 /// file, and islands refer to them by key. Linked images
@@ -27,6 +28,11 @@ const VERSION: u32 = 3;
 /// without data show only their alt text.
 #[derive(Default, Serialize, Deserialize)]
 pub struct Session {
+    /// The name of the program that saved it, as
+    /// [`Interpreter::name`](crate::Interpreter::name) gives it. `None` in
+    /// files saved before the name was (all by hob).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Entered command lines, oldest first.
     pub history: Vec<String>,
     /// The scrollback, oldest first.
@@ -205,6 +211,7 @@ impl Session {
                 let FileV1 { history, blocks } =
                     serde_json::from_str(&json).map_err(SessionError::Format)?;
                 Session {
+                    name: None,
                     history,
                     scrollback: blocks.into_iter().map(Item::Block).collect(),
                 }
@@ -382,6 +389,7 @@ mod tests {
         let mut b = IslandBuilder::new(text_field("name", ""));
         b.set_text("name", "Ada");
         Session {
+            name: Some("kettle".into()),
             history: vec!["contact".into()],
             scrollback: vec![Item::Block(Block {
                 line: "contact".into(),
@@ -399,6 +407,7 @@ mod tests {
         let path = temp_dir("roundtrip").join("sub/session.json");
         session().save(&path).unwrap();
         let loaded = Session::load(&path).unwrap().unwrap();
+        assert_eq!(loaded.name.as_deref(), Some("kettle"));
         assert_eq!(loaded.history, ["contact"]);
         let block = only_block(&loaded);
         assert_eq!(block.line, "contact");

@@ -229,7 +229,6 @@ fn keys_press_buttons() {
 fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
     let (mut shell, _) = Shell::new(
         Some(Arc::new(interpreter())),
-        "hob".into(),
         None,
         Limits::default(),
         Arc::new(gui_config()),
@@ -261,7 +260,6 @@ fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
 fn ctrl_d_does_not_exit_while_commands_are_running() {
     let (mut shell, _) = Shell::new(
         Some(Arc::new(interpreter())),
-        "hob".into(),
         None,
         Limits::default(),
         Arc::new(gui_config()),
@@ -326,6 +324,7 @@ fn session_is_restored_and_saved() {
         .freeze()
         .unwrap();
     let session = Session {
+        name: Some("hob".into()),
         history: vec!["old".into()],
         scrollback: vec![hob_core::Item::Block(hob_core::Block {
             line: "old".into(),
@@ -357,6 +356,52 @@ fn session_is_restored_and_saved() {
 }
 
 #[test]
+fn a_session_from_another_program_is_warned_about_on_the_next_save() {
+    let file = ScratchFile::new("other-name");
+    let session = Session {
+        name: Some("kettle".into()),
+        history: vec!["old".into()],
+        ..Session::default()
+    };
+    session.save(&file.0).unwrap();
+    let before = std::fs::read(&file.0).unwrap();
+
+    let mut shell = start(Some(file.0.clone()));
+    shell.expect("warning: a session from kettle was loaded into hob");
+    shell.settle();
+    // Loading alone doesn't save it.
+    assert_eq!(std::fs::read(&file.0).unwrap(), before);
+
+    shell.run("say new");
+    let saved = Session::load(&file.0).unwrap().unwrap();
+    assert_eq!(saved.name.as_deref(), Some("hob"));
+    let warned = saved.scrollback.iter().any(|item| {
+        matches!(item, hob_core::Item::Notice(r)
+            if r.level == Level::Warn && r.message.contains("from kettle"))
+    });
+    assert!(warned);
+}
+
+#[test]
+fn a_session_without_a_name_is_not_warned_about() {
+    let file = ScratchFile::new("no-name");
+    let session = Session {
+        history: vec!["old".into()],
+        ..Session::default()
+    };
+    session.save(&file.0).unwrap();
+    let (shell, _) = Shell::new(
+        Some(Arc::new(interpreter())),
+        Some(file.0.clone()),
+        Limits::default(),
+        Arc::new(gui_config()),
+        Level::Info,
+        None,
+    );
+    assert!(shell.scrollback.is_empty());
+}
+
+#[test]
 fn private_lines_are_not_saved() {
     let file = ScratchFile::new("private");
     let mut shell = start(Some(file.0.clone()));
@@ -384,7 +429,6 @@ fn saving_trims_the_scrollback_and_history() {
     };
     let (mut shell, _) = Shell::new(
         Some(Arc::new(interpreter())),
-        "hob".into(),
         Some(file.0.clone()),
         limits,
         Arc::new(gui_config()),
@@ -458,6 +502,7 @@ fn saving_trims_the_scrollback_and_history() {
 fn preview_shows_the_session_without_changing_it() {
     let file = ScratchFile::new("preview");
     let session = Session {
+        name: Some("kettle".into()),
         history: vec!["old".into()],
         scrollback: vec![hob_core::Item::Block(hob_core::Block {
             line: "old".into(),
@@ -470,7 +515,6 @@ fn preview_shows_the_session_without_changing_it() {
 
     let program = application(
         None,
-        "kettle".into(),
         Some(file.0.clone()),
         Limits::default(),
         gui_config(),
@@ -493,7 +537,6 @@ fn preview_shows_the_session_without_changing_it() {
     // Ctrl+L doesn't clear, and closing doesn't save.
     let (mut shell, _) = Shell::new(
         None,
-        "hob".into(),
         Some(file.0.clone()),
         Limits::default(),
         Arc::new(gui_config()),
@@ -513,7 +556,6 @@ fn preview_leaves_a_bad_file_alone() {
     std::fs::write(&file.0, "not json").unwrap();
     let (shell, _) = Shell::new(
         None,
-        "hob".into(),
         Some(file.0.clone()),
         Limits::default(),
         Arc::new(gui_config()),
@@ -597,7 +639,6 @@ fn start_with(
 ) -> Harness<impl Program<Message = Message> + 'static> {
     let program = application(
         Some(Arc::new(interpreter())),
-        "hob".into(),
         session,
         limits,
         gui_config(),

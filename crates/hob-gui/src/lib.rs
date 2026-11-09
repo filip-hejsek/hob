@@ -78,6 +78,10 @@ mod selectable;
 /// The target of the shell's own log records.
 const TARGET: &str = "hob_gui";
 
+/// The name of the program that saved a session without a name: such
+/// sessions are older than names, and were all saved by hob.
+const UNNAMED_SESSION: &str = "hob";
+
 /// Configuration supplied by the application running the shell.
 #[derive(Clone, Debug)]
 pub struct GuiConfig {
@@ -101,10 +105,8 @@ pub fn run(interpreter: Interpreter, session: Option<PathBuf>, config: GuiConfig
     let level = hob_core::logger::level_from_env(early_log);
     let records = hob_core::logger::install(level, config.log_prefix.clone());
     let limits = Limits::from_env();
-    let name = interpreter.name().to_owned();
     application(
         Some(Arc::new(interpreter)),
-        name,
         session,
         limits,
         config,
@@ -116,9 +118,8 @@ pub fn run(interpreter: Interpreter, session: Option<PathBuf>, config: GuiConfig
 
 /// Opens the session saved in `session` read-only, and blocks until the
 /// window closes. No commands run, and the file isn't changed, even if it
-/// can't be read. `name` is the name of the program that saved it, as
-/// [`Interpreter::name`] gives it.
-pub fn preview(session: PathBuf, name: String, config: GuiConfig) -> iced::Result {
+/// can't be read. The program's name is the one saved in the session.
+pub fn preview(session: PathBuf, config: GuiConfig) -> iced::Result {
     let early_log = hob_core::logger::early_log_stderr(&config.log_prefix);
     let level = hob_core::logger::level_from_env(early_log);
     let records = hob_core::logger::install(level, config.log_prefix.clone());
@@ -127,17 +128,15 @@ pub fn preview(session: PathBuf, name: String, config: GuiConfig) -> iced::Resul
         ..config
     };
     let limits = Limits::default();
-    application(None, name, Some(session), limits, config, level, records).run()
+    application(None, Some(session), limits, config, level, records).run()
 }
 
 /// The shell as an iced application, ready to run. Without an interpreter,
-/// it's a read-only preview of the session. `name` is the program's name,
-/// as the interpreter has it. The session is trimmed to
+/// it's a read-only preview of the session. The session is trimmed to
 /// `limits` when saved. The window is set up as `config` says. Log records
 /// that aren't from a command are read from `records`, if given.
 fn application(
     interpreter: Option<Arc<Interpreter>>,
-    name: String,
     session: Option<PathBuf>,
     limits: Limits,
     config: GuiConfig,
@@ -154,7 +153,6 @@ fn application(
             let records = records.lock().unwrap().take();
             Shell::new(
                 interpreter.clone(),
-                name.clone(),
                 session.clone(),
                 limits,
                 config.clone(),
@@ -191,7 +189,8 @@ const SCROLLBACK: &str = "scrollback";
 struct Shell {
     /// Runs commands; without one, the shell is a read-only preview.
     interpreter: Option<Arc<Interpreter>>,
-    /// The program's name, as the interpreter has it, e.g. for notes.
+    /// The program's name, as the interpreter has it (or, in a preview, as
+    /// the session has it), e.g. for notes.
     name: String,
     /// Configuration provided by the application.
     config: Arc<GuiConfig>,
@@ -334,17 +333,17 @@ impl<T> fmt::Debug for Pending<T> {
 impl Shell {
     fn new(
         interpreter: Option<Arc<Interpreter>>,
-        name: String,
         session: Option<PathBuf>,
         limits: Limits,
         config: Arc<GuiConfig>,
         level: Level,
         records: Option<futures_channel::mpsc::UnboundedReceiver<LogRecord>>,
     ) -> (Self, Task<Message>) {
+        let name = interpreter.as_ref().map(|i| i.name().to_owned());
         let mut shell = Shell {
             config,
             interpreter,
-            name,
+            name: name.unwrap_or_else(|| UNNAMED_SESSION.to_owned()),
             session,
             limits,
             save_error: None,
@@ -377,6 +376,10 @@ impl Shell {
     /// Restores the saved session, if there is one. Errors are reported; a
     /// file with bad contents is moved aside, so it isn't overwritten (but
     /// not in a preview, which never writes it).
+    ///
+    /// A preview takes the program's name from the session. Otherwise, a
+    /// session saved by another program is warned about; the warning is
+    /// saved with the next change, not right away.
     fn restore(&mut self) {
         let Some(path) = self.session.clone() else {
             return;
@@ -385,7 +388,7 @@ impl Shell {
             Ok(Some(session)) => session,
             Ok(None) if self.is_preview() => {
                 let message = format!("There's no saved session at {}.", path.display());
-                let notice = self.error_notice(message);
+                let notice = self.notice(Level::Error, message);
                 self.scrollback.push(Item::Notice(notice));
                 return;
             }
@@ -400,10 +403,18 @@ impl Shell {
                         Err(e) => message += &format!("; couldn't move it aside: {e}"),
                     }
                 }
-                let notice = self.error_notice(message);
+                let notice = self.notice(Level::Error, message);
                 self.scrollback.push(Item::Notice(notice));
                 return;
             }
+        };
+        let other_name = match restored.name {
+            Some(name) if self.is_preview() => {
+                self.name = name;
+                None
+            }
+            Some(name) if name != self.name => Some(name),
+            _ => None,
         };
         self.history = History::from(restored.history);
         for item in restored.scrollback {
@@ -418,6 +429,11 @@ impl Shell {
                 hob_core::Item::Notice(record) => Item::Notice(record),
             };
             self.scrollback.push(item);
+        }
+        if let Some(other_name) = other_name {
+            let message = format!("a session from {other_name} was loaded into {}", self.name);
+            let notice = self.notice(Level::Warn, message);
+            self.scrollback.push(Item::Notice(notice));
         }
     }
 
@@ -443,6 +459,7 @@ impl Shell {
             (_, scrollback) = self.saved_items();
         }
         let session = Session {
+            name: Some(self.name.clone()),
             history: self.history.saved_lines(),
             scrollback,
         };
@@ -457,18 +474,19 @@ impl Shell {
                     return;
                 }
                 self.save_error = Some(message.clone());
-                self.error_notice(message).ephemeral()
+                self.notice(Level::Error, message).ephemeral()
             }
         };
         self.scrollback.push(Item::Notice(notice));
     }
 
-    /// An error notice of the shell's own, also printed to stderr. Not
-    /// logged with the `log` crate, since its records come back as notices
-    /// that aren't ephemeral, and later than the shell's own.
-    fn error_notice(&self, message: String) -> LogRecord {
-        eprintln!("{}: {message}", self.config.log_prefix);
-        LogRecord::new(Level::Error, TARGET, message)
+    /// A notice of the shell's own, also printed to stderr. Not logged with
+    /// the `log` crate, since its records come back as notices that aren't
+    /// ephemeral, and later than the shell's own.
+    fn notice(&self, level: Level, message: String) -> LogRecord {
+        let record = LogRecord::new(level, TARGET, message);
+        eprintln!("{}: {record}", self.config.log_prefix);
+        record
     }
 
     /// The items of the scrollback that are saved, as saved, with their

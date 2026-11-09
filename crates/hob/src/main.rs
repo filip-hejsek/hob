@@ -33,9 +33,7 @@ fn main() -> ExitCode {
                 _ => session_path(),
             };
             match path {
-                Some(path) => {
-                    hob_gui::preview(path, NAME.to_owned(), gui_config()).map_err(|e| e.to_string())
-                }
+                Some(path) => hob_gui::preview(path, gui_config()).map_err(|e| e.to_string()),
                 None => Err("no session to preview: no state directory".to_owned()),
             }
         }

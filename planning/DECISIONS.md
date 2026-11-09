@@ -636,9 +636,15 @@ Works like a terminal: a scrollback with the prompt below it.
 - The program's name, as shown to the user (e.g. in `exit`'s description
   and the note on interrupted commands), belongs to the interpreter
   (`Interpreter::named`; `new` names it hob), since commands need it too,
-  and hob-gui takes it from there. A preview has no interpreter, so
-  `preview` takes the name. Rejected: a field in `GuiConfig`, which
+  and hob-gui takes it from there. Rejected: a field in `GuiConfig`, which
   `hob-core`'s builtins can't see.
+- The session file saves the name too (an optional field, so the format
+  version stays 3). A preview, which has no interpreter, takes the name
+  from there; files without one were saved by hob. Rejected: `preview`
+  taking the name as an argument, which may not match the file's.
+- A live shell that loads a session saved under another name warns about
+  it with a notice (also on stderr), but doesn't save right away: the
+  warning reaches the file only when something else saves it.
 - iced comes from a fork (https://github.com/filip-hejsek/iced, branch
   `startup-notify`) that passes the launcher's startup notification token
   to winit (see ICED_WISHLIST.md). Every iced crate is patched, not just
