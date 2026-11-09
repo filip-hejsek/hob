@@ -12,10 +12,28 @@ use hob_mcp_test_client::Client;
 /// The program name that starts lines logged to stderr.
 const LOG_PREFIX: &str = "hob-mcp-test-client";
 
+/// What `--version` prints: the version and the Git commit built from.
+const VERSION: &str = concat!(
+    env!("CARGO_BIN_NAME"),
+    " ",
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("HOB_COMMIT"),
+    ")"
+);
+
 fn main() -> ExitCode {
-    if std::env::args_os().len() > 1 {
-        eprintln!("usage: hob-mcp-test-client");
-        return ExitCode::from(2);
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    match args.as_slice() {
+        [] => {}
+        [flag] if flag == "--version" => {
+            println!("{VERSION}");
+            return ExitCode::SUCCESS;
+        }
+        _ => {
+            eprintln!("usage: hob-mcp-test-client [--version]");
+            return ExitCode::from(2);
+        }
     }
     // Commands block on their own threads; they reach rmcp's async API
     // through this runtime.

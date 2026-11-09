@@ -76,6 +76,9 @@ name. Picking a TODO note makes it active, until `done`.
 `hob --preview [FILE]` shows a saved session (by default, the current one)
 read-only: nothing runs, and the file isn't changed.
 
+Each program prints its version and the Git commit it was built from with
+`--version`.
+
 Arguments can be quoted like in a shell (`cat 'my file'`, `"my file"` or
 `my\ file`), and `~` is the home directory.
 

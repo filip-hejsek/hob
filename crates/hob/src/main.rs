@@ -16,9 +16,19 @@ const NAME: &str = "hob";
 const LOG_PREFIX: &str = NAME;
 
 #[cfg(feature = "gui")]
-const USAGE: &str = "usage: hob [--headless | --preview [SESSION]]";
+const USAGE: &str = "usage: hob [--headless | --preview [SESSION] | --version]";
 #[cfg(not(feature = "gui"))]
-const USAGE: &str = "usage: hob --headless (built without the gui feature)";
+const USAGE: &str = "usage: hob --headless | --version (built without the gui feature)";
+
+/// What `--version` prints: the version and the Git commit built from.
+const VERSION: &str = concat!(
+    env!("CARGO_BIN_NAME"),
+    " ",
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("HOB_COMMIT"),
+    ")"
+);
 
 fn main() -> ExitCode {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
@@ -36,6 +46,10 @@ fn main() -> ExitCode {
                 Some(path) => hob_gui::preview(path, gui_config()).map_err(|e| e.to_string()),
                 None => Err("no session to preview: no state directory".to_owned()),
             }
+        }
+        [flag] if flag == "--version" => {
+            println!("{VERSION}");
+            Ok(())
         }
         [flag] if flag == "--headless" => {
             let interpreter = interpreter();

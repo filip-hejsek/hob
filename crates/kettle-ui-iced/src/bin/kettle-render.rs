@@ -2,6 +2,7 @@
 //! [`kettle_ui_iced::render_png`]).
 //!
 //! Usage: `kettle-render [--frozen] [--width N] [--theme NAME] ISLAND.json OUT.png`
+//! (or `kettle-render --version`)
 //!
 //! `NAME` is one of iced's built-in themes, e.g. `dark` or `tokyo-night`
 //! (case, spaces and hyphens don't matter); the default is `light`.
@@ -17,6 +18,16 @@ const LOG_PREFIX: &str = "kettle-render";
 const USAGE: &str =
     "usage: kettle-render [--frozen] [--width N] [--theme NAME] ISLAND.json OUT.png";
 
+/// What `--version` prints: the version and the Git commit built from.
+const VERSION: &str = concat!(
+    env!("CARGO_BIN_NAME"),
+    " ",
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("HOB_COMMIT"),
+    ")"
+);
+
 /// About the width of an island in hob's default window.
 const DEFAULT_WIDTH: u32 = 560;
 
@@ -29,6 +40,10 @@ fn main() -> ExitCode {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--frozen" => frozen = true,
+            "--version" => {
+                println!("{VERSION}");
+                return ExitCode::SUCCESS;
+            }
             "--width" => match args.next().and_then(|w| w.parse().ok()) {
                 Some(w) if w > 0 => width = w,
                 _ => return usage(),

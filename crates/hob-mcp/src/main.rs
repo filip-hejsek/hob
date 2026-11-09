@@ -11,7 +11,18 @@ use std::process::ExitCode;
 
 use hob_mcp::{Bridge, LOG_PREFIX, Launch, Limits};
 
-const USAGE: &str = "usage: hob-mcp [--allow-restart] [--agent-spawns | COMMAND [ARG]...]";
+const USAGE: &str =
+    "usage: hob-mcp [--allow-restart] [--agent-spawns | COMMAND [ARG]...] | --version";
+
+/// What `--version` prints: the version and the Git commit built from.
+const VERSION: &str = concat!(
+    env!("CARGO_BIN_NAME"),
+    " ",
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("HOB_COMMIT"),
+    ")"
+);
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1).peekable();
@@ -20,6 +31,10 @@ fn main() -> ExitCode {
         match flag.to_str() {
             Some("--allow-restart") => restart = true,
             Some("--agent-spawns") => by_agent = true,
+            Some("--version") => {
+                println!("{VERSION}");
+                return ExitCode::SUCCESS;
+            }
             _ => {
                 eprintln!("{USAGE}");
                 return ExitCode::from(2);

@@ -7,7 +7,8 @@
 //! [`HELP`]). Everything the commands do is printed as it arrives, prefixed
 //! with the command's block number; islands are printed as text outlines.
 //!
-//! The `exit` command quits, like `/quit`.
+//! The `exit` command quits, like `/quit`. With `--version` as its only
+//! argument, it prints its version instead.
 //!
 //! Output from commands can arrive while the user types. As a stopgap, the
 //! `> ` prompt is only shown once output has paused for [`PROMPT_DELAY`], and
@@ -28,6 +29,16 @@ use kettle_ui::FrozenIsland;
 
 /// The program name that starts lines logged to stderr.
 const LOG_PREFIX: &str = "hob-cli";
+
+/// What `--version` prints: the version and the Git commit built from.
+const VERSION: &str = concat!(
+    env!("CARGO_BIN_NAME"),
+    " ",
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("HOB_COMMIT"),
+    ")"
+);
 
 const HELP: &str = "\
 Lines are run as hob commands (try help). Driver commands act on the newest
@@ -147,6 +158,13 @@ impl Output {
 }
 
 fn main() -> ExitCode {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let [flag] = args.as_slice()
+        && flag == "--version"
+    {
+        println!("{VERSION}");
+        return ExitCode::SUCCESS;
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

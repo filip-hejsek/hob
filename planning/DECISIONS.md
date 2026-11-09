@@ -18,6 +18,16 @@ Known bugs are in BUGS.md.
   test binaries by 0.27 GB but the shared library was as big, so the total
   grew; it also needs `prefer-dynamic` everywhere, since libtest is only
   shipped as an rlib.
+- The binaries embed the Git commit they were built from (`HOB_COMMIT`,
+  set by one build script, `build/commit.rs`, shared by the crates with
+  binaries) and print it with `--version`. The script runs `git` (gix
+  would be a heavy build dependency) and reruns only when HEAD moves; a
+  tree without Git gives "unknown", and setting `HOB_COMMIT` overrides it.
+  Uncommitted changes aren't marked ("-dirty"): the mark would go stale,
+  since editing files doesn't rerun the script.
+- `--version` rather than a separate `--commit`: one conventional flag,
+  printing `NAME VERSION (COMMIT)`. For hob-cli, whose arguments are the
+  frontend's command, only when it's the only argument.
 
 ## kettle-ui core
 
