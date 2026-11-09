@@ -16,9 +16,6 @@ Decisions are in DECISIONS.md here.
   just the cause chain would be shorter.
 - The tools table breaks when descriptions are long (the name column gets
   squeezed under the text): the kettle-ui-iced layout bug in ../BUGS.md.
-- Some of hob-gui and the builtins still name hob: the note below
-  commands interrupted by exiting ("hob exited while this command was
-  running") and `exit`'s description ("Exit hob").
 - Elicitation and sampling requests arrive in rmcp's handler, not on a
   command's thread; showing them as islands needs a bridge (e.g. a channel
   to a long-running command).
