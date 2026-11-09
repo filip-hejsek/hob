@@ -273,6 +273,15 @@ pub(crate) fn requote(
     out
 }
 
+/// Writes `value` as a word of a command line that splits back to it, with
+/// backslashes before special characters (`''` if it's empty).
+pub fn quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_owned();
+    }
+    requote(value, None, false, None, false, Syntax::Hob)
+}
+
 /// The line without trailing whitespace, unless the whitespace is part of
 /// a word (escaped or quoted).
 pub fn trim_line_end(line: &str) -> &str {
@@ -404,6 +413,13 @@ mod tests {
                 let word = requote(value, quote, true, None, false, Syntax::Hob);
                 assert_eq!(words(&word), [value], "{word}");
             }
+        }
+    }
+
+    #[test]
+    fn quotes_words() {
+        for value in ["", "a", "a b", r#"'"\"#, "~/x", "a\nb"] {
+            assert_eq!(words(&quote(value)), [value], "{value}");
         }
     }
 

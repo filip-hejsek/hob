@@ -706,6 +706,10 @@ Works like a terminal: a scrollback with the prompt below it.
   `GuiConfig` (window title, application ID, prompt placeholder and stderr
   prefix), and `hob` passes its own. The preview's title is the title
   followed by "(preview of FILE)".
+- `GuiConfig::startup` holds command lines to run on start, as if typed
+  (each gets a block and joins the history), e.g. hob-mcp-test-client's
+  `connect` for a server given as arguments. A preview ignores them.
+  `hob_core::quote` turns arguments into words of such a line.
 - The program's name, as shown to the user (e.g. in `exit`'s description
   and the note on interrupted commands), belongs to the interpreter
   (`Interpreter::named`; `new` names it hob), since commands need it too,

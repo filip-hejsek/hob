@@ -95,6 +95,9 @@ pub struct GuiConfig {
     pub command_placeholder: String,
     /// Starts the shell's messages on stderr, followed by `: `.
     pub log_prefix: String,
+    /// Command lines run on start, in order, as if typed in the prompt (but
+    /// not in a preview).
+    pub startup: Vec<String>,
 }
 
 /// Opens the main window, running commands with `interpreter`, and blocks
@@ -360,6 +363,13 @@ impl Shell {
         let mut tasks = Vec::new();
         if !shell.is_preview() {
             tasks.push(operation::focus(Id::new(PROMPT)));
+            let startup = shell.config.startup.clone();
+            for line in &startup {
+                tasks.push(shell.run_line(line.clone()));
+            }
+            if !startup.is_empty() {
+                shell.save();
+            }
         }
         if let Some(records) = records {
             tasks.push(Task::run(records, Message::Log));
@@ -634,6 +644,11 @@ impl Shell {
         // Trailing spaces are invisible (completion leaves one), so they
         // shouldn't reach the command or the history, unless escaped or quoted.
         let line = hob_core::trim_line_end(&mem::take(&mut self.prompt)).to_owned();
+        self.run_line(line)
+    }
+
+    /// Runs `line` in a new block, and adds it to the history.
+    fn run_line(&mut self, line: String) -> Task<Message> {
         let Some(interpreter) = self.interpreter.clone() else {
             return Task::none();
         };

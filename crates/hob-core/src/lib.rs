@@ -68,7 +68,7 @@ use kettle_ui::{FrozenIsland, IslandBuilder, Outcome};
 
 pub use complete::Completion;
 pub use history::History;
-pub use line::trim_line_end;
+pub use line::{quote, trim_line_end};
 pub use record::{Level, LogRecord};
 pub use session::{Block, Entry, Item, Session, SessionError};
 pub use trim::{Limits, Trim, strip_image};

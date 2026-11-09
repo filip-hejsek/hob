@@ -86,6 +86,7 @@ fn gui_config() -> hob_gui::GuiConfig {
         app_id: APP_ID.to_owned(),
         command_placeholder: "Type a command, or help".into(),
         log_prefix: LOG_PREFIX.to_owned(),
+        startup: Vec::new(),
     }
 }
 

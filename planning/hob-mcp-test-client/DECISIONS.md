@@ -17,6 +17,13 @@ in ../DECISIONS.md.
   `io.github.filip_hejsek.hob_mcp_test_client`, so desktops don't group its
   window with hob's. There's no desktop file for it yet.
 
+- Given arguments (`SERVER [ARG...]`, as `connect` takes them), it
+  connects on start: hob-gui runs the command lines in
+  `GuiConfig::startup` as if typed, so `connect` gets its block, its
+  output and its place in the history. The arguments are quoted with
+  `hob_core::quote`. Rejected: connecting in `main` before the GUI starts
+  (its output and errors would have nowhere to go but stderr).
+
 ## Build
 
 - It lives in `tools/hob-mcp-test-client`, outside `crates/`. It's a

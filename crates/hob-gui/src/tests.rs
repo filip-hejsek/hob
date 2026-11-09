@@ -34,6 +34,25 @@ fn running_a_command_shows_its_output() {
 }
 
 #[test]
+fn startup_lines_run_first() {
+    let config = GuiConfig {
+        startup: vec!["say one".into(), "say two".into()],
+        ..gui_config()
+    };
+    let program = application(
+        Some(Arc::new(interpreter())),
+        None,
+        Limits::default(),
+        config,
+        Level::Info,
+        None,
+    );
+    let mut shell = Harness::new(program);
+    shell.expect("> say one");
+    shell.expect("two");
+}
+
+#[test]
 fn unknown_command_shows_an_error() {
     let mut shell = start(None);
     shell.run("nonsense");
@@ -576,6 +595,7 @@ fn gui_config() -> GuiConfig {
         app_id: "org.example.test".into(),
         command_placeholder: PLACEHOLDER.into(),
         log_prefix: "test".into(),
+        startup: Vec::new(),
     }
 }
 

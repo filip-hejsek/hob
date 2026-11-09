@@ -2,7 +2,11 @@
 //! would, with hob as the GUI. It has hob's generic builtins
 //! (`hob_core::builtins`, without the shell command) and the client's
 //! commands (see the library), but none of hob's own commands.
+//!
+//! Given a server (`SERVER [ARG...]`, as `connect` takes it), it connects to
+//! it on start.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -22,19 +26,28 @@ const VERSION: &str = concat!(
     ")"
 );
 
+/// How to run the program.
+const USAGE: &str = "usage: hob-mcp-test-client [--version | SERVER [ARG...]]";
+
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    match args.as_slice() {
-        [] => {}
+    let startup = match args.as_slice() {
         [flag] if flag == "--version" => {
             println!("{VERSION}");
             return ExitCode::SUCCESS;
         }
-        _ => {
-            eprintln!("usage: hob-mcp-test-client [--version]");
+        [first, ..] if first.to_string_lossy().starts_with('-') => {
+            eprintln!("{USAGE}");
             return ExitCode::from(2);
         }
-    }
+        _ => match connect_line(args) {
+            Ok(line) => line,
+            Err(arg) => {
+                eprintln!("{LOG_PREFIX}: not valid UTF-8: {}", arg.display());
+                return ExitCode::from(2);
+            }
+        },
+    };
     // Commands block on their own threads; they reach rmcp's async API
     // through this runtime.
     let runtime = match tokio::runtime::Runtime::new() {
@@ -48,7 +61,11 @@ fn main() -> ExitCode {
     let mut interpreter = Interpreter::named("hob-mcp-test-client");
     hob_core::builtins::register(&mut interpreter);
     hob_mcp_test_client::register(&mut interpreter, &client);
-    let result = hob_gui::run(interpreter, session_path(), gui_config());
+    let config = hob_gui::GuiConfig {
+        startup: startup.into_iter().collect(),
+        ..gui_config()
+    };
+    let result = hob_gui::run(interpreter, session_path(), config);
     // Ends a server process, which dropping the runtime might not.
     client.close();
     match result {
@@ -60,6 +77,20 @@ fn main() -> ExitCode {
     }
 }
 
+/// The `connect` command line for the server given as arguments, if any, or
+/// the argument that isn't valid UTF-8.
+fn connect_line(args: Vec<OsString>) -> Result<Option<String>, OsString> {
+    if args.is_empty() {
+        return Ok(None);
+    }
+    let mut line = "connect".to_owned();
+    for arg in args {
+        line.push(' ');
+        line += &hob_core::quote(&arg.into_string()?);
+    }
+    Ok(Some(line))
+}
+
 /// What the shell calls the client: its own name and application ID, so
 /// desktops don't group it with hob.
 fn gui_config() -> hob_gui::GuiConfig {
@@ -68,6 +99,7 @@ fn gui_config() -> hob_gui::GuiConfig {
         app_id: "io.github.filip_hejsek.hob_mcp_test_client".to_owned(),
         command_placeholder: "Type a command, or help".to_owned(),
         log_prefix: LOG_PREFIX.to_owned(),
+        startup: Vec::new(),
     }
 }
 
