@@ -33,6 +33,7 @@ const TESTS: &[(&str, fn())] = &[
     ("describes_a_tool", describes_a_tool),
     ("needs_a_connection", needs_a_connection),
     ("replaces_the_connection", replaces_the_connection),
+    ("reconnects", reconnects),
     ("reports_missing_programs", reports_missing_programs),
     ("reports_servers_that_fail", reports_servers_that_fail),
     ("notices_servers_that_exit", notices_servers_that_exit),
@@ -416,6 +417,34 @@ fn replaces_the_connection() {
         "{output:?}"
     );
     assert_eq!(h.run("tools").len(), 1);
+}
+
+fn reconnects() {
+    let h = Harness::new();
+    assert_eq!(h.run("reconnect"), ["error: no server to reconnect to"]);
+    h.connect("--server");
+    let output = h.run("reconnect");
+    assert_eq!(output[0], "Disconnected from test-server.");
+    assert!(
+        output[1].starts_with("Connected to test-server"),
+        "{output:?}"
+    );
+    // Also after the connection has been closed.
+    h.run("disconnect");
+    let output = h.run("reconnect");
+    assert!(
+        output[0].starts_with("Connected to test-server"),
+        "{output:?}"
+    );
+    // A failed attempt is the server to reconnect to.
+    h.run("connect /nonexistent/server");
+    let output = h.run("reconnect");
+    assert_eq!(output[0], "Disconnected from test-server.");
+    assert!(
+        output[1].starts_with("error: can't start /nonexistent/server: "),
+        "{output:?}"
+    );
+    assert_eq!(h.run("tools"), ["error: not connected"]);
 }
 
 fn reports_missing_programs() {

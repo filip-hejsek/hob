@@ -68,6 +68,12 @@ in ../DECISIONS.md.
   once it has succeeded, so a failed one leaves the old connection.
   `disconnect` closes it. Rejected: refusing to connect while connected
   (an extra step when switching servers).
+- `reconnect` connects again to the server last given to `connect` (also
+  from the program's arguments), with the same arguments and working
+  directory, e.g. after rebuilding it. Unlike `connect`, it closes the old
+  connection first: it's usually the same server, which may not take two
+  connections (or would be the old build). A failed `connect` counts too,
+  so a server that didn't start can be retried once fixed.
 - A server's stderr is logged at info (target
   `hob_mcp_test_client::server`), so `messages` shows it; servers log
   routinely to stderr, so it doesn't belong in the scrollback. If

@@ -7,6 +7,8 @@
 //!   feature, SERVER can instead be an `http://` or `https://` URL. A new
 //!   connection replaces the old one.
 //! - `disconnect`: closes the connection.
+//! - `reconnect`: closes the connection, if any, and connects again to the
+//!   server last connected to (or tried), in the same directory.
 //! - `tools [TOOL]`: lists the server's tools, or describes one.
 //! - `call TOOL [JSON]`: calls a tool, with arguments filled in through a
 //!   form built from its input schema, or given as a JSON object.
@@ -20,6 +22,7 @@
 //! If it fails to connect, its stderr so far is printed too.
 
 use std::error::Error;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -69,9 +72,21 @@ type BoxError = Box<dyn Error + Send + Sync>;
 pub struct Client {
     runtime: Handle,
     connection: Mutex<Option<Connection>>,
+    /// The server last connected to (or tried), for `reconnect`.
+    last_server: Mutex<Option<Server>>,
     /// What the server offers, as last listed, for completion.
     names: Arc<Mutex<Names>>,
     next_id: AtomicU64,
+}
+
+/// A server to connect to, as `connect` was given it.
+#[derive(Clone)]
+struct Server {
+    /// A program, or a URL.
+    server: String,
+    args: Vec<String>,
+    /// The working directory, for a program.
+    cwd: PathBuf,
 }
 
 /// The names of what a server offers, for completion.
@@ -99,6 +114,7 @@ impl Client {
         Arc::new(Client {
             runtime,
             connection: Mutex::new(None),
+            last_server: Mutex::new(None),
             names: Arc::default(),
             next_id: AtomicU64::new(0),
         })
@@ -119,12 +135,33 @@ impl Client {
     }
 
     fn connect(&self, ctx: &mut Context, args: &Matches) -> CommandResult {
-        let server = args.value("SERVER").ok_or("no server")?;
-        let rest = args.values("ARG");
+        let server = Server {
+            server: args.value("SERVER").ok_or("no server")?.to_owned(),
+            args: args.values("ARG").to_vec(),
+            cwd: ctx.cwd().to_owned(),
+        };
+        *lock(&self.last_server) = Some(server.clone());
+        self.connect_to(ctx, &server)
+    }
+
+    fn reconnect(&self, ctx: &mut Context, _: &Matches) -> CommandResult {
+        let server = lock(&self.last_server).clone();
+        let server = server.ok_or("no server to reconnect to")?;
+        let old = lock(&self.connection).take();
+        if let Some(old) = old {
+            ctx.print(format!("Disconnected from {}.", old.name));
+            self.close_connection(old);
+        }
+        self.connect_to(ctx, &server)
+    }
+
+    /// Connects to `server`, replacing the connection once it succeeds.
+    fn connect_to(&self, ctx: &mut Context, server: &Server) -> CommandResult {
+        let Server { server, args, cwd } = server;
         let service = if is_url(server) {
-            self.open_url(server, rest)?
+            self.open_url(server, args)?
         } else {
-            self.start(ctx, server, rest)?
+            self.start(ctx, server, args, cwd)?
         };
         let info = service.peer_info();
         let server_name = (info.as_ref())
@@ -168,15 +205,16 @@ impl Client {
         Ok(())
     }
 
-    /// Starts `program` with `args`, and connects to it over stdio.
+    /// Starts `program` with `args` in `cwd`, and connects to it over stdio.
     fn start(
         &self,
         ctx: &mut Context,
         program: &str,
         args: &[String],
+        cwd: &Path,
     ) -> Result<RunningService<RoleClient, ClientConfig>, BoxError> {
         let mut command = tokio::process::Command::new(program);
-        command.args(args).current_dir(ctx.cwd());
+        command.args(args).current_dir(cwd);
         // Lines of stderr, kept while connecting.
         let captured = Arc::new(Mutex::new(Some(Vec::new())));
         let result = self.runtime.block_on(async {
@@ -460,6 +498,13 @@ pub fn register(interpreter: &mut Interpreter, client: &Arc<Client>) {
         "Close the connection to the server",
         Spec::new(),
         move |ctx, args| c.disconnect(ctx, args),
+    );
+    let c = client.clone();
+    interpreter.register_spec(
+        "reconnect",
+        "Close the connection, if any, and connect to the last server again",
+        Spec::new(),
+        move |ctx, args| c.reconnect(ctx, args),
     );
     let c = client.clone();
     interpreter.register_spec(
