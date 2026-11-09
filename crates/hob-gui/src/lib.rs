@@ -101,8 +101,10 @@ pub fn run(interpreter: Interpreter, session: Option<PathBuf>, config: GuiConfig
     let level = hob_core::logger::level_from_env(early_log);
     let records = hob_core::logger::install(level, config.log_prefix.clone());
     let limits = Limits::from_env();
+    let name = interpreter.name().to_owned();
     application(
         Some(Arc::new(interpreter)),
+        name,
         session,
         limits,
         config,
@@ -114,8 +116,9 @@ pub fn run(interpreter: Interpreter, session: Option<PathBuf>, config: GuiConfig
 
 /// Opens the session saved in `session` read-only, and blocks until the
 /// window closes. No commands run, and the file isn't changed, even if it
-/// can't be read.
-pub fn preview(session: PathBuf, config: GuiConfig) -> iced::Result {
+/// can't be read. `name` is the name of the program that saved it, as
+/// [`Interpreter::name`] gives it.
+pub fn preview(session: PathBuf, name: String, config: GuiConfig) -> iced::Result {
     let early_log = hob_core::logger::early_log_stderr(&config.log_prefix);
     let level = hob_core::logger::level_from_env(early_log);
     let records = hob_core::logger::install(level, config.log_prefix.clone());
@@ -124,15 +127,17 @@ pub fn preview(session: PathBuf, config: GuiConfig) -> iced::Result {
         ..config
     };
     let limits = Limits::default();
-    application(None, Some(session), limits, config, level, records).run()
+    application(None, name, Some(session), limits, config, level, records).run()
 }
 
 /// The shell as an iced application, ready to run. Without an interpreter,
-/// it's a read-only preview of the session. The session is trimmed to
+/// it's a read-only preview of the session. `name` is the program's name,
+/// as the interpreter has it. The session is trimmed to
 /// `limits` when saved. The window is set up as `config` says. Log records
 /// that aren't from a command are read from `records`, if given.
 fn application(
     interpreter: Option<Arc<Interpreter>>,
+    name: String,
     session: Option<PathBuf>,
     limits: Limits,
     config: GuiConfig,
@@ -149,6 +154,7 @@ fn application(
             let records = records.lock().unwrap().take();
             Shell::new(
                 interpreter.clone(),
+                name.clone(),
                 session.clone(),
                 limits,
                 config.clone(),
@@ -185,6 +191,8 @@ const SCROLLBACK: &str = "scrollback";
 struct Shell {
     /// Runs commands; without one, the shell is a read-only preview.
     interpreter: Option<Arc<Interpreter>>,
+    /// The program's name, as the interpreter has it, e.g. for notes.
+    name: String,
     /// Configuration provided by the application.
     config: Arc<GuiConfig>,
     /// Where the session is saved, if anywhere.
@@ -326,6 +334,7 @@ impl<T> fmt::Debug for Pending<T> {
 impl Shell {
     fn new(
         interpreter: Option<Arc<Interpreter>>,
+        name: String,
         session: Option<PathBuf>,
         limits: Limits,
         config: Arc<GuiConfig>,
@@ -335,6 +344,7 @@ impl Shell {
         let mut shell = Shell {
             config,
             interpreter,
+            name,
             session,
             limits,
             save_error: None,
@@ -918,7 +928,7 @@ impl Shell {
         // removes blocks before it. Notices are plain text, so they can share
         // a key.
         let items = self.scrollback.iter().filter_map(|item| match item {
-            Item::Block(block) => Some((Some(block.id), view_block(block, self.level))),
+            Item::Block(block) => Some((Some(block.id), view_block(block, self.level, &self.name))),
             Item::Notice(record) if shows_notice(record, self.level) => {
                 Some((None, view_record(record)))
             }
@@ -1242,9 +1252,12 @@ fn prompt_style(theme: &Theme, status: text_input::Status) -> text_input::Style 
 }
 
 /// Shows a block; log records below `level` are hidden.
-fn view_block(block: &Block, level: Level) -> Element<'_, Message> {
+/// `name` is the program's name, for the note on interrupted commands.
+fn view_block<'a>(block: &'a Block, level: Level, name: &str) -> Element<'a, Message> {
     let interrupted = block.interrupted.then(|| {
-        let note = text("Interrupted: hob exited while this command was running.");
+        let note = text(format!(
+            "Interrupted: {name} exited while this command was running."
+        ));
         (None, note.style(text::secondary).into())
     });
     let private = History::is_private(&block.line)

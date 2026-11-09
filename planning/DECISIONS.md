@@ -633,6 +633,12 @@ Works like a terminal: a scrollback with the prompt below it.
   `GuiConfig` (window title, application ID, prompt placeholder and stderr
   prefix), and `hob` passes its own. The preview's title is the title
   followed by "(preview of FILE)".
+- The program's name, as shown to the user (e.g. in `exit`'s description
+  and the note on interrupted commands), belongs to the interpreter
+  (`Interpreter::named`; `new` names it hob), since commands need it too,
+  and hob-gui takes it from there. A preview has no interpreter, so
+  `preview` takes the name. Rejected: a field in `GuiConfig`, which
+  `hob-core`'s builtins can't see.
 - iced comes from a fork (https://github.com/filip-hejsek/iced, branch
   `startup-notify`) that passes the launcher's startup notification token
   to winit (see ICED_WISHLIST.md). Every iced crate is patched, not just

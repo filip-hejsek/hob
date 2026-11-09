@@ -27,7 +27,7 @@ fn main() -> ExitCode {
         }
     };
     let client = Client::new(runtime.handle().clone());
-    let mut interpreter = Interpreter::new();
+    let mut interpreter = Interpreter::named("hob-mcp-test-client");
     hob_core::builtins::register(&mut interpreter);
     hob_mcp_test_client::register(&mut interpreter, &client);
     let result = hob_gui::run(interpreter, session_path(), gui_config());

@@ -229,6 +229,7 @@ fn keys_press_buttons() {
 fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
     let (mut shell, _) = Shell::new(
         Some(Arc::new(interpreter())),
+        "hob".into(),
         None,
         Limits::default(),
         Arc::new(gui_config()),
@@ -260,6 +261,7 @@ fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
 fn ctrl_d_does_not_exit_while_commands_are_running() {
     let (mut shell, _) = Shell::new(
         Some(Arc::new(interpreter())),
+        "hob".into(),
         None,
         Limits::default(),
         Arc::new(gui_config()),
@@ -382,6 +384,7 @@ fn saving_trims_the_scrollback_and_history() {
     };
     let (mut shell, _) = Shell::new(
         Some(Arc::new(interpreter())),
+        "hob".into(),
         Some(file.0.clone()),
         limits,
         Arc::new(gui_config()),
@@ -459,7 +462,7 @@ fn preview_shows_the_session_without_changing_it() {
         scrollback: vec![hob_core::Item::Block(hob_core::Block {
             line: "old".into(),
             entries: vec![hob_core::Entry::Text("Old output".into())],
-            interrupted: false,
+            interrupted: true,
         })],
     };
     session.save(&file.0).unwrap();
@@ -467,6 +470,7 @@ fn preview_shows_the_session_without_changing_it() {
 
     let program = application(
         None,
+        "kettle".into(),
         Some(file.0.clone()),
         Limits::default(),
         gui_config(),
@@ -476,6 +480,7 @@ fn preview_shows_the_session_without_changing_it() {
     let mut shell = Harness::new(program);
     shell.expect("> old");
     shell.expect("Old output");
+    shell.expect("Interrupted: kettle exited while this command was running.");
     shell.expect(&format!("Read-only preview of {}", file.0.display()));
     // There's no prompt to type into.
     shell.settle();
@@ -488,6 +493,7 @@ fn preview_shows_the_session_without_changing_it() {
     // Ctrl+L doesn't clear, and closing doesn't save.
     let (mut shell, _) = Shell::new(
         None,
+        "hob".into(),
         Some(file.0.clone()),
         Limits::default(),
         Arc::new(gui_config()),
@@ -507,6 +513,7 @@ fn preview_leaves_a_bad_file_alone() {
     std::fs::write(&file.0, "not json").unwrap();
     let (shell, _) = Shell::new(
         None,
+        "hob".into(),
         Some(file.0.clone()),
         Limits::default(),
         Arc::new(gui_config()),
@@ -590,6 +597,7 @@ fn start_with(
 ) -> Harness<impl Program<Message = Message> + 'static> {
     let program = application(
         Some(Arc::new(interpreter())),
+        "hob".into(),
         session,
         limits,
         gui_config(),

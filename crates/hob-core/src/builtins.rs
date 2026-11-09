@@ -33,7 +33,8 @@ use crate::{CommandResult, Context, Interpreter, Level, LogRecord};
 /// Registers the built-in commands, except the shell command.
 pub fn register(interpreter: &mut Interpreter) {
     interpreter.register_spec("clear", "Clear the scrollback", Spec::new(), clear);
-    interpreter.register_spec("exit", "Exit hob", Spec::new(), exit);
+    let exit_description = format!("Exit {}", interpreter.name());
+    interpreter.register_spec("exit", exit_description, Spec::new(), exit);
     let commands = Kind::custom(|ctx| ctx.commands().iter().map(|&c| c.to_owned()).collect());
     interpreter.register_spec(
         "help",
@@ -407,6 +408,23 @@ mod tests {
             run("clear x", vec![]),
             [r#"error: unexpected argument "x"; usage: clear"#]
         );
+    }
+
+    #[test]
+    fn exit_is_described_with_the_interpreters_name() {
+        let mut interpreter = Interpreter::named("kettle");
+        register(&mut interpreter);
+        let mut requests = interpreter.run("help exit").unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let message = loop {
+            match std::pin::Pin::new(&mut requests).poll_next(&mut cx) {
+                std::task::Poll::Ready(Some(Request::Print(message))) => break message,
+                std::task::Poll::Ready(other) => panic!("unexpected {:?}", other.is_some()),
+                std::task::Poll::Pending => std::thread::sleep(Duration::from_millis(1)),
+            }
+        };
+        assert!(message.contains("Exit kettle"), "{message}");
     }
 
     #[test]

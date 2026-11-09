@@ -9,8 +9,11 @@ use std::process::ExitCode;
 
 use hob_core::Interpreter;
 
+/// The program's name, as shown to the user.
+const NAME: &str = "hob";
+
 /// The program name that starts lines logged to stderr.
-const LOG_PREFIX: &str = "hob";
+const LOG_PREFIX: &str = NAME;
 
 #[cfg(feature = "gui")]
 const USAGE: &str = "usage: hob [--headless | --preview [SESSION]]";
@@ -30,7 +33,9 @@ fn main() -> ExitCode {
                 _ => session_path(),
             };
             match path {
-                Some(path) => hob_gui::preview(path, gui_config()).map_err(|e| e.to_string()),
+                Some(path) => {
+                    hob_gui::preview(path, NAME.to_owned(), gui_config()).map_err(|e| e.to_string())
+                }
                 None => Err("no session to preview: no state directory".to_owned()),
             }
         }
@@ -64,7 +69,7 @@ const APP_ID: &str = "io.github.filip_hejsek.hob";
 /// What the shell calls hob.
 fn gui_config() -> hob_gui::GuiConfig {
     hob_gui::GuiConfig {
-        title: "hob".to_owned(),
+        title: NAME.to_owned(),
         app_id: APP_ID.to_owned(),
         command_placeholder: "Type a command, or help".into(),
         log_prefix: LOG_PREFIX.to_owned(),
@@ -73,7 +78,7 @@ fn gui_config() -> hob_gui::GuiConfig {
 
 /// An interpreter with all the commands.
 fn interpreter() -> Interpreter {
-    let mut interpreter = Interpreter::new();
+    let mut interpreter = Interpreter::named(NAME);
     hob_core::builtins::register(&mut interpreter);
     hob_core::builtins::register_shell(&mut interpreter);
     hob_demo::register(&mut interpreter);

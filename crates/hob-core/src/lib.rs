@@ -119,6 +119,7 @@ struct SharedCwd {
 
 /// Runs command lines by looking up registered commands.
 pub struct Interpreter {
+    name: String,
     commands: Commands,
     cwd: Cwd,
 }
@@ -130,17 +131,29 @@ impl Default for Interpreter {
 }
 
 impl Interpreter {
-    /// An interpreter with no commands. Its working directory is the
-    /// process's (or `/`, if that can't be found).
+    /// An interpreter named hob, with no commands. Its working directory is
+    /// the process's (or `/`, if that can't be found).
     pub fn new() -> Self {
+        Self::named("hob")
+    }
+
+    /// Like [`new`](Self::new), but with the given name, which commands and
+    /// frontends show to the user (e.g. "Exit hob").
+    pub fn named(name: impl Into<String>) -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
         Self {
+            name: name.into(),
             commands: Commands::default(),
             cwd: Arc::new(Mutex::new(SharedCwd {
                 path: cwd,
                 started: 0,
             })),
         }
+    }
+
+    /// The program's name, as shown to the user.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// The working directory, which commands started from now on get.
