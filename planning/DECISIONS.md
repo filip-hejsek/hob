@@ -223,14 +223,21 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   only checkboxes are left (going through a run of checkboxes one by one
   is what Down and `y`/`n` are for); `y` and `n` check and uncheck and move on, but never
   submit: after the last field, focus goes to the island as a whole, where
-  Enter submits. That's the only way an island with fields gets focus as a
-  whole (a click inside it doesn't), and Up from there goes back to the
-  last field. Up and Down move between fields. A focused checkbox has a
+  Enter submits. That and Down are the only ways an island with fields
+  gets focus as a whole (a click inside it doesn't), and Up from there
+  goes back to the last field. A focused checkbox has a
   thin primary-coloured border around it and its label (like the island's
   focus border), and shows a muted `[y/n]` after it, whose space is always
   kept so the layout doesn't move. The border, focus operations and clicks
   use the checkbox's own bounds, without the hint's space. Button keys work only while the island as a whole has
   focus, so `y`/`n` in a checkbox never clash with them.
+- Up and Down move between fields from text fields as well as from
+  checkboxes (a single-line text field has no use for them); Down from the
+  last field focuses the island as a whole. In a text area they still move
+  between lines. Leaving it from its first and last row was considered,
+  but iced doesn't say which row the caret is on (see ICED_WISHLIST.md):
+  it would take moving the caret with Home/End and back, through a custom
+  operation from the text area, which isn't worth it.
 - A text area is iced's `text_editor` inside our own widget, which keeps the
   editor's `Content` in its widget state and takes the value as a string,
   like `text_input`. The `Content` is remade only when the value changes

@@ -32,8 +32,7 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   supports clicking.)
 - **Keyboard:** buttons can't get focus (iced can only focus text inputs;
   checkboxes have our own wrapper), so button keys work only while the
-  island as a whole has focus. Should Up/Down also move between text
-  fields, as they do from checkboxes?
+  island as a whole has focus.
 - Revisit button keys. They're allowed in islands with checkboxes (but not
   text fields), yet work only once focus has moved past the last checkbox,
   so they're hard to discover there; and in a checkbox, `y`/`n` mean

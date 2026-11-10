@@ -16,6 +16,18 @@ The app can move the cursor and select text (`operation::move_cursor_to`,
 **Workaround:** completion works only at the end of the line; the
 shortcuts wait for this.
 
+## Which visual row a text editor's caret is on
+
+**Needed for:** Up from the first row and Down from the last row of a
+text area moving to the island's previous and next field.
+
+`Content::cursor` gives the caret's logical line and column, but not which
+wrapped row it's on, nor whether it's on the first or last one.
+
+**Workaround:** none; Up and Down stay in a text area. (It could be found
+by moving the caret with Home and DocumentStart, End and DocumentEnd, and
+comparing, then moving it back, but that wasn't worth it.)
+
 ## Key handlers on a text input
 
 **Needed for:** history (Up/Down) and completion (Tab) in the prompt;

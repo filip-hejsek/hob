@@ -20,7 +20,10 @@ use crate::Message;
 ///   the next field that isn't one, or submits if there's none.
 /// - In a checkbox: Space toggles it; `y` checks it and `n` unchecks it, and
 ///   both move on to the next field, or after the last one to the island as
-///   a whole; Up and Down focus the previous and next field.
+///   a whole.
+/// - In a text field or checkbox (not a text area), Up and Down focus the
+///   previous and next field; Down from the last one focuses the island as
+///   a whole.
 /// - Escape, while the island has focus, cancels.
 /// - While the island as a whole has focus, Enter submits, a button's key
 ///   presses it, and Up (if there are fields) focuses the last field.
@@ -28,7 +31,7 @@ use crate::Message;
 /// An island without fields can have focus as a whole: like a text field, it
 /// gets it when clicked or through iced's focus operations (with its own
 /// [`Id`]), and loses it on a click elsewhere. An island with fields gets it
-/// only from its last checkbox.
+/// only from its last field (by `y`/`n` or Down).
 pub(crate) struct Scope<'a> {
     pub content: Element<'a, Message>,
     /// The island's Id, for focus as a whole.
@@ -154,6 +157,8 @@ impl Scope<'_> {
             }) => Some((*checked, check, uncheck)),
             _ => None,
         };
+        // There, Up and Down move between lines.
+        let in_text_area = matches!(kind, Some(FieldKind::TextArea));
         // The field after the focused one, or else the island as a whole.
         let next = |field: usize| match self.fields.get(field + 1) {
             Some(next) => Focus::Field(next.id.clone()),
@@ -168,7 +173,7 @@ impl Scope<'_> {
             }
             keyboard::Key::Named(key::Named::Enter) => {
                 let field = field?;
-                if plain && matches!(kind, Some(FieldKind::TextArea)) {
+                if plain && in_text_area {
                     return None;
                 }
                 // From a checkbox, skip the checkboxes after it.
@@ -189,12 +194,12 @@ impl Scope<'_> {
             keyboard::Key::Named(key::Named::ArrowUp) if plain => {
                 let previous = match field {
                     _ if whole && !self.click_focus => self.fields.last()?,
-                    Some(field) if checkbox.is_some() => self.fields.get(field.checked_sub(1)?)?,
+                    Some(field) if !in_text_area => self.fields.get(field.checked_sub(1)?)?,
                     _ => return None,
                 };
                 Some(KeyAction::focus(Focus::Field(previous.id.clone())))
             }
-            keyboard::Key::Named(key::Named::ArrowDown) if plain && checkbox.is_some() => {
+            keyboard::Key::Named(key::Named::ArrowDown) if plain && !in_text_area => {
                 Some(KeyAction::focus(next(field?)))
             }
             keyboard::Key::Character(c) if plain && (whole || checkbox.is_some()) => {

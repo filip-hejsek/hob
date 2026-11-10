@@ -33,7 +33,7 @@
 //! (see [`Island::field_id`] and [`Island::has_focus`]). They are unique, so
 //! they never clash with the host's own Ids or another island's. An island
 //! can also have focus as a whole, with its own Id: one without fields when
-//! clicked, one with fields only when its last checkbox moves on;
+//! clicked, one with fields only when focus moves on from its last field;
 //! [`Island::focus`] focuses an island either way.
 //!
 //! A live island handles some keys itself, while it has focus: Enter in a
@@ -42,8 +42,10 @@
 //! Ctrl+Enter does that instead. In a checkbox, Enter skips the checkboxes
 //! after it, to the next other field or else submitting. Space toggles it, `y` and
 //! `n` check and uncheck it and move on (after the last field, to the
-//! island as a whole; they never submit), and Up and Down move between
-//! fields; a border and a muted `[y/n]` after its label show it has focus. Escape cancels
+//! island as a whole; they never submit); a border and a muted `[y/n]`
+//! after its label show it has focus. In a text field or checkbox (not a
+//! text area), Up and Down move between fields, and Down from the last one
+//! to the island as a whole. Escape cancels
 //! (if there's a cancel button). While the island as a whole has focus,
 //! Enter submits and a button's key (see
 //! [`ButtonLabel`](kettle_ui::widget::ButtonLabel)) presses it.
@@ -1064,6 +1066,75 @@ mod tests {
                 "Message(Submit)",
                 r#"Message(Toggled("d", true))"#,
                 r#"Message(TextChanged("a", "x"))"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn arrows_move_between_text_fields_but_not_out_of_text_areas() {
+        use iced::keyboard::{Key, key::Named};
+
+        fn form() -> Island {
+            let builder = IslandBuilder::new(column([
+                text_field("a", "A"),
+                text_field("b", "B"),
+                text_area("c", "C"),
+                submit_button("OK"),
+            ]));
+            Island::new(builder).unwrap().0
+        }
+        let island = form();
+        let a = island.field_id("a").unwrap();
+        let mut ui = simulator(island.view());
+        ui.click(a).unwrap();
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.typewrite("1");
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.typewrite("2");
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.typewrite("x");
+        // In a text area, Up and Down move between lines.
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.typewrite("y");
+        let messages: Vec<String> = ui.into_messages().map(|m| format!("{m:?}")).collect();
+        assert_eq!(
+            messages,
+            [
+                r#"Message(TextChanged("b", "1"))"#,
+                r#"Message(TextChanged("a", "2"))"#,
+                r#"Message(TextChanged("c", "x"))"#,
+                r#"Message(TextChanged("c", "xy"))"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn down_from_the_last_text_field_focuses_the_island() {
+        use iced::keyboard::{Key, key::Named};
+
+        let builder = IslandBuilder::new(column([text_field("a", "A"), submit_button("OK")]));
+        let island = Island::new(builder).unwrap().0;
+        let a = island.field_id("a").unwrap();
+        let mut ui = simulator(island.view());
+        ui.click(a).unwrap();
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.typewrite("1");
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        // The island as a whole: typing does nothing, Enter submits.
+        ui.typewrite("2");
+        ui.tap_key(Key::Named(Named::Enter));
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.typewrite("3");
+        let messages: Vec<String> = ui.into_messages().map(|m| format!("{m:?}")).collect();
+        assert_eq!(
+            messages,
+            [
+                r#"Message(TextChanged("a", "1"))"#,
+                "Message(Submit)",
+                r#"Message(TextChanged("a", "13"))"#,
             ]
         );
     }
