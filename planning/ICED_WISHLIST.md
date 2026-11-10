@@ -24,7 +24,8 @@ text area moving to the island's previous and next field.
 `Content::cursor` gives the caret's logical line and column, but not which
 wrapped row it's on, nor whether it's on the first or last one.
 
-**Workaround:** none; Up and Down stay in a text area. (It could be found
+**Workaround:** Up and Down stay in a text area; Ctrl+Up and Ctrl+Down
+leave it. (It could be found
 by moving the caret with Home and DocumentStart, End and DocumentEnd, and
 comparing, then moving it back, but that wasn't worth it.)
 

@@ -23,7 +23,8 @@ use crate::Message;
 ///   a whole.
 /// - In a text field or checkbox (not a text area), Up and Down focus the
 ///   previous and next field; Down from the last one focuses the island as
-///   a whole.
+///   a whole. Ctrl+Up and Ctrl+Down do the same, also in a text area (where
+///   Up and Down move between lines).
 /// - Escape, while the island has focus, cancels.
 /// - While the island as a whole has focus, Enter submits, a button's key
 ///   presses it, and Up (if there are fields) focuses the last field.
@@ -157,8 +158,10 @@ impl Scope<'_> {
             }) => Some((*checked, check, uncheck)),
             _ => None,
         };
-        // There, Up and Down move between lines.
+        // There, Up and Down move between lines, and Ctrl+Up and Ctrl+Down
+        // between fields.
         let in_text_area = matches!(kind, Some(FieldKind::TextArea));
+        let arrows_move_focus = !(plain && in_text_area);
         // The field after the focused one, or else the island as a whole.
         let next = |field: usize| match self.fields.get(field + 1) {
             Some(next) => Focus::Field(next.id.clone()),
@@ -191,15 +194,15 @@ impl Scope<'_> {
                     if checked { uncheck } else { check }.clone(),
                 ))
             }
-            keyboard::Key::Named(key::Named::ArrowUp) if plain => {
+            keyboard::Key::Named(key::Named::ArrowUp) if arrows_move_focus => {
                 let previous = match field {
                     _ if whole && !self.click_focus => self.fields.last()?,
-                    Some(field) if !in_text_area => self.fields.get(field.checked_sub(1)?)?,
-                    _ => return None,
+                    Some(field) => self.fields.get(field.checked_sub(1)?)?,
+                    None => return None,
                 };
                 Some(KeyAction::focus(Focus::Field(previous.id.clone())))
             }
-            keyboard::Key::Named(key::Named::ArrowDown) if plain && !in_text_area => {
+            keyboard::Key::Named(key::Named::ArrowDown) if arrows_move_focus => {
                 Some(KeyAction::focus(next(field?)))
             }
             keyboard::Key::Character(c) if plain && (whole || checkbox.is_some()) => {

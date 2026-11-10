@@ -45,7 +45,8 @@
 //! island as a whole; they never submit); a border and a muted `[y/n]`
 //! after its label show it has focus. In a text field or checkbox (not a
 //! text area), Up and Down move between fields, and Down from the last one
-//! to the island as a whole. Escape cancels
+//! to the island as a whole; Ctrl+Up and Ctrl+Down do that in a text area
+//! too. Escape cancels
 //! (if there's a cancel button). While the island as a whole has focus,
 //! Enter submits and a button's key (see
 //! [`ButtonLabel`](kettle_ui::widget::ButtonLabel)) presses it.
@@ -1095,7 +1096,9 @@ mod tests {
     }
 
     #[test]
-    fn arrows_move_between_text_fields_but_not_out_of_text_areas() {
+    fn arrows_move_between_text_fields_and_ctrl_arrows_out_of_text_areas() {
+        use iced::keyboard::Location;
+        use iced::keyboard::key::{NativeCode, Physical};
         use iced::keyboard::{Key, key::Named};
 
         fn form() -> Island {
@@ -1122,6 +1125,35 @@ mod tests {
         ui.tap_key(Key::Named(Named::ArrowUp));
         ui.tap_key(Key::Named(Named::ArrowDown));
         ui.typewrite("y");
+        // Ctrl+Up and Ctrl+Down move between fields, there and elsewhere.
+        let ctrl = |named| {
+            let key = Key::Named(named);
+            let modifiers = iced::keyboard::Modifiers::COMMAND;
+            [
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: key.clone(),
+                    modified_key: key.clone(),
+                    physical_key: Physical::Unidentified(NativeCode::Unidentified),
+                    location: Location::Standard,
+                    modifiers,
+                    repeat: false,
+                    text: None,
+                }),
+                iced::Event::Keyboard(iced::keyboard::Event::KeyReleased {
+                    modified_key: key.clone(),
+                    key,
+                    physical_key: Physical::Unidentified(NativeCode::Unidentified),
+                    location: Location::Standard,
+                    modifiers,
+                }),
+            ]
+        };
+        ui.simulate(ctrl(Named::ArrowUp));
+        ui.typewrite("3");
+        ui.simulate(ctrl(Named::ArrowDown));
+        ui.typewrite("z");
+        ui.simulate(ctrl(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::Enter));
         let messages: Vec<String> = ui.into_messages().map(|m| format!("{m:?}")).collect();
         assert_eq!(
             messages,
@@ -1130,6 +1162,9 @@ mod tests {
                 r#"Message(TextChanged("a", "2"))"#,
                 r#"Message(TextChanged("c", "x"))"#,
                 r#"Message(TextChanged("c", "xy"))"#,
+                r#"Message(TextChanged("b", "13"))"#,
+                r#"Message(TextChanged("c", "xyz"))"#,
+                "Message(Submit)",
             ]
         );
     }
