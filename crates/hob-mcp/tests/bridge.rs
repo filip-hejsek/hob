@@ -23,6 +23,10 @@ const TESTS: &[(&str, fn())] = &[
         "runs_commands_and_acts_on_islands",
         runs_commands_and_acts_on_islands,
     ),
+    (
+        "fill_presses_the_submit_button",
+        fill_presses_the_submit_button,
+    ),
     ("waits_for_commands", waits_for_commands),
     ("shows_changed_islands", shows_changed_islands),
     ("sends_images", sends_images),
@@ -140,6 +144,17 @@ fn interpreter() -> Interpreter {
         }
         Ok(())
     });
+    i.register(
+        "choose",
+        "Ask for a choice, without a submit button",
+        |ctx, _| {
+            let builder = IslandBuilder::new(row([button("a", "A"), cancel_button("Cancel")]));
+            if let Outcome::Pressed(id, _) = ctx.show(builder)? {
+                ctx.print(format!("chose {id}"));
+            }
+            Ok(())
+        },
+    );
     i
 }
 
@@ -260,6 +275,27 @@ fn runs_commands_and_acts_on_islands() {
     let (text, _) = tool(&mut bridge, "press", json!({"island": 3, "label": "OK"}));
     assert!(text.contains("[2] got Ada true"), "{text}");
     assert!(text.ends_with("[2] has finished.\n"), "{text}");
+}
+
+fn fill_presses_the_submit_button() {
+    let mut bridge = bridge();
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "ask"}));
+    assert!(text.contains(r#"button "OK" (submit)"#), "{text}");
+    let arguments = json!({"island": 2, "fields": {"name": "Ada"}, "submit": true});
+    let (text, error) = tool(&mut bridge, "fill", arguments);
+    assert!(!error, "{text}");
+    assert!(text.contains("[1] got Ada false"), "{text}");
+    assert!(text.ends_with("[1] has finished.\n"), "{text}");
+
+    // Without a submit button, it's an error; the fields are filled anyway.
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "choose"}));
+    assert!(text.contains("[3] showed island #4"), "{text}");
+    let arguments = json!({"island": 4, "fields": {}, "submit": true});
+    let (text, error) = tool(&mut bridge, "fill", arguments);
+    assert!(error, "{text}");
+    assert!(text.contains("island #4 has no submit button"), "{text}");
+    let (text, _) = tool(&mut bridge, "press", json!({"island": 4, "label": "A"}));
+    assert!(text.contains("[3] chose a"), "{text}");
 }
 
 fn waits_for_commands() {

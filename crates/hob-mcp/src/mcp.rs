@@ -34,11 +34,13 @@ command does is reported with it. Run `help` to list the commands.
 Islands are shown as outlines, one widget per line, e.g.:
   text_field name: \"Ada\" (placeholder \"Your name\")
   checkbox subscribe: [x] \"Subscribe\"
-  button \"Submit\"
+  button \"Submit\" (submit)
 Fill in text fields and checkboxes by their ids (here name and subscribe) \
 with fill, and press buttons by their labels with press. A button may show \
 its keyboard key after the label, as in `button \"Yes\" [y]`; its label is \
-still just Yes. Labels and lists update as you fill fields in.
+still just Yes. Labels and lists update as you fill fields in. To fill in \
+fields and press the submit button (marked (submit)) in one step, use fill \
+with submit.
 
 Commands keep running between tool calls. Every tool result starts with what \
 happened since the last one, and shows new islands. Changed islands are \
@@ -119,7 +121,9 @@ impl Bridge {
         self.images.clear();
         let result = match name {
             "run" => args_for(args).and_then(|a: RunArgs| self.run(&a.line, timeout(a.timeout))),
-            "fill" => args_for(args).and_then(|a: FillArgs| self.fill(a.island, &a.fields)),
+            "fill" => args_for(args).and_then(|a: FillArgs| {
+                self.fill(a.island, &a.fields, a.submit, timeout(a.timeout))
+            }),
             "press" => args_for(args)
                 .and_then(|a: PressArgs| self.press(a.island, &a.label, timeout(a.timeout))),
             "state" => args_for(args).and_then(|NoArgs {}| self.state()),
@@ -213,6 +217,10 @@ struct RunArgs {
 struct FillArgs {
     island: u64,
     fields: Map<String, Value>,
+    #[serde(default)]
+    submit: bool,
+    #[serde(rename = "timeout_seconds")]
+    timeout: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -293,7 +301,8 @@ fn tools(launch: &Launch, restart: bool) -> Value {
         {
             "name": "fill",
             "description": "Fill in fields of a live island: text fields (the text replaces \
-                what's there) and checkboxes. Reports the island as it is afterwards.",
+                what's there) and checkboxes. Reports the island as it is afterwards; with \
+                submit, presses its submit button too, and reports like press.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -304,6 +313,13 @@ fn tools(launch: &Launch, restart: bool) -> Value {
                             field, true or false for a checkbox.",
                         "additionalProperties": {"type": ["string", "boolean"]},
                     },
+                    "submit": {
+                        "type": "boolean",
+                        "description": "Then press the island's submit button (the one \
+                            Enter presses), saving a press call (default false). An error if \
+                            there's none; other buttons need press.",
+                    },
+                    "timeout_seconds": timeout("the command, with submit"),
                 },
                 "required": ["island", "fields"],
             },

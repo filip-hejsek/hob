@@ -636,7 +636,7 @@ fn calls_through_a_form() {
              \x20   text_area param5: \"\"\n\
              \x20 label \"Arguments: {}\"\n\
              \x20 row\n\
-             \x20   button \"Call\"\n\
+             \x20   button \"Call\" (submit)\n\
              \x20   button \"Edit as JSON\"\n\
              \x20   button \"Cancel\"\n",
             r#"{"count":3,"loud":true,"name":"Ada","tags":["a","b"]}"#,
@@ -829,7 +829,7 @@ fn gets_prompts_through_a_form() {
              \x20   label \"mood: Mood\"\n\
              \x20   text_field arg1: \"\"\n\
              \x20 row\n\
-             \x20   button \"Get\"\n\
+             \x20   button \"Get\" (submit)\n\
              \x20   button \"Cancel\"\n",
             "Description: A greeting",
             "User:\nGreet Ada.",

@@ -30,7 +30,7 @@
 //! island.type_text("name", "Ada").unwrap();
 //! assert_eq!(
 //!     island.to_string(),
-//!     "column\n  text_field name: \"Ada\"\n  label \"Hello, Ada!\"\n  button \"OK\"\n",
+//!     "column\n  text_field name: \"Ada\"\n  label \"Hello, Ada!\"\n  button \"OK\" (submit)\n",
 //! );
 //! ```
 
@@ -382,11 +382,17 @@ fn render(model: &impl Contents, widget: &Widget, depth: usize, out: &mut String
             lines(out, state)
         }
         Kind::Button {
-            label, key, danger, ..
+            label,
+            key,
+            action,
+            danger,
         } => {
             write!(out, "{indent}button {label:?}")?;
             if let Some(key) = key {
                 write!(out, " [{key}]")?;
+            }
+            if *action == Action::Submit {
+                write!(out, " (submit)")?;
             }
             if *danger {
                 write!(out, " (danger)")?;
@@ -511,7 +517,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             island.to_string(),
-            "row\n  button \"Yes\" [y]\n  button \"No\"\n"
+            "row\n  button \"Yes\" [y] (submit)\n  button \"No\"\n"
         );
     }
 
@@ -571,7 +577,7 @@ mod tests {
         island.set_checked("more", true).unwrap();
         assert_eq!(
             island.to_string(),
-            "column\n  checkbox more: [x] \"More\"\n  column\n    text_field t: \"\"\n    button \"OK\"\n"
+            "column\n  checkbox more: [x] \"More\"\n  column\n    text_field t: \"\"\n    button \"OK\" (submit)\n"
         );
         island.type_text("t", "x").unwrap();
         assert!(island.press("OK").is_ok());

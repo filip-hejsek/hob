@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use hob_core::Level;
 use hob_headless::protocol::{BlockId, Call, IslandId, Notification};
+use kettle_ui::widget::{Action, Kind, Widget, is_shown};
 use kettle_ui::{FrozenIsland, Image, ImageKey};
 use serde_json::Value;
 
@@ -259,11 +260,14 @@ impl Bridge {
     }
 
     /// Fills in fields of a live island: text fields with strings, checkboxes
-    /// with booleans.
+    /// with booleans. With `submit`, then presses its submit button, as
+    /// [`press`](Self::press) does; it's an error if none is shown.
     pub fn fill(
         &mut self,
         island: IslandId,
         fields: &serde_json::Map<String, Value>,
+        submit: bool,
+        timeout: Duration,
     ) -> ToolResult {
         self.apply_arrived();
         if self.hob.is_none() {
@@ -294,7 +298,19 @@ impl Bridge {
                 return Err(self.report(focus, &format!("{field:?}: {e}")));
             }
         }
-        Ok(self.report(self.island_focus(island), ""))
+        if !submit {
+            return Ok(self.report(self.island_focus(island), ""));
+        }
+        // The island's new contents came before the replies.
+        self.apply_arrived();
+        let island_state = self.islands.get(&island);
+        match island_state.and_then(|i| submit_label(&i.contents, i.contents.root())) {
+            Some(label) => self.press(island, &label, timeout),
+            None => {
+                let message = format!("error: island #{island} has no submit button");
+                Err(self.report(self.island_focus(island), &message))
+            }
+        }
     }
 
     /// Presses a button, and waits until the command finishes or shows an
@@ -713,6 +729,23 @@ impl Bridge {
             let _ = writeln!(text, "  {line}");
         }
         text
+    }
+}
+
+/// The label of the first shown submit button in `widget`.
+fn submit_label(island: &FrozenIsland, widget: &Widget) -> Option<String> {
+    match widget.kind() {
+        Kind::Column(children) | Kind::Row(children) => {
+            (children.iter()).find_map(|c| submit_label(island, c))
+        }
+        Kind::Table { rows, .. } => (rows.iter().flatten()).find_map(|c| submit_label(island, c)),
+        Kind::When { state, child } if is_shown(island, state) => submit_label(island, child),
+        Kind::Button {
+            label,
+            action: Action::Submit,
+            ..
+        } => Some(label.clone()),
+        _ => None,
     }
 }
 
