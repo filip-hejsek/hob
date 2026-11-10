@@ -57,6 +57,29 @@ iced's `text` and `rich_text` can't be selected.
 wheel and editing keys, and focuses itself only while it has a selection.
 A selection can't span several widgets.
 
+## Primary selection in text widgets
+
+**Needed for:** middle-click paste (X11 and Wayland): selecting text in
+the prompt, a text field, a text area or the scrollback should make it the
+primary selection, and middle-clicking a text field should paste it there.
+
+iced's clipboard supports it (`clipboard::Kind::Primary`, implemented by
+`window_clipboard` on X11 and Wayland), but `text_input` and `text_editor`
+use only `Kind::Standard`: selecting doesn't write the primary selection,
+and they ignore the middle button. Requested in iced#904 (open since 2021).
+On iced master (2026-11) it's further off: the clipboard moved to
+`arboard` and lost `Kind::Primary`; iced#3325 (open) would bring it back,
+but again without widget support.
+
+**Workaround:** none yet; middle-click paste doesn't work in hob-gui. Our
+`text_editor` wrappers (`TextArea`, `SelectableText`) could add it: write
+the selection to `Kind::Primary` when it changes, and on a middle press
+move the cursor there and paste. For `text_input`s (the prompt, text
+fields), whose selection we can't read, a wrapper could fake it: on a
+middle press, send a left click and a Ctrl+V, giving the widget a
+clipboard whose standard reads return the primary selection (and likewise
+a Ctrl+C with writes redirected after the selection changes).
+
 ## Focusable buttons and checkboxes
 
 **Needed for:** using islands from the keyboard.
