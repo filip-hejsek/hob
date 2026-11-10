@@ -37,8 +37,8 @@ Islands are shown as outlines, one widget per line, e.g.:
   button \"Submit\" (submit)
 Fill in text fields and checkboxes by their ids (here name and subscribe) \
 with fill, and press buttons by their labels with press. A button may show \
-its keyboard key after the label, as in `button \"Yes\" [y]`; its label is \
-still just Yes. Labels and lists update as you fill fields in. To fill in \
+its keyboard key after the label, as in `button \"Yes\" [y]` or `[Alt+y]`; its \
+label is still just Yes. Labels and lists update as you fill fields in. To fill in \
 fields and press the submit button (marked (submit)) in one step, use fill \
 with submit. A cancel button is marked (cancel).
 

@@ -96,12 +96,12 @@ pub enum Error {
     /// [`IslandBuilder::set_checked`] targets a form element that isn't a
     /// checkbox.
     NotACheckbox(String),
-    /// A button's key isn't a lowercase ASCII letter.
-    InvalidKey(char),
+    /// A button's key isn't a lowercase ASCII letter (maybe with Alt).
+    InvalidKey(widget::ButtonKey),
     /// Two buttons have the same key.
-    DuplicateKey(char),
-    /// A button has a key, but the island has text fields, which take
-    /// typed letters.
+    DuplicateKey(widget::ButtonKey),
+    /// A button has a key without Alt, but the island has text fields,
+    /// which take typed letters.
     KeyWithTextField(char),
 }
 
@@ -124,13 +124,13 @@ impl fmt::Display for Error {
             Error::NotATextField(id) => write!(f, "form element {id:?} is not a text field"),
             Error::NotACheckbox(id) => write!(f, "form element {id:?} is not a checkbox"),
             Error::InvalidKey(key) => {
-                write!(f, "button key {key:?} isn't a lowercase ASCII letter")
+                write!(f, "button key {key} isn't a lowercase ASCII letter")
             }
-            Error::DuplicateKey(key) => write!(f, "several buttons have the key {key:?}"),
+            Error::DuplicateKey(key) => write!(f, "several buttons have the key {key}"),
             Error::KeyWithTextField(key) => write!(
                 f,
-                "a button has the key {key:?}, but buttons in an island with text fields \
-                 can't have keys"
+                "a button has the key {key}, but in an island with text fields, \
+                 button keys need Alt"
             ),
         }
     }
@@ -560,14 +560,14 @@ fn check_keys(root: &Widget, fields: &Fields) -> Result<(), Error> {
     widget::keys(root, &mut |key, _| keys.push(key));
     let has_text_field = fields.0.values().any(|f| matches!(f, Field::Text(_)));
     for (i, &key) in keys.iter().enumerate() {
-        if !key.is_ascii_lowercase() {
+        if !key.letter.is_ascii_lowercase() {
             return Err(Error::InvalidKey(key));
         }
         if keys[..i].contains(&key) {
             return Err(Error::DuplicateKey(key));
         }
-        if has_text_field {
-            return Err(Error::KeyWithTextField(key));
+        if has_text_field && !key.alt {
+            return Err(Error::KeyWithTextField(key.letter));
         }
     }
     Ok(())
@@ -705,12 +705,22 @@ mod tests {
         assert!(keys(row([submit_button("Yes [y]"), cancel_button("No [n]")])).is_ok());
         assert!(matches!(
             keys(row([submit_button("A [a]"), cancel_button("B [a]")])),
-            Err(Error::DuplicateKey('a'))
+            Err(Error::DuplicateKey(k)) if k.letter == 'a' && !k.alt
         ));
+        assert!(matches!(
+            keys(row([submit_button("A [Alt+a]"), cancel_button("B [Alt+a]")])),
+            Err(Error::DuplicateKey(k)) if k.letter == 'a' && k.alt
+        ));
+        // A key with Alt and without are different keys.
+        assert!(keys(row([submit_button("A [a]"), cancel_button("B [Alt+a]")])).is_ok());
         for key in ['Y', '1', 'é'] {
-            let label = widget::ButtonLabel::new("A").key(key);
-            assert!(matches!(keys(submit_button(label)), Err(Error::InvalidKey(k)) if k == key));
+            let label = widget::ButtonLabel::new("A").alt_key(key);
+            assert!(matches!(
+                keys(submit_button(label)),
+                Err(Error::InvalidKey(k)) if k.letter == key && k.alt
+            ));
         }
+        // Text fields take plain letters, so keys there need Alt.
         assert!(matches!(
             keys(column([
                 text_field("t", ""),
@@ -722,7 +732,8 @@ mod tests {
             keys(column([text_area("t", ""), submit_button("OK [o]")])),
             Err(Error::KeyWithTextField('o'))
         ));
-        // Without keys, buttons and text fields go together.
+        assert!(keys(column([text_field("t", ""), submit_button("OK [Alt+o]")])).is_ok());
+        assert!(keys(column([text_area("t", ""), submit_button("OK [Alt+o]")])).is_ok());
         assert!(keys(column([text_field("t", ""), submit_button("OK")])).is_ok());
     }
 

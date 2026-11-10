@@ -532,12 +532,12 @@ mod tests {
     fn button_keys_are_in_the_outline() {
         let island = Island::new(IslandBuilder::new(row([
             submit_button("Yes [y]"),
-            cancel_button("No"),
+            cancel_button("No [Alt+n]"),
         ])))
         .unwrap();
         assert_eq!(
             island.to_string(),
-            "row\n  button \"Yes\" [y] (submit)\n  button \"No\" (cancel)\n"
+            "row\n  button \"Yes\" [y] (submit)\n  button \"No\" [Alt+n] (cancel)\n"
         );
     }
 

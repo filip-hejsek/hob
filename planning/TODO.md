@@ -31,14 +31,12 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   suggestions selectable by keyboard like in an IDE. (Currently it only
   supports clicking.)
 - **Keyboard:** buttons can't get focus (iced can only focus text inputs;
-  checkboxes have our own wrapper), so button keys work only while the
-  island as a whole has focus.
-- Revisit button keys. They're allowed in islands with checkboxes (but not
-  text fields), yet work only once focus has moved past the last checkbox,
-  so they're hard to discover there; and in a checkbox, `y`/`n` mean
-  something else than a button's `[y]`/`[n]`.
-- Chord keys (e.g. Ctrl+N) for buttons, which could work in islands with
-  text fields.
+  checkboxes have our own wrapper), so a button's key without Alt works
+  only while the island as a whole has focus.
+- Revisit button keys. They're allowed without Alt in islands with
+  checkboxes (but not text fields), yet work only once focus has moved
+  past the last checkbox, so they're hard to discover there; and in a
+  checkbox, `y`/`n` mean something else than a button's `[y]`/`[n]`.
 
 ### Images
 

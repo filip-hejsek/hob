@@ -10,6 +10,8 @@
 //! Backends read the tree through [`Widget::kind`], and leave out the gaps
 //! around widgets that have nothing to show (see [`is_visible`]).
 
+use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -105,7 +107,7 @@ pub enum Kind {
         label: String,
         /// The key that presses it, if any (see [`ButtonLabel`]).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        key: Option<char>,
+        key: Option<ButtonKey>,
         /// What clicking it does.
         action: Action,
         /// Shown in red, as for a dangerous action (see [`button_danger`]).
@@ -281,18 +283,17 @@ pub fn suggestions(state: &str, field: &str) -> Widget {
 /// The label of a button, and the key that presses it.
 ///
 /// A fixed label can give the key at its end: `"Yes [y]"` is the label
-/// `"Yes"` with the key `y`. Labels made at runtime aren't parsed: build
-/// them with [`ButtonLabel::new`] (and [`ButtonLabel::key`]). That's also
-/// the way to a label that ends with a bracketed letter.
+/// `"Yes"` with the key `y`, and `"Yes [Alt+y]"` the same label with the
+/// key Alt+Y. Labels made at runtime aren't parsed: build them with
+/// [`ButtonLabel::new`] (and [`ButtonLabel::key`] or
+/// [`ButtonLabel::alt_key`]). That's also the way to a label that ends with
+/// a bracketed letter.
 ///
-/// A key is a lowercase ASCII letter. It works while the island has focus
-/// as a whole: in an island without text fields or checkboxes, or after its
-/// last checkbox (backends may differ); no two buttons of an island can
-/// have the same key (see [`IslandBuilder::build`](crate::IslandBuilder::build)).
+/// See [`ButtonKey`] for when a key works.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ButtonLabel {
     text: String,
-    key: Option<char>,
+    key: Option<ButtonKey>,
 }
 
 impl ButtonLabel {
@@ -304,25 +305,92 @@ impl ButtonLabel {
         }
     }
 
-    /// Sets the key that presses the button.
-    pub fn key(mut self, key: char) -> Self {
-        self.key = Some(key);
+    /// Sets the key that presses the button: `letter` alone.
+    pub fn key(mut self, letter: char) -> Self {
+        self.key = Some(ButtonKey { letter, alt: false });
+        self
+    }
+
+    /// Sets the key that presses the button: Alt and `letter`.
+    pub fn alt_key(mut self, letter: char) -> Self {
+        self.key = Some(ButtonKey { letter, alt: true });
         self
     }
 }
 
-/// Parses a key at the end, like `"Yes [y]"`.
+/// Parses a key at the end, like `"Yes [y]"` or `"Yes [Alt+y]"`.
 impl From<&'static str> for ButtonLabel {
     fn from(label: &'static str) -> Self {
         let parsed = label.strip_suffix(']').and_then(|rest| {
             let (text, key) = rest.rsplit_once('[')?;
-            let mut chars = key.chars();
-            match (chars.next(), chars.next()) {
-                (Some(key), None) => Some(ButtonLabel::new(text.trim_end()).key(key)),
-                _ => None,
-            }
+            Some(ButtonLabel {
+                text: text.trim_end().to_owned(),
+                key: Some(key.parse().ok()?),
+            })
         });
         parsed.unwrap_or_else(|| ButtonLabel::new(label))
+    }
+}
+
+/// A key that presses a button: a lowercase ASCII letter, alone or with
+/// Alt. The two are separate keys: `y` and Alt+Y can press different
+/// buttons.
+///
+/// A letter alone works while the island has focus as a whole: in an
+/// island without fields, or after its last checkbox; an island with text
+/// fields, which take typed letters, can't have such keys. Alt and the
+/// letter work also while one of the island's fields has focus. Backends
+/// may differ. No two buttons of an island can have the same key (see
+/// [`IslandBuilder::build`](crate::IslandBuilder::build)).
+///
+/// It's written `y` or `Alt+y`, also in JSON.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+pub struct ButtonKey {
+    /// The letter.
+    pub letter: char,
+    /// Whether Alt must be held too.
+    pub alt: bool,
+}
+
+impl fmt::Display for ButtonKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.alt {
+            f.write_str("Alt+")?;
+        }
+        write!(f, "{}", self.letter)
+    }
+}
+
+/// Parses one character, maybe after `Alt+`. Whether it's a lowercase
+/// letter is checked by [`IslandBuilder::build`](crate::IslandBuilder::build).
+impl FromStr for ButtonKey {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        let (alt, rest) = match s.strip_prefix("Alt+") {
+            Some(rest) => (true, rest),
+            None => (false, s),
+        };
+        let mut chars = rest.chars();
+        match (chars.next(), chars.next()) {
+            (Some(letter), None) => Ok(ButtonKey { letter, alt }),
+            _ => Err(format!("{s:?} isn't a button key")),
+        }
+    }
+}
+
+impl From<ButtonKey> for String {
+    fn from(key: ButtonKey) -> String {
+        key.to_string()
+    }
+}
+
+impl TryFrom<String> for ButtonKey {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, String> {
+        s.parse()
     }
 }
 
@@ -395,7 +463,7 @@ pub fn is_visible(contents: &impl Contents, widget: &Widget) -> bool {
 
 /// Calls `f` with the key and action of each button that has a key, in tree
 /// order.
-pub(crate) fn keys(widget: &Widget, f: &mut impl FnMut(char, &Action)) {
+pub(crate) fn keys(widget: &Widget, f: &mut impl FnMut(ButtonKey, &Action)) {
     match widget.kind() {
         Kind::Column(children) | Kind::Row(children) => {
             children.iter().for_each(|c| keys(c, f));
@@ -500,9 +568,37 @@ mod tests {
         assert_eq!(parsed("Yes [y]"), ButtonLabel::new("Yes").key('y'));
         assert_eq!(parsed("[n]"), ButtonLabel::new("").key('n'));
         assert_eq!(parsed("No[N]"), ButtonLabel::new("No").key('N'));
-        for plain in ["OK", "A [bc]", "A []", "A [y] ", "]"] {
+        assert_eq!(parsed("Yes [Alt+y]"), ButtonLabel::new("Yes").alt_key('y'));
+        assert_eq!(parsed("[Alt++]"), ButtonLabel::new("").alt_key('+'));
+        for plain in [
+            "OK",
+            "A [bc]",
+            "A []",
+            "A [y] ",
+            "]",
+            "A [Alt+]",
+            "A [alt+y]",
+        ] {
             assert_eq!(parsed(plain), ButtonLabel::new(plain));
         }
+    }
+
+    #[test]
+    fn button_keys_in_json() {
+        let alt = ButtonKey {
+            letter: 'y',
+            alt: true,
+        };
+        assert_eq!(serde_json::to_string(&alt).unwrap(), r#""Alt+y""#);
+        let plain: ButtonKey = serde_json::from_str(r#""y""#).unwrap();
+        assert_eq!(
+            plain,
+            ButtonKey {
+                letter: 'y',
+                alt: false
+            }
+        );
+        assert!(serde_json::from_str::<ButtonKey>(r#""yy""#).is_err());
     }
 
     #[test]

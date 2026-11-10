@@ -49,7 +49,8 @@
 //! too. Escape cancels
 //! (if there's a cancel button). While the island as a whole has focus,
 //! Enter submits and a button's key (see
-//! [`ButtonLabel`](kettle_ui::widget::ButtonLabel)) presses it.
+//! [`ButtonKey`]) presses it; a key with Alt
+//! presses it also while one of the island's fields has focus.
 //!
 //! [`render_png`] renders an island offscreen, without a window; the
 //! `kettle-render` binary does the same for an island saved as JSON.
@@ -68,7 +69,7 @@ use iced::widget::{
     Container, button, column, container, operation, progress_bar, rule, text, text_input,
 };
 use iced::{Element, Padding, Rectangle, Task, task};
-use kettle_ui::widget::{Action, Borders, Kind, Text, Widget, is_shown, is_visible};
+use kettle_ui::widget::{Action, Borders, ButtonKey, Kind, Text, Widget, is_shown, is_visible};
 use kettle_ui::{
     Built, Contents, Error, FrozenIsland, IslandBuilder, Job, JobResult, Model, Outcome,
     StateUpdate, Value,
@@ -466,7 +467,7 @@ struct Shown {
     /// The shown fields, in tree order.
     fields: Vec<scope::Field>,
     /// The keys of shown buttons.
-    keys: Vec<(char, Action)>,
+    keys: Vec<(ButtonKey, Action)>,
     /// Whether a submit button is shown.
     submit: bool,
     /// Whether a cancel button is shown.
@@ -969,6 +970,98 @@ mod tests {
                 })),
                 expect(r#"outcome: Some("cancelled")"#),
             ],
+        );
+    }
+
+    /// The events of pressing and releasing Alt and `key`, at the physical
+    /// key `code`.
+    fn alt(
+        key: impl Into<iced::keyboard::Key>,
+        code: iced::keyboard::key::Code,
+    ) -> Vec<iced::Event> {
+        use iced::keyboard::{self, Location, Modifiers, key::Physical};
+        let key = key.into();
+        let modifiers = Modifiers::ALT;
+        let location = Location::Standard;
+        vec![
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: key.clone(),
+                modified_key: key.clone(),
+                physical_key: Physical::Code(code),
+                location,
+                modifiers,
+                text: None,
+                repeat: false,
+            }),
+            iced::Event::Keyboard(keyboard::Event::KeyReleased {
+                key: key.clone(),
+                modified_key: key,
+                physical_key: Physical::Code(code),
+                location,
+                modifiers,
+            }),
+        ]
+    }
+
+    #[test]
+    fn alt_keys_press_buttons_from_a_text_field() {
+        use iced::keyboard::{Key, key::Code, key::Named};
+
+        let builder = IslandBuilder::new(column([
+            text_field("a", ""),
+            row([submit_button("OK [Alt+o]"), cancel_button("Cancel [Alt+c]")]),
+        ]));
+        let island = Island::new(builder).unwrap().0;
+        let a = island.field_id("a").unwrap();
+        let messages: Vec<String> = {
+            let mut ui = simulator(island.view());
+            // Without focus, nothing.
+            ui.simulate(alt(Key::Character("o".into()), Code::KeyO));
+            ui.click(a).unwrap();
+            // Plain letters are typed.
+            ui.typewrite("c");
+            // No button has it, and Alt+Enter isn't Enter.
+            ui.simulate(alt(Key::Character("x".into()), Code::KeyX));
+            ui.simulate(alt(Named::Enter, Code::Enter));
+            ui.simulate(alt(Key::Character("o".into()), Code::KeyO));
+            // In another layout, the key at the same place.
+            ui.simulate(alt(Key::Character("с".into()), Code::KeyC));
+            ui.tap_key(Key::Named(Named::Escape));
+            ui.into_messages().map(|m| format!("{m:?}")).collect()
+        };
+        assert_eq!(
+            messages,
+            [
+                r#"Message(TextChanged("a", "c"))"#,
+                "Message(Submit)",
+                "Message(Cancel)",
+                "Message(Cancel)",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_key_and_the_key_with_alt_are_separate() {
+        use iced::keyboard::{Key, key::Code};
+
+        let builder = IslandBuilder::new(column([
+            label("Stop?"),
+            row([
+                kettle_ui::widget::button("pause", "Pause [p]"),
+                kettle_ui::widget::button("quit", "Quit [Alt+p]"),
+            ]),
+        ]));
+        let island = Island::new(builder).unwrap().0;
+        let messages: Vec<String> = {
+            let mut ui = simulator(island.view());
+            ui.click("Stop?").unwrap();
+            ui.typewrite("p");
+            ui.simulate(alt(Key::Character("p".into()), Code::KeyP));
+            ui.into_messages().map(|m| format!("{m:?}")).collect()
+        };
+        assert_eq!(
+            messages,
+            [r#"Message(Press("pause"))"#, r#"Message(Press("quit"))"#]
         );
     }
 

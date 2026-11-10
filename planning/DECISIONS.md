@@ -72,26 +72,34 @@ Known bugs are in BUGS.md.
   options are added only when needed.
 - `text_area` is a multi-line text field. Its value is text, like a text
   field's (`Fields::text`, `set_text`), so it counts as a text field
-  everywhere: suggestions can target it, and an island with one can't have
-  button keys. Headless clients see `text_area` in the outline, with the
-  value on one line (Debug-escaped).
+  everywhere: suggestions can target it. Headless clients see `text_area`
+  in the outline, with the value on one line (Debug-escaped).
 - Parts of the tree are hidden with `when(state, widget)`, shown only while
   the named state is `Value::Bool(true)` (missing or another type hides
   it). Showing and hiding doesn't change the tree's shape, and a hidden
   field keeps its value. Rejected: hiding labels by setting them to `""`
   (still works, but implicit and only for labels).
-- Buttons can have a key, a lowercase ASCII letter, shown as ` [y]` after
-  the label, like in terminal prompts. A fixed label gives it at its end
-  (`submit_button("Yes [y]")`, via `From<&'static str> for ButtonLabel`).
-  Labels made at runtime use `ButtonLabel::new(text).key('y')`, which
-  parses nothing; `String` isn't accepted, to discourage parsing runtime
-  data (it can't be forbidden). A fixed label ending in a bracketed letter
-  also needs the builder. `build` rejects keys that aren't lowercase
-  letters, duplicate keys, and keys in an island with text fields, which
-  take typed letters (chord keys like Ctrl+N could lift that later). The
-  key is a separate field of the tree (`key`, left out when absent), so
-  headless clients get it as data; the outline shows `button "Yes" [y]`.
-  Rejected: an explicit key parameter on every button function.
+- Buttons can have a key (`ButtonKey`): a lowercase ASCII letter, alone
+  or with Alt, shown as ` [y]` or ` [Alt+y]` after the label, like in
+  terminal prompts. A key with Alt and the same letter alone are separate
+  keys, which can press different buttons. A fixed label gives the key at
+  its end (`submit_button("Yes [y]")`, `"Yes [Alt+y]"`, via
+  `From<&'static str> for ButtonLabel`). Labels made at runtime use
+  `ButtonLabel::new(text).key('y')` (or `.alt_key('y')`), which parses
+  nothing; `String` isn't accepted, to discourage parsing runtime data (it
+  can't be forbidden). A fixed label ending in a bracketed key also needs
+  the builder. `build` rejects keys whose letter isn't lowercase, duplicate
+  keys, and keys without Alt in an island with text fields, which take
+  typed letters. A key alone works while the island as a whole has focus;
+  with Alt, also while one of its fields has focus. The key is a separate
+  field of the tree (`key`: `"y"` or `"Alt+y"`, left out when absent), so
+  headless clients get it as data, and islands saved before Alt keys
+  still load; the outline shows `button "Yes" [y]`. Rejected: an explicit
+  key parameter on every button function; Ctrl and the key (text fields
+  use Ctrl+A, Ctrl+C, ...); Alt and the letter pressing the same button as
+  the letter alone (the user wants them to be independent bindings);
+  `key` and `alt` as two fields in JSON (a string is shorter, and old
+  islands have just the letter).
 - Besides submit and cancel buttons there's a plain `button(id, label)`:
   the island reports `Outcome::Pressed(id, fields)`. Enter never presses
   it (only a submit button), so a confirmation of a dangerous action must
@@ -272,7 +280,10 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   one submits, if there's a submit button; Escape cancels while the island
   has focus, if there's a cancel button (otherwise the field just loses
   focus, as in iced); a button's key presses it while the island has
-  focus as a whole. Rejected: handling these in the host through a subscription; by
+  focus as a whole, and a key with Alt while the island or one of its
+  fields has focus. Alt keys are matched by `Key::to_latin`, so they work
+  with non-Latin layouts too; Alt with other keys does nothing (Alt+Enter
+  isn't Enter). Rejected: handling these in the host through a subscription; by
   then a text input has already handled Escape (it unfocuses), so the host
   can't tell which island had focus.
 - An island without fields can have focus as a whole: the wrapper is

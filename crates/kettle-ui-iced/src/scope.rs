@@ -10,6 +10,8 @@ use iced::{
     Border, Color, Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector, touch,
 };
 
+use kettle_ui::widget::ButtonKey;
+
 use crate::Message;
 
 /// Wraps the UI of a live island, and handles its keys before its widgets
@@ -27,7 +29,10 @@ use crate::Message;
 ///   Up and Down move between lines).
 /// - Escape, while the island has focus, cancels.
 /// - While the island as a whole has focus, Enter submits, a button's key
-///   presses it, and Up (if there are fields) focuses the last field.
+///   (without Alt) presses it, and Up (if there are fields) focuses the
+///   last field.
+/// - A button's key with Alt presses it while the island or one of its
+///   fields has focus.
 ///
 /// An island without fields can have focus as a whole: like a text field, it
 /// gets it when clicked or through iced's focus operations (with its own
@@ -42,7 +47,7 @@ pub(crate) struct Scope<'a> {
     /// The shown fields, in tree order.
     pub fields: Vec<Field>,
     /// The keys of shown buttons, and what pressing them sends.
-    pub keys: Vec<(char, Message)>,
+    pub keys: Vec<(ButtonKey, Message)>,
     /// What a shown submit button sends, if there is one.
     pub submit: Option<Message>,
     /// What a shown cancel button sends, if there is one.
@@ -120,17 +125,20 @@ impl KeyAction {
 }
 
 impl Scope<'_> {
-    /// What pressing `key` with `modifiers` does, if anything.
+    /// What pressing `key` (at `physical_key`) with `modifiers` does, if
+    /// anything.
     fn key_action(
         &mut self,
         tree: &mut Tree,
         key: &keyboard::Key,
+        physical_key: key::Physical,
         modifiers: keyboard::Modifiers,
         layout: Layout<'_>,
         renderer: &Renderer,
     ) -> Option<KeyAction> {
         let plain = modifiers.is_empty();
-        if !plain && modifiers != keyboard::Modifiers::COMMAND {
+        let alt = modifiers == keyboard::Modifiers::ALT;
+        if !plain && !alt && modifiers != keyboard::Modifiers::COMMAND {
             return None;
         }
         let whole = tree.state.downcast_ref::<State>().focused;
@@ -168,6 +176,12 @@ impl Scope<'_> {
             None => Focus::Whole,
         };
         match key.as_ref() {
+            // Like other Alt shortcuts, it works with any keyboard layout.
+            keyboard::Key::Character(_) if alt && (whole || field.is_some()) => {
+                let letter = key.to_latin(physical_key)?.to_ascii_lowercase();
+                self.press(ButtonKey { letter, alt: true })
+            }
+            _ if alt => None,
             keyboard::Key::Named(key::Named::Escape) if plain && (whole || field.is_some()) => {
                 self.cancel.clone().map(KeyAction::send)
             }
@@ -221,11 +235,19 @@ impl Scope<'_> {
                         focus: Some(next(field?)),
                     });
                 }
-                let (_, message) = self.keys.iter().find(|(k, _)| *k == c)?;
-                Some(KeyAction::send(message.clone()))
+                self.press(ButtonKey {
+                    letter: c,
+                    alt: false,
+                })
             }
             _ => None,
         }
+    }
+
+    /// Presses the button with `key`, if there's one.
+    fn press(&self, key: ButtonKey) -> Option<KeyAction> {
+        let (_, message) = self.keys.iter().find(|(k, _)| *k == key)?;
+        Some(KeyAction::send(message.clone()))
     }
 }
 
@@ -339,10 +361,20 @@ impl Widget<Message, Theme, Renderer> for Scope<'_> {
                     shell.request_redraw();
                 }
             }
-            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
-                if let Some(action) =
-                    self.key_action(tree, key, *modifiers, child(layout), renderer)
-                {
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key,
+                physical_key,
+                modifiers,
+                ..
+            }) => {
+                if let Some(action) = self.key_action(
+                    tree,
+                    key,
+                    *physical_key,
+                    *modifiers,
+                    child(layout),
+                    renderer,
+                ) {
                     if let Some(message) = action.send {
                         shell.publish(message);
                     }
