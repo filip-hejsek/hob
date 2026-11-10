@@ -59,9 +59,9 @@ use iced::advanced::widget::operation::{Focusable, Outcome as OperationOutcome, 
 use iced::advanced::widget::{Operation, operate};
 use iced::keyboard::{self, Modifiers};
 use iced::widget::scrollable::AbsoluteOffset;
-use iced::widget::{Id, column, container, operation, row, rule, scrollable, text, text_input};
+use iced::widget::{Id, column, container, operation, row, rule, text, text_input};
 use iced::{
-    Border, Color, Element, Event, Font, Length, Rectangle, Subscription, Task, Theme, event, font,
+    Border, Color, Element, Event, Font, Rectangle, Subscription, Task, Theme, event, font,
     padding, window,
 };
 use kettle_ui::FrozenIsland;
@@ -70,10 +70,12 @@ use kettle_ui_iced::{Island, spacing, view_frozen};
 use keyed::keyed;
 use keys::{Action, Binding, Scope};
 use selectable::selectable;
+use sticky::sticky;
 
 mod keyed;
 mod keys;
 mod selectable;
+mod sticky;
 
 /// The target of the shell's own log records.
 const TARGET: &str = "hob_gui";
@@ -219,6 +221,9 @@ struct Shell {
     cleared_records: Vec<LogRecord>,
     /// For block and island ids.
     next_id: u64,
+    /// Changed to scroll the scrollback to the bottom, dropping the empty
+    /// space left there when content got shorter.
+    reveal: u64,
 }
 
 type BlockId = u64;
@@ -358,6 +363,7 @@ impl Shell {
             scrollback: Vec::new(),
             cleared_records: Vec::new(),
             next_id: 0,
+            reveal: 0,
         };
         shell.restore();
         let mut tasks = Vec::new();
@@ -657,6 +663,8 @@ impl Shell {
         }
         self.history.push(&line);
         self.offer = None;
+        // So its output is seen.
+        self.reveal += 1;
         let id = self.next_id();
         let mut block = Block {
             id,
@@ -886,6 +894,8 @@ impl Shell {
             .into_iter()
             .partition(|item| matches!(item, Item::Block(b) if b.running && Some(b.id) != caller));
         self.scrollback = kept;
+        // Otherwise only the empty space left at the bottom would be shown.
+        self.reveal += 1;
         self.cleared_records.extend(log_records(&cleared));
         self.forget_private_lines();
     }
@@ -969,11 +979,13 @@ impl Shell {
             Item::Notice(_) => None,
         });
         let scrollback = keyed(items).spacing(2.0 * spacing());
-        let scrollback = scrollable(container(scrollback).padding(2.0 * spacing()))
-            .id(Id::new(SCROLLBACK))
-            .anchor_bottom()
-            .width(Length::Fill)
-            .height(Length::Fill);
+        // It doesn't move what it shows when content changes, except to
+        // stay at the bottom.
+        let scrollback = sticky(
+            container(scrollback).padding(2.0 * spacing()),
+            Id::new(SCROLLBACK),
+            self.reveal,
+        );
 
         // A preview has no prompt; it says what it is instead.
         if let (true, Some(path)) = (self.is_preview(), &self.session) {
@@ -1150,15 +1162,14 @@ fn scroll_by<T: Send + 'static>(amount: Amount) -> Task<T> {
             state: &mut dyn Scrollable,
         ) {
             if id == Some(&Id::new(SCROLLBACK)) {
-                // The scrollback is anchored at the bottom, so its offset
-                // grows upwards.
-                let y = match self.0 {
+                let up = match self.0 {
                     Amount::Pages(pages) => {
                         pages * (bounds.height - 3.0 * spacing()).max(spacing())
                     }
                     Amount::Pixels(pixels) => pixels,
                 };
-                state.scroll_by(AbsoluteOffset { x: 0.0, y }, bounds, content_bounds);
+                let offset = AbsoluteOffset { x: 0.0, y: -up };
+                state.scroll_by(offset, bounds, content_bounds);
             }
         }
 

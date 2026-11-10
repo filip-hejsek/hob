@@ -846,7 +846,15 @@ Works like a terminal: a scrollback with the prompt below it.
   to their own block.
 - Live islands are shown inline and freeze in place once submitted or
   cancelled. There are no tabs.
-- The scrollback sticks to the bottom while it's scrolled there.
+- What the scrollback shows doesn't move when its content changes, except
+  that it sticks to the bottom while it's scrolled there (new output pushes
+  it up). Content that gets shorter leaves empty space at the bottom
+  instead of pulling what's shown down; the space goes as the view moves
+  up. Starting a command, or clearing, scrolls to the bottom and drops the
+  space. Our own `Sticky` widget sets the offset while laying out, before
+  drawing. Rejected: iced's `anchor_bottom`, which moves what's shown by
+  whatever is added below it, even out of sight; and fixing the offset from
+  `on_scroll`, a frame late, so content would jump.
 - The scrollback is a keyed column (our own `Keyed` widget), keyed by block
   id, and so is each block's output, keyed by entry index. So a live island
   keeps its widget state (focus, cursor) when `clear` removes blocks before
