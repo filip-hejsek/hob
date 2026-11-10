@@ -39,6 +39,13 @@ TODO.md.
   server's log notification and progress/info lines in a different order
   (seen once in six runs).
 
+## Note commands (hob-notes)
+
+- Dates in `notes show` use SQLite's local-time conversion, while the
+  rest of hob uses jiff.
+- A note edited so it's no longer a TODO note keeps its active or done
+  status, and then `done` and `notes reopen` refuse it.
+
 ## Logging
 
 - A dependency that logs many different messages (e.g. with a changing

@@ -151,6 +151,20 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - Edits by two commands at once aren't detected (the last one wins).
 - `todo` is the only tag. More tags with a meaning, and maybe tags the
   user defines; `notes show` and `notes list` would then show tags.
+- `note TEXT` only prints "Saved note #ID.". It could show the new note:
+  maybe all notes (with a limit), or a frozen island, as if the note had
+  been entered interactively.
+- `notes edit` without an ID could edit the last note.
+- `note`'s text is free-form, but quotes are still parsed, so an
+  apostrophe has to be quoted. Its arguments could be left unparsed.
+- A way to write a new text and make the existing text the title.
+- `note todo` (a text that's only a tag) is an error; it could open the
+  note island with `todo` in the title field instead.
+- Scratch notes: temporary notes for pinning something down for a short
+  while, not shown by `notes list` and cleaned up automatically somehow.
+- Reconsider these:
+  - A title starting with `-` needs `--` before it (`title -- -x`).
+  - `notes --all` is an error: the flags work only after `list`.
 
 ## Logging
 
