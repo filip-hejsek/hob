@@ -976,7 +976,8 @@ Works like a terminal: a scrollback with the prompt below it.
 - Key bindings are a table (the `keys` module) from a key with exact
   modifiers to a named action, kept apart from what the actions do, so it
   can become configurable. Letters are compared in lowercase. History and
-  completion work only while the prompt has focus; the others anywhere:
+  completion work only while the prompt has focus (the prompt's key
+  bindings look them up; see below); the others anywhere:
   PageUp/PageDown scroll the scrollback by a bit less than a page, and
   Ctrl+L clears it like `clear`, keeping the blocks of running commands.
   Ctrl+D exits like `exit`, but only when the prompt is empty, and it or
@@ -1016,9 +1017,12 @@ Works like a terminal: a scrollback with the prompt below it.
   ends it, so Space and Enter need no handling of their own: Space takes
   the candidate and adds the space, Enter takes it and runs the line, and
   typing other text goes on after it. hob-core gives the filled-in line
-  for each candidate (`Completion::filled`). iced's text input drops focus
-  on Escape before the shell's bindings see it, so Escape works while
-  nothing has focus too, and focuses the prompt again.
+  for each candidate (`Completion::filled`). Escape works while nothing
+  has focus too (e.g. after a click on the scrollback), and focuses the
+  prompt again; otherwise, Escape unfocuses the prompt. The prompt's key
+  bindings pass Escape to the shell, which decides when it's done: the
+  bindings are built at the last view, so keys pressed before the next one
+  would see a stale state.
 - Trailing whitespace is trimmed from a submitted line, so the space that
   completion adds doesn't reach the command or the history. It's invisible,
   and words are split at whitespace anyway, so it can't mean anything,
@@ -1030,11 +1034,46 @@ Works like a terminal: a scrollback with the prompt below it.
   forgets it. The leading space stays in the history line, so a recalled
   private line stays private when run again. Privacy is read from the line,
   so `History` and the blocks need no flag.
-- The prompt has no box: a bold `>` (the text input's icon) like the command
-  lines in the scrollback, with the typed text aligned with theirs. Focus is
-  shown by the `>`'s colour (primary when focused, dim otherwise); as the
-  icon, its colour comes from the input's style, so the shell doesn't need
-  to track focus.
+- The prompt is a `text_editor`, not a `text_input`: the shell owns its
+  `Content`, so it can read the cursor (for completion and editing at the
+  cursor, which `text_input` doesn't expose; see ICED_WISHLIST.md), and
+  the editor takes key bindings, so the prompt's keys need no
+  subscription and no focus check. Long lines wrap (by word, or anywhere
+  in a long word), since the editor can't scroll sideways. A recalled
+  line, or any line set by the shell, puts the cursor at its end.
+- The prompt grows up to ten rows (worked out from the renderer's text
+  size). Beyond that, it scrolls, with a scrollbar, so it's clear that not
+  all of it is shown. The editor scrolling itself had no scrollbar, and
+  iced doesn't expose its scroll position to show one (see
+  ICED_WISHLIST.md); the wheel could also scroll it past its end, which
+  shrank it. So the editor is in a scrollable, at its full height, with
+  the `>`, which scrolls with the first row (like the command lines in
+  the scrollback). The prompt keeps the cursor in view itself: it lays
+  the text out again as the editor does (an `iced_graphics` `Paragraph`,
+  whose cosmic-text buffer tells which row has the cursor), and scrolls
+  as little as needed to show the cursor's row with half a row above and
+  below it (less on the first and last row), so that a row cut off at an
+  edge hints at more. It does so only when the text, width or cursor
+  changed, so the wheel can scroll away from the cursor.
+- The command line has one line: Enter runs it, and Up and Down always
+  browse the history. Pasted line breaks become spaces, and those at the
+  ends are dropped, so a leading one can't make the line private.
+  Shift+Enter does nothing, kept for a multi-line mode (see TODO.md).
+  Multi-line command lines, with Up and Down browsing the history only
+  from the first and last line (like zsh), were tried and dropped: when
+  browsing the history, a multi-line entry eats the Up presses until the
+  cursor reaches its top, and iced doesn't tell which wrapped row the
+  cursor is on, so within a long wrapped line Up and Down went to the
+  history instead of the next row.
+- The prompt has no box: a bold `>` like the command lines in the
+  scrollback, with the typed text aligned with theirs. Focus is shown by
+  the `>`'s colour (primary when focused, dim otherwise). The `>` is a
+  separate `text`; a small wrapper (`prompt.rs`) reads the editor's focus
+  from its widget state and passes the colour down as the inherited text
+  colour, so the shell doesn't track focus. A click on the `>` focuses the
+  editor, as it did when the `>` was the text input's icon. The wrapper
+  also reports the text (or the placeholder) to operations, so tests can
+  find the prompt.
 - End-to-end tests run the real shell (`application()`, the same builder
   `run` uses) in `iced_test`'s `Emulator`, without a window, with test-only
   commands. The emulator runs in `Mode::Immediate`, and a small harness

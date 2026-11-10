@@ -181,13 +181,34 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - An icon, for the desktop file (`Icon=`) and the window.
 
 - More prompt shortcuts: Ctrl+W, Ctrl+U and Ctrl+K (delete the word before
-  the cursor, or to the start or end of the line). They need the cursor
-  position, which iced doesn't expose (see ICED_WISHLIST.md); the plan is
-  to contribute that upstream, then pin iced to a git version.
+  the cursor, or to the start or end of the line). The prompt is a
+  `text_editor` now, so the shell can read the cursor and edit at it
+  (`Content::perform`).
+- Multi-line command lines, as a mode the prompt is in only when asked
+  (dropped for now; see DECISIONS.md). A sketch, which needs more thought:
+  - Normally, Up and Down always browse the history; a recalled
+    multi-line entry is shown whole, and Up goes on past it. Enter runs the
+    line.
+  - Shift+Enter switches to multi-line mode and starts a new line. There,
+    Enter starts a new line, Up and Down move the cursor, and Ctrl+Enter
+    runs the command (like in island text fields). Escape goes back to the
+    normal mode, keeping the text; running the line ends the mode too. To
+    edit a recalled multi-line entry, recall it, then switch.
+  - The `>` should show the mode (another glyph or colour), since Enter
+    does something else in it.
+  - In the normal mode, maybe don't break the line at line breaks, but show
+    them as a grey `⏎`.
+  - When the prompt has a line break in the normal mode, maybe show a hint
+    like "press Ctrl+E to expand".
+  - Multi-line command lines in the scrollback should line up their later
+    lines with the first one's text, after the `> `; messages that quote
+    the line (e.g. "Not exiting: … is running") need a look too.
+  - A line starting with a line break counts as private
+    (`History::is_private` looks at any whitespace).
 - Ctrl+R history search. Needs a UI design: a bash-style search in the
   prompt line, or a list of matches?
-- Completion works only at the end of the line (iced doesn't tell the app
-  where the cursor is; see ICED_WISHLIST.md).
+- Completion works only at the end of the line. The shell can read the
+  cursor now; hob-core's completion would need to take it.
 - Shell completion for `!` could also offer shell builtins (`cd`, `export`,
   ...), variable names after `$`, and paths starting with a variable.
 - Completing a path reads its directory on the UI thread, which could

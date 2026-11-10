@@ -13,6 +13,7 @@ categories = ["gui"]
 futures-channel.workspace = true
 hob-core.workspace = true
 iced = { workspace = true, features = ["advanced"] }
+iced_graphics.workspace = true
 kettle-ui.workspace = true
 kettle-ui-iced.workspace = true
 serde_json.workspace = true

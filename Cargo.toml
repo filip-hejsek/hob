@@ -37,6 +37,7 @@ futures-core = "0.3"
 futures-executor = "0.3"
 gix = { version = "0.90", default-features = false, features = ["blob-diff", "max-performance", "revision", "sha1", "status"] }
 iced = "0.14"
+iced_graphics = "0.14"
 image = { version = "0.25", default-features = false }
 jiff = "0.2"
 log = "0.4"

@@ -2578,6 +2578,7 @@ dependencies = [
  "futures-channel",
  "hob-core",
  "iced",
+ "iced_graphics",
  "iced_test",
  "kettle-ui",
  "kettle-ui-iced",

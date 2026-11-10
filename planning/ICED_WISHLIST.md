@@ -13,8 +13,9 @@ The app can move the cursor and select text (`operation::move_cursor_to`,
 `select_range`), but can't read where the cursor or selection is: the
 `TextInput` operation trait only exposes the text.
 
-**Workaround:** completion works only at the end of the line; the
-shortcuts wait for this.
+**Workaround:** the prompt is a `text_editor`, whose `Content` (owned by
+the shell) tells the cursor and selection. Islands' text fields are still
+`text_input`s.
 
 ## Which visual row a text editor's caret is on
 
@@ -27,7 +28,28 @@ wrapped row it's on, nor whether it's on the first or last one.
 **Workaround:** Up and Down stay in a text area; Ctrl+Up and Ctrl+Down
 leave it. (It could be found
 by moving the caret with Home and DocumentStart, End and DocumentEnd, and
-comparing, then moving it back, but that wasn't worth it.)
+comparing, then moving it back, but that wasn't worth it.) Another way,
+not tried yet: lay the text out again as the prompt does (see "A text
+editor's scroll position") and find the caret's row there; it must match
+the editor's font, size, width and wrapping, and a caret at a wrap point
+may be drawn on either row.
+
+## A text editor's scroll position
+
+**Needed for:** a scrollbar on the prompt, once its text is taller than
+its max height, so it's clear that not all of it is shown.
+
+A `text_editor` scrolls itself to show its cursor, but has no scrollbar
+and doesn't tell where it's scrolled to. With height `Shrink`, it also
+measures only the rows shown from its scroll position, and the wheel can
+scroll until the last row is at the top, so scrolling down past the end
+shrinks it.
+
+**Workaround:** the prompt's editor is in a `scrollable`, at its full
+height, so it never scrolls itself. The prompt keeps the cursor in view:
+it lays the text out again in an `iced_graphics` `Paragraph`, finds the
+cursor's row in its cosmic-text buffer, and scrolls the scrollable to it
+with an operation.
 
 ## Key handlers on a text input
 
@@ -37,9 +59,10 @@ Enter and Escape in the text fields of an island.
 `text_input` has `on_input` and `on_submit`, but no way to react to other
 keys pressed while it's focused.
 
-**Workaround:** for the prompt, a global keyboard subscription, plus an
-`operation::is_focused` round trip for each key press to check that the
-prompt is focused. For islands, a wrapper widget that sees key events
+**Workaround:** the prompt is a `text_editor`, which takes key bindings.
+Keys for the prompt while nothing is focused (Escape, Ctrl+D) still come
+from a global keyboard subscription, plus an `operation::is_focused` round
+trip. For islands, a wrapper widget that sees key events
 before the island's widgets, and finds the focused field with an operation
 on its children.
 
@@ -86,8 +109,8 @@ but again without widget support.
 
 **Workaround:** none yet; middle-click paste doesn't work in hob-gui. Our
 `text_editor` wrappers (`TextArea`, `SelectableText`) could add it: write
-the selection to `Kind::Primary` when it changes, and on a middle press
-move the cursor there and paste. For `text_input`s (the prompt, text
+the selection to `Kind::Primary` when it changes (the prompt likewise), and on a middle press
+move the cursor there and paste. For `text_input`s (text
 fields), whose selection we can't read, a wrapper could fake it: on a
 middle press, send a left click and a Ctrl+V, giving the widget a
 clipboard whose standard reads return the primary selection (and likewise

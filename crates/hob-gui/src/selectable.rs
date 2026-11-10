@@ -65,18 +65,27 @@ impl SelectableText<'_> {
             .on_action(|action| action)
             .style(move |theme: &Theme, _| {
                 let value = style(theme).color.unwrap_or(theme.palette().text);
-                text_editor::Style {
-                    background: Background::Color(Color::TRANSPARENT),
-                    border: Border::default(),
+                boxless(text_editor::Style {
                     placeholder: value,
                     value,
                     selection: theme.extended_palette().primary.weak.color,
-                }
+                    ..text_editor::default(theme, text_editor::Status::Active)
+                })
             });
         if let Some(font) = self.font {
             editor = editor.font(font);
         }
         editor
+    }
+}
+
+/// `style` without a box: no background or border, so a `text_editor`
+/// looks like plain text.
+pub(crate) fn boxless(style: text_editor::Style) -> text_editor::Style {
+    text_editor::Style {
+        background: Background::Color(Color::TRANSPARENT),
+        border: Border::default(),
+        ..style
     }
 }
 

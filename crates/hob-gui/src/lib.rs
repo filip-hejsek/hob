@@ -17,8 +17,9 @@
 //! Commands can read all records with
 //! [`Context::log_records`](hob_core::Context::log_records).
 //!
-//! The prompt works like a shell's: Up and Down browse the history, and Tab
-//! completes command names and arguments. Tab again, while candidates are
+//! The prompt works like a shell's: Enter runs the command line (it has one
+//! line; long lines wrap, and pasted line breaks become spaces). Up and Down
+//! browse the history, and Tab completes command names and arguments. Tab again, while candidates are
 //! listed, picks one (Tab and Shift+Tab move on, Escape goes back to the line
 //! from before). Tab doesn't move focus. Anywhere, PageUp and
 //! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). Ctrl+D
@@ -55,25 +56,27 @@ use std::sync::{Arc, Mutex};
 use hob_core::{
     History, Interpreter, Level, Limits, LogRecord, Reply, Request, Session, SessionError, Trim,
 };
-use iced::advanced::widget::operation::{Focusable, Outcome as OperationOutcome, Scrollable};
+use iced::advanced::widget::operation::{
+    Focusable, Outcome as OperationOutcome, Scrollable, focusable,
+};
 use iced::advanced::widget::{Operation, operate};
 use iced::keyboard::{self, Modifiers};
 use iced::widget::scrollable::AbsoluteOffset;
-use iced::widget::{Id, column, container, operation, row, rule, text, text_input};
-use iced::{
-    Border, Color, Element, Event, Font, Rectangle, Subscription, Task, Theme, event, font,
-    padding, window,
-};
+use iced::widget::text_editor::{self, Content, Edit, KeyPress, Motion};
+use iced::widget::{Id, column, container, operation, row, rule, text};
+use iced::{Element, Event, Rectangle, Subscription, Task, Theme, event, padding, window};
 use kettle_ui::FrozenIsland;
 use kettle_ui_iced::{Island, spacing, view_frozen};
 
 use keyed::keyed;
 use keys::{Action, Binding, Scope};
+use prompt::{BOLD, prompt};
 use selectable::selectable;
 use sticky::sticky;
 
 mod keyed;
 mod keys;
+mod prompt;
 mod selectable;
 mod sticky;
 
@@ -208,7 +211,8 @@ struct Shell {
     save_error: Option<String>,
     /// The lowest level of log records shown.
     level: Level,
-    prompt: String,
+    /// The prompt's text and cursor.
+    prompt: Content,
     history: History,
     /// The candidates Tab found, if there are several; shown below the
     /// prompt.
@@ -279,7 +283,8 @@ enum Entry {
 
 #[derive(Clone, Debug)]
 enum Message {
-    PromptChanged(String),
+    /// The user did something in the prompt.
+    PromptEdited(text_editor::Action),
     PromptSubmitted,
     /// A key was pressed (the shell's bindings decide what it does).
     Key(keyboard::Key, Modifiers),
@@ -356,7 +361,7 @@ impl Shell {
             limits,
             save_error: None,
             level,
-            prompt: String::new(),
+            prompt: Content::new(),
             history: History::new(),
             offer: None,
             bindings: keys::defaults(),
@@ -561,10 +566,19 @@ impl Shell {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::PromptChanged(prompt) => {
-                self.prompt = prompt;
-                self.history.stop_browsing();
-                self.offer = None;
+            Message::PromptEdited(action) => {
+                use text_editor::Action::Edit as A;
+                let action = match action {
+                    // The command line has one line.
+                    A(Edit::Enter) => return Task::none(),
+                    A(Edit::Paste(text)) => A(Edit::Paste(Arc::new(one_line(&text)))),
+                    action => action,
+                };
+                if action.is_edit() {
+                    self.history.stop_browsing();
+                    self.offer = None;
+                }
+                self.prompt.perform(action);
                 Task::none()
             }
             Message::PromptSubmitted => {
@@ -573,18 +587,15 @@ impl Shell {
                 task
             }
             Message::Key(key, modifiers) => match keys::lookup(&self.bindings, key, modifiers) {
-                Some(action) if action.scope() == Scope::Anywhere => self.perform(action),
-                Some(action) => focused().then(move |focused| {
-                    let works = match (action.scope(), focused) {
-                        (_, Some(id)) => id == Id::new(PROMPT),
-                        (scope, None) => scope == Scope::PromptOrNothing,
-                    };
-                    if works {
-                        Task::done(Message::Action(action))
-                    } else {
-                        Task::none()
-                    }
-                }),
+                Some(action) => match action.scope() {
+                    Scope::Anywhere => self.perform(action),
+                    // While the prompt has focus, its key bindings do it.
+                    Scope::Prompt => Task::none(),
+                    Scope::PromptOrNothing => focused().then(move |focused| match focused {
+                        None => Task::done(Message::Action(action)),
+                        Some(_) => Task::none(),
+                    }),
+                },
                 None => Task::none(),
             },
             Message::Action(action) => self.perform(action),
@@ -596,11 +607,11 @@ impl Shell {
             }
             Message::Typed(_) => Task::none(),
             Message::TypedUnfocused(text) => {
-                self.prompt.push_str(&text);
-                self.history.stop_browsing();
-                self.offer = None;
-                let prompt = Id::new(PROMPT);
-                operation::focus(prompt.clone()).chain(operation::move_cursor_to_end(prompt))
+                self.prompt
+                    .perform(text_editor::Action::Move(Motion::DocumentEnd));
+                let paste = text_editor::Action::Edit(Edit::Paste(Arc::new(text)));
+                let _ = self.update(Message::PromptEdited(paste));
+                operation::focus(Id::new(PROMPT))
             }
             Message::Refocus(target, focused) => self.refocus(target, focused),
             Message::Request(block, request) => match request.take() {
@@ -649,7 +660,8 @@ impl Shell {
     fn run_prompt(&mut self) -> Task<Message> {
         // Trailing spaces are invisible (completion leaves one), so they
         // shouldn't reach the command or the history, unless escaped or quoted.
-        let line = hob_core::trim_line_end(&mem::take(&mut self.prompt)).to_owned();
+        let text = mem::take(&mut self.prompt).text();
+        let line = hob_core::trim_line_end(&text).to_owned();
         self.run_line(line)
     }
 
@@ -698,7 +710,7 @@ impl Shell {
         let line = match action {
             Action::HistoryBack => {
                 self.offer = None;
-                self.history.back(&self.prompt).map(str::to_owned)
+                self.history.back(&self.prompt.text()).map(str::to_owned)
             }
             Action::HistoryForward => {
                 self.offer = None;
@@ -709,7 +721,7 @@ impl Shell {
                 let Some(interpreter) = &self.interpreter else {
                     return Task::none();
                 };
-                let completion = interpreter.complete(&self.prompt);
+                let completion = interpreter.complete(&self.prompt.text());
                 self.offer = (!completion.candidates.is_empty()).then_some(Offer {
                     candidates: completion.candidates,
                     filled: completion.filled,
@@ -721,12 +733,12 @@ impl Shell {
             Action::PickPrevious => self.pick(-1),
             Action::CancelPick => {
                 let Some((_, before)) = self.offer.as_mut().and_then(|o| o.picked.take()) else {
-                    return Task::none();
+                    // Escape unfocuses the prompt, unless a candidate is picked.
+                    return operate(focusable::unfocus());
                 };
-                self.prompt = before;
-                // Escape took focus from the prompt.
-                return operation::focus(Id::new(PROMPT))
-                    .chain(operation::move_cursor_to_end(Id::new(PROMPT)));
+                self.set_prompt(&before);
+                // Escape may have been pressed while nothing had focus.
+                return operation::focus(Id::new(PROMPT));
             }
             Action::PageUp => return scroll_page(1.0),
             Action::PageDown => return scroll_page(-1.0),
@@ -738,13 +750,16 @@ impl Shell {
             Action::Exit if self.prompt.is_empty() => return self.exit_if_idle(),
             Action::Exit => return Task::none(),
         };
-        match line {
-            Some(line) => {
-                self.prompt = line;
-                operation::move_cursor_to_end(Id::new(PROMPT))
-            }
-            None => Task::none(),
+        if let Some(line) = line {
+            self.set_prompt(&line);
         }
+        Task::none()
+    }
+
+    /// Replaces the prompt's text, with the cursor at its end.
+    fn set_prompt(&mut self, text: &str) {
+        self.prompt = Content::with_text(text);
+        (self.prompt).perform(text_editor::Action::Move(Motion::DocumentEnd));
     }
 
     /// Picks the candidate `step` places after the picked one (before, if
@@ -760,7 +775,7 @@ impl Shell {
         };
         let before = match offer.picked.take() {
             Some((_, before)) => before,
-            None => self.prompt.clone(),
+            None => self.prompt.text(),
         };
         offer.picked = Some((index, before));
         Some(offer.filled[index].clone())
@@ -1000,20 +1015,13 @@ impl Shell {
             .into();
         }
 
-        let prompt = text_input(&self.config.command_placeholder, &self.prompt)
-            .id(Id::new(PROMPT))
-            .on_input(Message::PromptChanged)
-            .on_submit(Message::PromptSubmitted)
-            // Like the command lines in the scrollback.
-            .icon(text_input::Icon {
-                font: BOLD,
-                code_point: '>',
-                size: None,
-                spacing: 4.0,
-                side: text_input::Side::Left,
-            })
-            .padding(padding::vertical(5.0))
-            .style(prompt_style);
+        let bindings = &self.bindings;
+        let prompt = prompt(&self.prompt, &self.config.command_placeholder, |editor| {
+            editor
+                .id(Id::new(PROMPT))
+                .on_action(Message::PromptEdited)
+                .key_binding(move |key| prompt_binding(bindings, key))
+        });
 
         column([
             scrollback.into(),
@@ -1274,25 +1282,44 @@ fn shows_notice(record: &LogRecord, level: Level) -> bool {
 /// Shown in a private block.
 const PRIVATE_NOTE: &str = "Not saved: the command line starts with a space.";
 
-/// The font of command lines, and of the prompt's `>`.
-const BOLD: Font = Font {
-    weight: font::Weight::Bold,
-    ..Font::DEFAULT
-};
-
-/// The prompt has no box; its `>` is coloured while it's focused.
-fn prompt_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let palette = theme.extended_palette();
-    let icon = match status {
-        text_input::Status::Focused { .. } => palette.primary.base.color,
-        _ => palette.background.strong.color,
-    };
-    text_input::Style {
-        background: Color::TRANSPARENT.into(),
-        border: Border::default(),
-        icon,
-        ..text_input::default(theme, status)
+/// The binding of a key pressed in the prompt: the shell's actions for
+/// the prompt, Enter to run the line, and otherwise the editor's usual
+/// keys. Shift+Enter does nothing: it's kept for a multi-line mode (see
+/// planning/TODO.md).
+fn prompt_binding(bindings: &[Binding], key: KeyPress) -> Option<text_editor::Binding<Message>> {
+    if !matches!(key.status, text_editor::Status::Focused { .. }) {
+        return None;
     }
+    let custom = |action| Some(text_editor::Binding::Custom(Message::Action(action)));
+    match keys::lookup(bindings, key.key.clone(), key.modifiers) {
+        // Escape is decided when it's done (it unfocuses, unless a candidate
+        // is picked), since keys pressed before the next view would see a
+        // stale state here.
+        Some(
+            action @ (Action::HistoryBack
+            | Action::CancelPick
+            | Action::HistoryForward
+            | Action::Complete
+            | Action::PickPrevious
+            | Action::Exit),
+        ) => custom(action),
+        // The shell does it (e.g. PageUp scrolls the scrollback).
+        Some(action) if action.scope() == Scope::Anywhere => None,
+        _ => match key.key {
+            keyboard::Key::Named(keyboard::key::Named::Enter) => (!key.modifiers.shift())
+                .then_some(text_editor::Binding::Custom(Message::PromptSubmitted)),
+            _ => text_editor::Binding::from_key_press(key),
+        },
+    }
+}
+
+/// Pasted text for the one-line prompt: line breaks at the ends are dropped
+/// (so a leading one doesn't make the line private), and the others become
+/// spaces.
+fn one_line(text: &str) -> String {
+    (text.trim_matches(['\n', '\r']))
+        .replace("\r\n", " ")
+        .replace(['\n', '\r'], " ")
 }
 
 /// Shows a block; log records below `level` are hidden.

@@ -32,9 +32,9 @@ pub(crate) enum Action {
 pub(crate) enum Scope {
     /// Anywhere.
     Anywhere,
-    /// In the prompt.
+    /// In the prompt (its key bindings do it).
     Prompt,
-    /// In the prompt, or nowhere.
+    /// In the prompt, or nowhere (then the shell's subscription does it).
     PromptOrNothing,
 }
 
@@ -46,7 +46,7 @@ impl Action {
             | Action::HistoryForward
             | Action::Complete
             | Action::PickPrevious => Scope::Prompt,
-            // The prompt loses focus on Escape before the shell sees it.
+            // Escape also restores the line after a click elsewhere.
             Action::Exit | Action::CancelPick => Scope::PromptOrNothing,
             Action::PageUp | Action::PageDown | Action::Clear => Scope::Anywhere,
         }

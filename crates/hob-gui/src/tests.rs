@@ -199,13 +199,132 @@ fn escape_restores_the_line_from_before_picking() {
     shell.update(Message::Action(Action::Complete));
     shell.update(Message::Action(Action::Complete));
     shell.update(Message::Action(Action::Complete));
-    // The prompt takes Escape first, and loses focus.
+    // The prompt keeps focus.
     shell.step(press(Key::Escape));
-    let escape = keyboard::Key::Named(keyboard::key::Named::Escape);
-    shell.update(Message::Key(escape, Modifiers::empty()));
-    // The candidates are still offered, and the prompt has focus again.
+    // The candidates are still offered.
     shell.expect("sing");
     shell.step(typewrite("ay hi"));
+    shell.step(press(Key::Enter));
+    shell.expect("> say hi");
+}
+
+#[test]
+fn escape_restores_the_line_while_nothing_has_focus() {
+    let mut shell = start(None);
+    shell.run("say hi");
+    shell.expect("hi");
+    shell.step(click(PLACEHOLDER));
+    shell.step(typewrite("s"));
+    shell.update(Message::Action(Action::Complete));
+    shell.update(Message::Action(Action::Complete));
+    shell.step(click("> say hi"));
+    shell.settle();
+    // The emulator doesn't pass events to subscriptions.
+    let escape = keyboard::Key::Named(keyboard::key::Named::Escape);
+    shell.update(Message::Key(escape, Modifiers::empty()));
+    // The prompt has focus again.
+    shell.step(typewrite("ay again"));
+    shell.step(press(Key::Enter));
+    shell.expect("> say again");
+}
+
+#[test]
+fn the_command_line_has_one_line() {
+    let mut shell = start(None);
+    shell.step(click(PLACEHOLDER));
+    // Shift+Enter would insert a line break, but the prompt drops it.
+    shell.update(Message::PromptEdited(text_editor::Action::Edit(
+        Edit::Enter,
+    )));
+    let paste = "\nsay one\r\ntwo\nthree\n";
+    shell.update(Message::PromptEdited(text_editor::Action::Edit(
+        Edit::Paste(Arc::new(paste.to_owned())),
+    )));
+    shell.step(press(Key::Enter));
+    // Not private: the leading line break was dropped.
+    shell.expect("> say one two three");
+}
+
+#[test]
+fn history_puts_the_cursor_at_the_end() {
+    let mut shell = start(None);
+    shell.run("say one");
+    shell.expect("one");
+    shell.update(Message::Action(Action::HistoryBack));
+    shell.step(typewrite(" two"));
+    shell.step(press(Key::Enter));
+    shell.expect("one two");
+}
+
+#[test]
+fn prompt_keys() {
+    use keyboard::key::{Code, Named, Physical};
+    use text_editor::Binding as B;
+
+    let bindings = keys::defaults();
+    let press = |named, code, modifiers, focused| {
+        let status = match focused {
+            true => text_editor::Status::Focused { is_hovered: false },
+            false => text_editor::Status::Active,
+        };
+        prompt_binding(
+            &bindings,
+            KeyPress {
+                key: keyboard::Key::Named(named),
+                modified_key: keyboard::Key::Named(named),
+                physical_key: Physical::Code(code),
+                modifiers,
+                text: None,
+                status,
+            },
+        )
+    };
+    let key = |named, code, modifiers| press(named, code, modifiers, true);
+    let none = Modifiers::empty();
+
+    let enter = key(Named::Enter, Code::Enter, none);
+    assert!(matches!(enter, Some(B::Custom(Message::PromptSubmitted))));
+    let shift_enter = key(Named::Enter, Code::Enter, Modifiers::SHIFT);
+    assert!(shift_enter.is_none());
+    // Up and Down browse the history.
+    let up = key(Named::ArrowUp, Code::ArrowUp, none);
+    assert!(matches!(
+        up,
+        Some(B::Custom(Message::Action(Action::HistoryBack)))
+    ));
+    let down = key(Named::ArrowDown, Code::ArrowDown, none);
+    assert!(matches!(
+        down,
+        Some(B::Custom(Message::Action(Action::HistoryForward)))
+    ));
+    let tab = key(Named::Tab, Code::Tab, none);
+    assert!(matches!(
+        tab,
+        Some(B::Custom(Message::Action(Action::Complete)))
+    ));
+    // The shell decides what Escape does.
+    let escape = key(Named::Escape, Code::Escape, none);
+    assert!(matches!(
+        escape,
+        Some(B::Custom(Message::Action(Action::CancelPick)))
+    ));
+    // The shell scrolls.
+    assert!(key(Named::PageUp, Code::PageUp, none).is_none());
+    // Nothing while unfocused.
+    assert!(press(Named::Enter, Code::Enter, none, false).is_none());
+}
+
+#[test]
+fn escape_unfocuses_and_a_click_on_the_icon_focuses() {
+    let mut shell = start(None);
+    shell.step(click(PLACEHOLDER));
+    shell.step(press(Key::Escape));
+    shell.settle();
+    // Typing while nothing has focus goes through a subscription, which the
+    // emulator doesn't run, so this would be lost if the prompt didn't have
+    // focus.
+    shell.step(click(">"));
+    shell.step(typewrite("say hi"));
     shell.step(press(Key::Enter));
     shell.expect("> say hi");
 }
