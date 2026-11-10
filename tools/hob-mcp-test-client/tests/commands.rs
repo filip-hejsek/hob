@@ -638,7 +638,7 @@ fn calls_through_a_form() {
              \x20 row\n\
              \x20   button \"Call\" (submit)\n\
              \x20   button \"Edit as JSON\"\n\
-             \x20   button \"Cancel\"\n",
+             \x20   button \"Cancel\" (cancel)\n",
             r#"{"count":3,"loud":true,"name":"Ada","tags":["a","b"]}"#,
         ]
     );
@@ -830,7 +830,7 @@ fn gets_prompts_through_a_form() {
              \x20   text_field arg1: \"\"\n\
              \x20 row\n\
              \x20   button \"Get\" (submit)\n\
-             \x20   button \"Cancel\"\n",
+             \x20   button \"Cancel\" (cancel)\n",
             "Description: A greeting",
             "User:\nGreet Ada.",
             "Assistant:\nHello!",
@@ -912,7 +912,7 @@ fn subscribes_to_resources() {
             "column\n\
              \x20 label \"Subscribed to test://hello\"\n\
              \x20 list\n\
-             \x20 button \"Unsubscribe\"\n",
+             \x20 button \"Unsubscribe\" (cancel)\n",
             "Unsubscribed from test://hello.",
         ]
     );

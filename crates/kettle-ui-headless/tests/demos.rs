@@ -23,7 +23,7 @@ fn contact() {
   text_area message: "Hi!\nBye."
   row
     button "Submit" (submit)
-    button "Cancel"
+    button "Cancel" (cancel)
 "#
     );
 
@@ -68,7 +68,7 @@ fn fruit_search() {
     - "pineapple"
   row
     button "Choose" (submit)
-    button "Cancel"
+    button "Cancel" (cancel)
 "#
     );
 }

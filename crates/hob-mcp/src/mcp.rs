@@ -40,7 +40,7 @@ with fill, and press buttons by their labels with press. A button may show \
 its keyboard key after the label, as in `button \"Yes\" [y]`; its label is \
 still just Yes. Labels and lists update as you fill fields in. To fill in \
 fields and press the submit button (marked (submit)) in one step, use fill \
-with submit.
+with submit. A cancel button is marked (cancel).
 
 Commands keep running between tool calls. Every tool result starts with what \
 happened since the last one, and shows new islands. Changed islands are \

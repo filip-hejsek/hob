@@ -64,7 +64,7 @@ Known bugs are in BUGS.md.
 - `button_danger(id, label)` is a `button` shown in red (iced's
   `button::danger` style). It's a `danger` flag on the button in the tree
   (left out of JSON when false), and the outline adds `(danger)` (and
-  `(submit)` to submit buttons). Only
+  `(submit)` or `(cancel)` to submit and cancel buttons). Only
   plain buttons get it: a dangerous action shouldn't be a submit button.
 
 - `table(rows)` lays out cells (any widgets) in a grid, row by row, with
@@ -695,7 +695,7 @@ Rejected:
   button (the one Enter presses), like `press`, saving a call; it's an
   error if there's none. Other buttons still need `press`: only submitting
   is common enough. The outline marks submit buttons `(submit)`, so the
-  agent can tell.
+  agent can tell, and cancel buttons `(cancel)`.
 - Updates come with tool results, not as MCP notifications (which clients
   mostly ignore): everything that happens is collected, and every result
   starts with what happened since the last one. Repeated events are counted

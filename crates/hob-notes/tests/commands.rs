@@ -248,7 +248,7 @@ fn todo_takes_items_from_each_source_in_turn() {
                 r#""Do #3: three" [a]"#,
                 r#""Name #1: one" [b]"#,
                 r#""Do #4: four" [c]"#,
-                r#""Not now""#,
+                r#""Not now" (cancel)"#,
             ]
         );
         island.press("Not now").unwrap()
@@ -273,7 +273,7 @@ fn a_tag_is_a_word() {
                 r#""Do #3: x" [a]"#,
                 r#""Name #2: todoist" [b]"#,
                 r#""Do #5: y" [c]"#,
-                r#""Not now""#,
+                r#""Not now" (cancel)"#,
             ]
         );
         island.press("Not now").unwrap()
@@ -329,7 +329,7 @@ fn todo_works_on_a_note_until_done() {
         assert!(outline.contains(r#"label "Working on #1: water plants""#));
         assert_eq!(
             offered(island),
-            [r#""Do #2: feed cat" [a]"#, r#""Not now""#]
+            [r#""Do #2: feed cat" [a]"#, r#""Not now" (cancel)"#]
         );
         island.press("Do #2: feed cat").unwrap()
     });
@@ -339,7 +339,7 @@ fn todo_works_on_a_note_until_done() {
     run_answering(&hob, "todo", |island| {
         assert_eq!(
             offered(island),
-            [r#""Do #1: water plants" [a]"#, r#""Not now""#]
+            [r#""Do #1: water plants" [a]"#, r#""Not now" (cancel)"#]
         );
         island.press("Do #1: water plants").unwrap()
     });

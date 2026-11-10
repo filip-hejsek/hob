@@ -391,8 +391,10 @@ fn render(model: &impl Contents, widget: &Widget, depth: usize, out: &mut String
             if let Some(key) = key {
                 write!(out, " [{key}]")?;
             }
-            if *action == Action::Submit {
-                write!(out, " (submit)")?;
+            match action {
+                Action::Submit => write!(out, " (submit)")?,
+                Action::Cancel => write!(out, " (cancel)")?,
+                Action::Press(_) => {}
             }
             if *danger {
                 write!(out, " (danger)")?;
@@ -517,7 +519,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             island.to_string(),
-            "row\n  button \"Yes\" [y] (submit)\n  button \"No\"\n"
+            "row\n  button \"Yes\" [y] (submit)\n  button \"No\" (cancel)\n"
         );
     }
 
