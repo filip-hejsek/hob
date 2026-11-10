@@ -14,6 +14,10 @@ use crate::Message;
 /// Shown after the label while the checkbox has focus.
 const HINT: &str = "[y/n]";
 
+/// The least width, in ems, left for the checkbox and its label when
+/// room is kept for the [`HINT`].
+const MIN_WIDTH: f32 = 6.0;
+
 /// How far the focus border is outside the checkbox and its label.
 const RING: f32 = 3.0;
 
@@ -60,6 +64,7 @@ impl<'a> Checkbox<'a> {
             interactive: on_toggle.is_some(),
             checkbox: checkbox(checked)
                 .label(label)
+                .text_wrapping(text::Wrapping::WordOrGlyph)
                 .on_toggle_maybe(on_toggle)
                 .into(),
             hint: text(HINT).style(text::secondary).into(),
@@ -100,8 +105,6 @@ impl Widget<Message, Theme, Renderer> for Checkbox<'_> {
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        let checkbox =
-            (self.checkbox.as_widget_mut()).layout(&mut tree.children[0], renderer, limits);
         let hint = (self.hint.as_widget_mut()).layout(
             &mut tree.children[1],
             renderer,
@@ -110,6 +113,19 @@ impl Widget<Message, Theme, Renderer> for Checkbox<'_> {
         // About a space's width (as in button labels, "Yes [y]") outside
         // the focus border.
         let gap = RING + 0.25 * renderer.default_size().0;
+        // The label wraps to leave room for the hint, unless that leaves it
+        // too little; then the hint may go past the edge.
+        let room = gap + hint.size().width;
+        let room = if limits.max().width - room >= MIN_WIDTH * renderer.default_size().0 {
+            room
+        } else {
+            0.0
+        };
+        let checkbox = (self.checkbox.as_widget_mut()).layout(
+            &mut tree.children[0],
+            renderer,
+            &limits.shrink(Size::new(room, 0.0)),
+        );
         let (size, hint_size) = (checkbox.size(), hint.size());
         let hint = hint.move_to((size.width + gap, (size.height - hint_size.height) / 2.0));
         // The hint's space is kept when it's hidden, so nothing moves.

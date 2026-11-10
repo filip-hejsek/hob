@@ -229,7 +229,8 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   goes back to the last field. A focused checkbox has a
   thin primary-coloured border around it and its label (like the island's
   focus border), and shows a muted `[y/n]` after it, whose space is always
-  kept so the layout doesn't move. The border, focus operations and clicks
+  kept so the layout doesn't move, unless that would leave the checkbox
+  and its label less than 6 ems; then the hint may go past the edge. The border, focus operations and clicks
   use the checkbox's own bounds, without the hint's space. Button keys work only while the island as a whole has
   focus, so `y`/`n` in a checkbox never clash with them.
 - Up and Down move between fields from text fields as well as from
@@ -268,14 +269,30 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   `iced_test::Simulator`: it's made for tests (fixed 1024×768 size and 2×
   scale, snapshots compared with PNG files), not for producing images.
 
-- Tables use iced's `table`, as wide as their content (iced's first-column
-  fill doesn't make a shrinking table wider). A column with a cell that
-  fills the width (a text field, text area or progress bar) fills it too,
-  sharing what's left with other such columns; otherwise iced's table
-  gives that cell no width. iced's table draws only the lines between
-  cells, so the outer ones are added: a 1 px container border for `all`,
-  and 1 px rules above and below for `horizontal`, in the same colour
-  (`background.strong`). Cell padding is iced's (10 px across, 5 px down).
+- Text wraps at word boundaries, and inside a word too long for the line
+  (iced's `WordOrGlyph`), so a long word never runs past its widget.
+- Rows and tables have our own layout (`grid.rs`), not iced's `row` and
+  `table`: those give each child, in order, all the width the ones before
+  it left, so a long label squeezed what followed it to nothing, and
+  iced's table made its first column fill and laid it out last, so columns
+  overlapped. Widgets that fill the width (text fields, text areas,
+  progress bars) count as wanting at least 100 px.
+  - A row puts its children on one line while they fit, with a gap
+    between visible ones, and starts a new line (with the same gap above)
+    for a child that doesn't; those that fill share what's left of their
+    line. Rejected: iced's wrapping row (`Row::wrap`), which gives every
+    filling child a line of its own and has no notion of hidden children;
+    shrinking text beside other children instead of wrapping (iced can't
+    measure a widget's least width).
+  - A table gives each column the width of its widest cell when they all
+    fit. When they don't, each gets what it wants or an equal share of
+    what the narrower ones leave, so no column takes all the width. Columns
+    with a cell that fills share what's left over, and the table then fills
+    the width; otherwise it's as wide as its content. Only the lines
+    between cells are drawn (as iced's table does, in
+    `background.strong`); the outer ones are added: a 1 px container
+    border for `all`, and 1 px rules above and below for `horizontal`.
+    Cell padding is iced's (10 px across, 5 px down).
 
 ## kettle-ui-headless
 

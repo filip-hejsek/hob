@@ -29,6 +29,16 @@ pub fn render_png(island: &FrozenIsland, theme: &Theme, width: u32, frozen: bool
     png
 }
 
+/// The tiny-skia renderer, with the bundled Fira Sans.
+fn headless_renderer() -> Renderer {
+    futures_executor::block_on(<Renderer as Headless>::new(
+        Font::with_name("Fira Sans"),
+        Pixels(16.0),
+        Some("tiny-skia"),
+    ))
+    .expect("the tiny-skia renderer is always available")
+}
+
 /// Renders an island to RGBA pixels; see [`render_png`].
 fn render_rgba(
     island: &FrozenIsland,
@@ -39,13 +49,7 @@ fn render_rgba(
     let mut element: Element<'_, Message> = container(render(island, island.root(), !frozen, None))
         .padding(spacing())
         .into();
-    let mut renderer = futures_executor::block_on(<Renderer as Headless>::new(
-        Font::with_name("Fira Sans"),
-        Pixels(16.0),
-        Some("tiny-skia"),
-    ))
-    .expect("the tiny-skia renderer is always available");
-
+    let mut renderer = headless_renderer();
     let mut tree = Tree::new(&element);
     let limits = Limits::new(Size::ZERO, Size::new(width as f32, f32::INFINITY));
     let node = element
@@ -92,6 +96,8 @@ mod tests {
 
     use kettle_ui::IslandBuilder;
     use kettle_ui::widget::*;
+
+    use iced::advanced::layout;
 
     use super::*;
 
@@ -245,6 +251,129 @@ mod tests {
         assert!(size.height < 100, "{size:?}");
         assert!(!rgba.chunks(4).any(|p| p == [255, 0, 0, 255]));
         assert!(rgba.chunks(4).any(|p| p != &rgba[..4]));
+    }
+
+    const LONG: &str = "The quick brown fox jumps over the lazy dog and keeps running";
+    const WORD: &str = "Supercalifragilisticexpialidocious_without_breaks";
+
+    /// Islands that are hard to fit in a narrow width.
+    fn squeezed_islands() -> Vec<FrozenIsland> {
+        let mut checked = IslandBuilder::new(column([
+            checkbox("a", LONG),
+            checkbox("b", WORD),
+            row([checkbox("c", "Subscribe to news"), checkbox("d", LONG)]),
+        ]));
+        checked.set_checked("a", true);
+        let mut progress_row = IslandBuilder::new(row([
+            label("Copying files"),
+            progress("p"),
+            cancel_button("Stop"),
+        ]));
+        progress_row.set_state("p", 0.5);
+        let mut lists = IslandBuilder::new(column([
+            text_area("t", LONG),
+            list("l"),
+            suggestions("l", "f"),
+            text_field("f", LONG),
+        ]));
+        lists.set_state("l", vec![LONG.to_owned(), WORD.to_owned()]);
+        [
+            IslandBuilder::new(column([label(LONG), label(WORD)])),
+            checked,
+            IslandBuilder::new(column([submit_button(LONG), button_danger("d", WORD)])),
+            IslandBuilder::new(row([
+                submit_button("Submit [s]"),
+                cancel_button("Cancel [c]"),
+                button("a", "Another"),
+                button_danger("d", "Delete everything [d]"),
+            ])),
+            IslandBuilder::new(row([label(LONG), text_field("a", "Name")])),
+            IslandBuilder::new(row([label(LONG), submit_button("OK")])),
+            progress_row,
+            lists,
+            IslandBuilder::new(table(vec![
+                vec![label("Name"), label("Description"), label("Size")],
+                vec![label(WORD), label(LONG), label("1.2 KiB")],
+            ])),
+            IslandBuilder::new(table_horizontal(vec![
+                vec![label(LONG), text_field("a", "Name")],
+                vec![label("Done"), checkbox("c", LONG)],
+            ])),
+        ]
+        .map(|b| b.freeze().unwrap())
+        .into()
+    }
+
+    #[test]
+    fn squeezed_islands_stay_inside() {
+        for width in [120, 200, 300] {
+            for (n, island) in squeezed_islands().iter().enumerate() {
+                let (size, rgba) = render_rgba(island, &Theme::Light, width, false);
+                // Anything that doesn't fit spills into the padding on the right.
+                let pad = spacing() as u32 - 2;
+                let spilled = (0..size.height).any(|y| {
+                    (width - pad..width).any(|x| {
+                        let i = ((y * width + x) * 4) as usize;
+                        rgba[i..i + 4] != [255, 255, 255, 255]
+                    })
+                });
+                assert!(!spilled, "island {n} spills over at width {width}");
+            }
+        }
+    }
+
+    /// The layout of `widget`, as an island's root, `width` wide.
+    fn layout_of(widget: Widget, width: f32) -> layout::Node {
+        let island = IslandBuilder::new(widget).freeze().unwrap();
+        let mut element = render(&island, island.root(), true, None);
+        let mut tree = Tree::new(&element);
+        let limits = Limits::new(Size::ZERO, Size::new(width, f32::INFINITY));
+        element
+            .as_widget_mut()
+            .layout(&mut tree, &headless_renderer(), &limits)
+    }
+
+    #[test]
+    fn row_wraps_what_does_not_fit_and_keeps_fields_usable() {
+        let node = layout_of(row([label(LONG), text_field("a", "Name")]), 300.0);
+        // Each child is in a container that can hide it.
+        let [text, field] = [0, 1].map(|i| node.children()[i].bounds());
+        assert!(field.y >= text.y + text.height, "{text:?} {field:?}");
+        assert_eq!(field.width, 300.0);
+
+        let node = layout_of(row([label("Name:"), text_field("a", "Name")]), 300.0);
+        let [text, field] = [0, 1].map(|i| node.children()[i].bounds());
+        assert_eq!(field.y, text.y);
+        assert_eq!(field.x + field.width, 300.0);
+    }
+
+    #[test]
+    fn table_columns_do_not_overlap() {
+        let node = layout_of(
+            table(vec![
+                vec![label("Name"), label("Description"), label("Size")],
+                vec![label("Cargo.toml"), label(LONG), label("1.2 KiB")],
+            ]),
+            300.0,
+        );
+        // Inside the border.
+        let cells = node.children()[0].children();
+        for col in 0..2 {
+            let (a, b) = (cells[3 + col].bounds(), cells[3 + col + 1].bounds());
+            assert!(a.x + a.width <= b.x, "{a:?} {b:?}");
+        }
+        let last = cells[5].bounds();
+        assert!(last.x + last.width <= 300.0, "{last:?}");
+    }
+
+    #[test]
+    fn table_fields_get_room_beside_long_labels() {
+        let node = layout_of(
+            table(vec![vec![label(LONG), text_field("a", "Name")]]),
+            300.0,
+        );
+        let field = node.children()[0].children()[1].bounds();
+        assert!(field.width >= 100.0, "{field:?}");
     }
 
     #[test]

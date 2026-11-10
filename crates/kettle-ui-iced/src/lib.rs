@@ -54,19 +54,19 @@
 //! `kettle-render` binary does the same for an island saved as JSON.
 
 mod checkbox;
+mod grid;
 mod offscreen;
 mod scope;
 mod text_area;
 
-use std::cell::RefCell;
 use std::sync::Arc;
 
 use iced::advanced::widget::operation::{Focusable, Outcome as OperationOutcome};
 use iced::advanced::widget::{Id, Operation, operate};
 use iced::widget::{
-    Container, button, column, container, operation, progress_bar, row, rule, text, text_input,
+    Container, button, column, container, operation, progress_bar, rule, text, text_input,
 };
-use iced::{Element, Length, Padding, Rectangle, Task, task};
+use iced::{Element, Padding, Rectangle, Task, task};
 use kettle_ui::widget::{Action, Borders, Kind, Text, Widget, is_shown, is_visible};
 use kettle_ui::{
     Built, Contents, Error, FrozenIsland, IslandBuilder, Job, JobResult, Model, Outcome,
@@ -242,22 +242,26 @@ fn render<'a>(
     let fields = contents.fields();
     let send = |msg: Msg| interactive.then_some(Message(msg));
     match widget.kind() {
-        Kind::Column(children) => column(spaced(contents, children, interactive, ids, |g| {
-            Padding::ZERO.top(g)
-        }))
-        .into(),
-        Kind::Row(children) => row(spaced(contents, children, interactive, ids, |g| {
-            Padding::ZERO.left(g)
-        }))
-        .into(),
+        Kind::Column(children) => column(spaced(contents, children, interactive, ids)).into(),
+        Kind::Row(children) => {
+            // The grid puts the gaps in, and starts new lines.
+            let visible = (children.iter()).map(|c| is_visible(contents, c)).collect();
+            let children = (children.iter())
+                .zip(&visible)
+                .map(|(child, &visible)| {
+                    hideable(render(contents, child, interactive, ids), visible).into()
+                })
+                .collect();
+            grid::Grid::row(children, visible).into()
+        }
         Kind::Table { rows, borders } => table(contents, rows, *borders, interactive, ids),
         Kind::When { state, child } => {
             // Disabled while hidden, so a focused text field stops taking input.
             let shown = is_shown(contents, state);
             hideable(render(contents, child, interactive && shown, ids), shown).into()
         }
-        Kind::Label(Text::Static(s)) => text(s).into(),
-        Kind::Label(Text::State(name)) => text(
+        Kind::Label(Text::Static(s)) => wrapped(s.as_str()).into(),
+        Kind::Label(Text::State(name)) => wrapped(
             contents
                 .state(name)
                 .map(Value::to_string)
@@ -304,11 +308,11 @@ fn render<'a>(
             Some(Value::Image(image)) => image_view(image),
             _ => column([]).into(),
         },
-        Kind::List { state } => column(list(contents, state).iter().map(|s| text(s).into()))
+        Kind::List { state } => column(list(contents, state).iter().map(|s| wrapped(s).into()))
             .spacing(2)
             .into(),
         Kind::Suggestions { state, field } => column(list(contents, state).iter().map(|s| {
-            button(text(s))
+            button(wrapped(s))
                 .style(button::text)
                 .padding([2, 0])
                 .on_press_maybe(send(Msg::TextChanged(field.clone(), s.clone())))
@@ -320,7 +324,7 @@ fn render<'a>(
             key,
             action,
             danger,
-        } => button(text(match key {
+        } => button(wrapped(match key {
             Some(key) if label.is_empty() => format!("[{key}]"),
             Some(key) => format!("{label} [{key}]"),
             None => label.clone(),
@@ -335,7 +339,7 @@ fn render<'a>(
     }
 }
 
-/// Renders a table with iced's `table`, which draws lines only between
+/// Renders a table with [`grid::Grid`], which draws lines only between
 /// cells, and adds the outer ones: a border around it, or lines above and
 /// below it.
 fn table<'a>(
@@ -347,44 +351,17 @@ fn table<'a>(
 ) -> Element<'a, Message> {
     let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
     if columns == 0 {
-        // iced's table divides by the number of columns.
         return column([]).into();
     }
-    let cells: Vec<Vec<Element<'a, Message>>> = (rows.iter())
-        .map(|row| {
-            (0..columns)
-                .map(|col| match row.get(col) {
-                    Some(cell) => render(contents, cell, interactive, ids),
-                    None => text("").into(),
-                })
-                .collect()
+    let cells: Vec<Element<'a, Message>> = (rows.iter())
+        .flat_map(|row| {
+            (0..columns).map(|col| match row.get(col) {
+                Some(cell) => render(contents, cell, interactive, ids),
+                None => text("").into(),
+            })
         })
         .collect();
-    // iced's table gives a cell that fills the width (e.g. a text field) no
-    // room unless its column fills too.
-    let fills: Vec<bool> = (0..columns)
-        .map(|col| {
-            cells
-                .iter()
-                .any(|row| row[col].as_widget().size().width.is_fill())
-        })
-        .collect();
-    let fill_if = |fill| if fill { Length::Fill } else { Length::Shrink };
-    let width = fill_if(fills.contains(&true));
-    // iced's table takes the first row as headers, and builds the others
-    // from data, given by value: here, the row's index, to take its cells
-    // from `cells`.
-    let cells: Vec<Vec<RefCell<Option<Element<'a, Message>>>>> = (cells.into_iter())
-        .map(|row| row.into_iter().map(|c| RefCell::new(Some(c))).collect())
-        .collect();
-    let take = |row: usize, col: usize| cells[row][col].take().expect("each cell is taken once");
-    let table = iced::widget::table(
-        (0..columns).map(|col| {
-            iced::widget::table::column(take(0, col), move |row| take(row, col))
-                .width(fill_if(fills[col]))
-        }),
-        1..rows.len(),
-    );
+    let table = grid::Grid::table(cells, columns, borders == Borders::All);
     match borders {
         Borders::All => container(table)
             .style(|theme: &iced::Theme| container::Style {
@@ -396,15 +373,24 @@ fn table<'a>(
                 ..container::Style::default()
             })
             .into(),
-        Borders::Horizontal => column([
-            rule::horizontal(1).into(),
-            table.separator_x(0).into(),
-            rule::horizontal(1).into(),
-        ])
-        // The rules fill the width; without this, so would the column.
-        .width(width)
-        .into(),
+        Borders::Horizontal => {
+            // The rules fill the width; without this, so would the column.
+            let width = iced::advanced::Widget::size(&table).width;
+            column([
+                rule::horizontal(1).into(),
+                table.into(),
+                rule::horizontal(1).into(),
+            ])
+            .width(width)
+            .into()
+        }
     }
+}
+
+/// Text that wraps at word boundaries, or anywhere in a word too long for
+/// a line.
+fn wrapped<'a>(s: impl text::IntoFragment<'a>) -> iced::widget::Text<'a> {
+    text(s).wrapping(text::Wrapping::WordOrGlyph)
 }
 
 /// Shows an image at its natural size, or scaled down to fit. If it's
@@ -427,17 +413,17 @@ fn image_view<'a>(image: &kettle_ui::Image) -> Element<'a, Message> {
                 Some(_) => "Image can't be shown",
                 None => "Image not available",
             };
-            let mut lines = vec![text(notice).style(text::secondary).into()];
+            let mut lines = vec![wrapped(notice).style(text::secondary).into()];
             if !image.alt().is_empty() {
-                lines.push(text(image.alt().to_owned()).into());
+                lines.push(wrapped(image.alt().to_owned()).into());
             }
             column(lines).spacing(2).into()
         }
     }
 }
 
-/// Renders the children of a column or row, with a leading gap (from `gap`)
-/// before each visible child except the first. Hidden children (see
+/// Renders the children of a column, with a gap above each visible child
+/// except the first. Hidden children (see
 /// [`is_visible`]) get no gap and zero size, but stay in place: iced matches
 /// widget state to children by position. Every child is wrapped the same
 /// way, so the tree's shape doesn't depend on visibility.
@@ -446,13 +432,12 @@ fn spaced<'a>(
     children: &'a [Widget],
     interactive: bool,
     ids: Option<&'a FieldIds>,
-    gap: impl Fn(f32) -> Padding,
 ) -> impl Iterator<Item = Element<'a, Message>> {
     let mut first = true;
     children.iter().map(move |child| {
         let visible = is_visible(contents, child);
         let padding = if visible && !first {
-            gap(spacing())
+            Padding::ZERO.top(spacing())
         } else {
             Padding::ZERO
         };

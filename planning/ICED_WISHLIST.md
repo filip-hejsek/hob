@@ -224,16 +224,20 @@ our fork's `startup-notify` branch: the 0.14 branch plus one commit that
 gives the first window the token from the environment. To be sent
 upstream as a fix for iced#3317.
 
-## Table borders and fill-width cells
+## Rows and tables that share their width
 
-**Needed for:** kettle-ui's `table` and `table_horizontal`.
+**Needed for:** kettle-ui's `row`, `table` and `table_horizontal`, when
+the island is narrow.
 
-iced's `table` draws lines only between cells, not around the table. And
-a cell that fills the width (e.g. a text input) gets no width unless its
-column fills; in a table whose columns all shrink, only the first one is
-made to fill.
+iced's `row` and `table` give each child, in order, all the width left by
+the ones before it, so a long label leaves nothing for what follows it,
+and a child that fills the width gets none. In a table whose columns all
+shrink, iced makes the first column fill and lays it out last, so its
+cells overlap the next column's. Its `Row::wrap` gives every filling
+child a line of its own. And the table draws lines only between cells,
+not around it.
 
-**Workaround:** the outer lines come from a bordered container (all
-borders) or rules above and below (horizontal only). Columns are set to
-fill when one of their cells does, found from the rendered cells' sizes;
-the cells are rendered first and handed to iced's table by row index.
+**Workaround:** our own layout widget for rows and tables (`grid.rs` in
+kettle-ui-iced), which starts new lines in a row and shares the width
+between table columns; the outer table lines come from a bordered
+container (all borders) or rules above and below (horizontal only).

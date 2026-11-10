@@ -6,7 +6,7 @@ use iced::advanced::text::Renderer as _;
 use iced::advanced::text::highlighter::PlainText;
 use iced::advanced::widget::{Id, Operation, Tree, Widget, tree};
 use iced::advanced::{Clipboard, Shell, mouse};
-use iced::widget::text::LineHeight;
+use iced::widget::text::{LineHeight, Wrapping};
 use iced::widget::text_editor::{self, Action, Content, Status, TextEditor};
 use iced::{Element, Event, Length, Rectangle, Renderer, Size, Theme, window};
 
@@ -70,6 +70,7 @@ impl<'a> TextArea<'a> {
         let mut editor = TextEditor::new(content)
             .placeholder(self.placeholder)
             .min_height(min_height)
+            .wrapping(Wrapping::WordOrGlyph)
             .style(move |theme, _| text_editor::default(theme, status));
         if let Some(id) = &self.id {
             editor = editor.id(id.clone());
