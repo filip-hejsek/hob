@@ -18,28 +18,37 @@
 //! - `prompt PROMPT [NAME=VALUE...]`: gets a prompt, with arguments filled
 //!   in through a form, or given as NAME=VALUE.
 //!
+//! - `subscribe URI`: shows a resource's updates until unsubscribed.
+//! - `log-level LEVEL`: sets the level from which the server sends log
+//!   messages.
+//!
 //! What a server writes to stderr is logged (info, so `messages` shows it).
-//! If it fails to connect, its stderr so far is printed too.
+//! If it fails to connect, its stderr so far is printed too. Notifications
+//! (progress, log messages, list changes) go to the command waiting for the
+//! server, or are logged (see the `notify` module).
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::pin::pin;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod call;
 mod content;
+mod notify;
 mod prompt;
 
 use hob_core::args::{Kind, Matches, Spec};
 use hob_core::{CommandResult, Context, Interpreter};
 use kettle_ui::IslandBuilder;
-use kettle_ui::widget::{column, label, table_horizontal};
+use kettle_ui::widget::{cancel_button, column, label, list, state, table_horizontal};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, ClientCapabilities, ClientConfig,
     GetPromptRequestParams, GetPromptResponse, Implementation, Prompt, ReadResourceRequestParams,
-    ReadResourceResponse, Resource, ServerCapabilities, ServerPeerInfo, Tool,
+    ReadResourceResponse, Resource, ServerCapabilities, ServerPeerInfo, SubscribeRequestParams,
+    Tool, UnsubscribeRequestParams,
 };
 use rmcp::service::{Peer, RunningService, ServiceError};
 use rmcp::transport::TokioChildProcess;
@@ -47,6 +56,8 @@ use rmcp::{RoleClient, ServiceExt};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::ChildStderr;
 use tokio::runtime::Handle;
+
+use crate::notify::{Event, Handler, Shared, Waiting};
 
 /// The log target of what servers write to stderr.
 const STDERR_TARGET: &str = "hob_mcp_test_client::server";
@@ -58,6 +69,23 @@ const STDERR_LINES: usize = 50;
 /// How long closing a connection may take; then it's dropped (and a server
 /// process killed).
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a command still takes notifications after its response:
+/// rmcp handles each in a task of its own, so one sent just before the
+/// response may arrive just after it.
+const STRAGGLERS: Duration = Duration::from_millis(10);
+
+/// The levels of `log-level`, lowest first.
+const LOG_LEVELS: [&str; 8] = [
+    "debug",
+    "info",
+    "notice",
+    "warning",
+    "error",
+    "critical",
+    "alert",
+    "emergency",
+];
 
 #[cfg(feature = "http")]
 const CONNECT_DESCRIPTION: &str =
@@ -74,8 +102,9 @@ pub struct Client {
     connection: Mutex<Option<Connection>>,
     /// The server last connected to (or tried), for `reconnect`.
     last_server: Mutex<Option<Server>>,
-    /// What the server offers, as last listed, for completion.
-    names: Arc<Mutex<Names>>,
+    /// What the client and its connections' handlers share: the names for
+    /// completion, and the commands waiting for notifications.
+    shared: Arc<Shared>,
     next_id: AtomicU64,
 }
 
@@ -99,7 +128,7 @@ struct Names {
 }
 
 struct Connection {
-    service: RunningService<RoleClient, ClientConfig>,
+    service: RunningService<RoleClient, Handler>,
     /// Tells connections apart, so a command that finds its connection
     /// closed doesn't forget a newer one.
     id: u64,
@@ -115,7 +144,7 @@ impl Client {
             runtime,
             connection: Mutex::new(None),
             last_server: Mutex::new(None),
-            names: Arc::default(),
+            shared: Arc::default(),
             next_id: AtomicU64::new(0),
         })
     }
@@ -129,7 +158,8 @@ impl Client {
     }
 
     fn close_connection(&self, mut connection: Connection) {
-        *lock(&self.names) = Names::default();
+        *lock(&self.shared.names) = Names::default();
+        self.shared.closed(connection.id);
         let close = connection.service.close_with_timeout(CLOSE_TIMEOUT);
         let _ = self.runtime.block_on(close);
     }
@@ -158,16 +188,20 @@ impl Client {
     /// Connects to `server`, replacing the connection once it succeeds.
     fn connect_to(&self, ctx: &mut Context, server: &Server) -> CommandResult {
         let Server { server, args, cwd } = server;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let handler = Handler {
+            shared: self.shared.clone(),
+            connection: id,
+        };
         let service = if is_url(server) {
-            self.open_url(server, args)?
+            self.open_url(handler, server, args)?
         } else {
-            self.start(ctx, server, args, cwd)?
+            self.start(ctx, handler, server, args, cwd)?
         };
         let info = service.peer_info();
         let server_name = (info.as_ref())
             .and_then(|info| info.server_info.as_ref())
             .map(|implementation| implementation.name.clone());
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let name = server_name.unwrap_or_else(|| server.to_owned());
         let connection = Connection { service, id, name };
         let peer = connection.service.peer().clone();
@@ -188,14 +222,13 @@ impl Client {
         let capabilities = &info.capabilities;
         let listed = (|| {
             if capabilities.tools.is_some() {
-                self.list_tools(&peer, id).map_err(|e| ("tools", e))?;
+                self.list_tools(ctx, &peer, id).map_err(|e| ("tools", e))?;
             }
             if capabilities.resources.is_some() {
-                self.list_resources(&peer, id)
-                    .map_err(|e| ("resources", e))?;
+                (self.list_resources(ctx, &peer, id)).map_err(|e| ("resources", e))?;
             }
             if capabilities.prompts.is_some() {
-                self.list_prompts(&peer, id).map_err(|e| ("prompts", e))?;
+                (self.list_prompts(ctx, &peer, id)).map_err(|e| ("prompts", e))?;
             }
             Ok(())
         })();
@@ -209,10 +242,11 @@ impl Client {
     fn start(
         &self,
         ctx: &mut Context,
+        handler: Handler,
         program: &str,
         args: &[String],
         cwd: &Path,
-    ) -> Result<RunningService<RoleClient, ClientConfig>, BoxError> {
+    ) -> Result<RunningService<RoleClient, Handler>, BoxError> {
         let mut command = tokio::process::Command::new(program);
         command.args(args).current_dir(cwd);
         // Lines of stderr, kept while connecting.
@@ -223,7 +257,7 @@ impl Client {
                 .spawn()
                 .map_err(|e| format!("can't start {program}: {e}"))?;
             let reader = stderr.map(|stderr| tokio::spawn(forward(stderr, captured.clone())));
-            match client_config().serve(transport).await {
+            match handler.serve(transport).await {
                 Ok(service) => Ok(service),
                 Err(e) => {
                     // The server has likely exited: let its stderr end.
@@ -244,16 +278,17 @@ impl Client {
     #[cfg(feature = "http")]
     fn open_url(
         &self,
+        handler: Handler,
         url: &str,
         args: &[String],
-    ) -> Result<RunningService<RoleClient, ClientConfig>, BoxError> {
+    ) -> Result<RunningService<RoleClient, Handler>, BoxError> {
         use rmcp::transport::StreamableHttpClientTransport;
         if !args.is_empty() {
             return Err("a URL takes no arguments".into());
         }
         let service = self.runtime.block_on(async {
             let transport = StreamableHttpClientTransport::from_uri(url);
-            client_config().serve(transport).await
+            handler.serve(transport).await
         });
         Ok(service.map_err(|e| format!("can't connect: {e}"))?)
     }
@@ -261,9 +296,10 @@ impl Client {
     #[cfg(not(feature = "http"))]
     fn open_url(
         &self,
+        _: Handler,
         _: &str,
         _: &[String],
-    ) -> Result<RunningService<RoleClient, ClientConfig>, BoxError> {
+    ) -> Result<RunningService<RoleClient, Handler>, BoxError> {
         Err("built without HTTP support (the http feature)".into())
     }
 
@@ -277,7 +313,7 @@ impl Client {
 
     fn tools(&self, ctx: &mut Context, args: &Matches) -> CommandResult {
         let (peer, id) = self.peer()?;
-        let tools = self.list_tools(&peer, id)?;
+        let tools = self.list_tools(ctx, &peer, id)?;
         match args.value("TOOL") {
             None if tools.is_empty() => ctx.print("The server has no tools."),
             None => {
@@ -297,7 +333,7 @@ impl Client {
         let json = args.values("JSON");
         let (peer, id) = self.peer()?;
         let arguments = if json.is_empty() {
-            let tools = self.list_tools(&peer, id)?;
+            let tools = self.list_tools(ctx, &peer, id)?;
             match call::ask(ctx, find_tool(&tools, name)?)? {
                 Some(arguments) => arguments,
                 None => {
@@ -310,7 +346,7 @@ impl Client {
             call::parse_object(&json.join(" "))?
         };
         let params = CallToolRequestParams::new(name.to_owned()).with_arguments(arguments);
-        let result = match self.request(id, peer.call_tool_once(params))? {
+        let result = match self.request(ctx, id, peer.call_tool_once(params))? {
             CallToolResponse::Complete(result) => result,
             CallToolResponse::InputRequired(_) => {
                 return Err("the server asked for more input, which isn't supported yet".into());
@@ -325,8 +361,8 @@ impl Client {
 
     fn resources(&self, ctx: &mut Context, _: &Matches) -> CommandResult {
         let (peer, id) = self.peer()?;
-        let resources = self.list_resources(&peer, id)?;
-        let templates = match self.request(id, peer.list_all_resource_templates()) {
+        let resources = self.list_resources(ctx, &peer, id)?;
+        let templates = match self.request(ctx, id, peer.list_all_resource_templates()) {
             Ok(templates) => templates,
             Err(e) => {
                 ctx.warn(format!("can't list the resource templates: {e}"));
@@ -365,7 +401,8 @@ impl Client {
         let (peer, id) = self.peer()?;
         require(&peer, "resources", |c| c.resources.is_some())?;
         let params = ReadResourceRequestParams::new(uri);
-        let result = match self.request(id, peer.read_resource_once(params))? {
+        let request = peer.read_resource_once(params);
+        let result = match self.request(ctx, id, request)? {
             ReadResourceResponse::Complete(result) => result,
             ReadResourceResponse::InputRequired(_) => {
                 return Err("the server asked for more input, which isn't supported yet".into());
@@ -386,7 +423,7 @@ impl Client {
 
     fn prompts(&self, ctx: &mut Context, args: &Matches) -> CommandResult {
         let (peer, id) = self.peer()?;
-        let prompts = self.list_prompts(&peer, id)?;
+        let prompts = self.list_prompts(ctx, &peer, id)?;
         match args.value("PROMPT") {
             None if prompts.is_empty() => ctx.print("The server has no prompts."),
             None => {
@@ -404,7 +441,7 @@ impl Client {
         let given = args.values("ARG");
         let (peer, id) = self.peer()?;
         let arguments = if given.is_empty() {
-            let prompts = self.list_prompts(&peer, id)?;
+            let prompts = self.list_prompts(ctx, &peer, id)?;
             match prompt::ask(ctx, find_prompt(&prompts, name)?)? {
                 Some(arguments) => arguments,
                 None => {
@@ -416,7 +453,8 @@ impl Client {
             prompt::parse_assignments(given)?
         };
         let params = GetPromptRequestParams::new(name).with_arguments(arguments);
-        let result = match self.request(id, peer.get_prompt_once(params))? {
+        let request = peer.get_prompt_once(params);
+        let result = match self.request(ctx, id, request)? {
             GetPromptResponse::Complete(result) => result,
             GetPromptResponse::InputRequired(_) => {
                 return Err("the server asked for more input, which isn't supported yet".into());
@@ -427,27 +465,110 @@ impl Client {
         Ok(())
     }
 
+    fn subscribe(&self, ctx: &mut Context, args: &Matches) -> CommandResult {
+        let uri = args.value("URI").ok_or("no URI")?;
+        let (peer, id) = self.peer()?;
+        require(&peer, "resource subscriptions", |c| {
+            (c.resources.as_ref()).is_some_and(|r| r.subscribe == Some(true))
+        })?;
+        // Before subscribing, so no update is missed.
+        let (registration, mut events) = self.shared.wait(id, Waiting::Resource(uri.to_owned()));
+        #[expect(deprecated, reason = "the only way before MCP 2026-07-28")]
+        let request = peer.subscribe(SubscribeRequestParams::new(uri));
+        self.request(ctx, id, request)?;
+        let mut island = IslandBuilder::new(column([
+            label(state("status")),
+            list("updates"),
+            cancel_button("Unsubscribe"),
+        ]));
+        island.set_state("status", format!("Subscribed to {uri}"));
+        island.set_state("updates", Vec::<String>::new());
+        let handle = island.handle();
+        let closed = format!("The connection has closed: no more updates of {uri}");
+        let start = Instant::now();
+        let watcher = self.runtime.spawn(async move {
+            let mut updates = Vec::new();
+            while let Some(event) = events.recv().await {
+                match event {
+                    Event::Updated => {
+                        let after = start.elapsed().as_secs_f64();
+                        updates.push(format!("Updated after {after:.1} s"));
+                        handle.set("updates", updates.clone());
+                    }
+                    Event::Closed => {
+                        handle.set("status", closed);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let outcome = ctx.show(island);
+        watcher.abort();
+        drop(registration);
+        outcome?;
+        // Unless the connection has closed meanwhile.
+        if let Ok((peer, current)) = self.peer()
+            && current == id
+        {
+            #[expect(deprecated, reason = "the only way before MCP 2026-07-28")]
+            let request = peer.unsubscribe(UnsubscribeRequestParams::new(uri));
+            self.request(ctx, id, request)?;
+            ctx.print(format!("Unsubscribed from {uri}."));
+        }
+        Ok(())
+    }
+
+    #[expect(deprecated, reason = "MCP logging is used before 2026-07-28")]
+    fn log_level(&self, ctx: &mut Context, args: &Matches) -> CommandResult {
+        use rmcp::model::{LoggingLevel, SetLevelRequestParams};
+        let name = args.value("LEVEL").ok_or("no level")?;
+        let level: LoggingLevel = serde_json::from_value(name.into())
+            .map_err(|_| format!("no level {name:?} (try {})", LOG_LEVELS.join(", ")))?;
+        let (peer, id) = self.peer()?;
+        require(&peer, "logging", |c| c.logging.is_some())?;
+        let request = peer.set_level(SetLevelRequestParams::new(level));
+        self.request(ctx, id, request)?;
+        ctx.print(format!("The server now sends log messages from {name} up."));
+        Ok(())
+    }
+
     /// Lists the server's tools (and remembers them for completion).
-    fn list_tools(&self, peer: &Peer<RoleClient>, id: u64) -> Result<Vec<Tool>, BoxError> {
+    fn list_tools(
+        &self,
+        ctx: &Context,
+        peer: &Peer<RoleClient>,
+        id: u64,
+    ) -> Result<Vec<Tool>, BoxError> {
         require(peer, "tools", |c| c.tools.is_some())?;
-        let tools = self.request(id, peer.list_all_tools())?;
-        lock(&self.names).tools = tools.iter().map(|t| t.name.to_string()).collect();
+        let tools = self.request(ctx, id, peer.list_all_tools())?;
+        lock(&self.shared.names).tools = tools.iter().map(|t| t.name.to_string()).collect();
         Ok(tools)
     }
 
     /// Lists the server's resources (and remembers them for completion).
-    fn list_resources(&self, peer: &Peer<RoleClient>, id: u64) -> Result<Vec<Resource>, BoxError> {
+    fn list_resources(
+        &self,
+        ctx: &Context,
+        peer: &Peer<RoleClient>,
+        id: u64,
+    ) -> Result<Vec<Resource>, BoxError> {
         require(peer, "resources", |c| c.resources.is_some())?;
-        let resources = self.request(id, peer.list_all_resources())?;
-        lock(&self.names).resources = resources.iter().map(|r| r.uri.clone()).collect();
+        let resources = self.request(ctx, id, peer.list_all_resources())?;
+        lock(&self.shared.names).resources = resources.iter().map(|r| r.uri.clone()).collect();
         Ok(resources)
     }
 
     /// Lists the server's prompts (and remembers them for completion).
-    fn list_prompts(&self, peer: &Peer<RoleClient>, id: u64) -> Result<Vec<Prompt>, BoxError> {
+    fn list_prompts(
+        &self,
+        ctx: &Context,
+        peer: &Peer<RoleClient>,
+        id: u64,
+    ) -> Result<Vec<Prompt>, BoxError> {
         require(peer, "prompts", |c| c.prompts.is_some())?;
-        let prompts = self.request(id, peer.list_all_prompts())?;
-        lock(&self.names).prompts = prompts.iter().map(|p| p.name.clone()).collect();
+        let prompts = self.request(ctx, id, peer.list_all_prompts())?;
+        lock(&self.shared.names).prompts = prompts.iter().map(|p| p.name.clone()).collect();
         Ok(prompts)
     }
 
@@ -458,20 +579,43 @@ impl Client {
         Ok((connection.service.peer().clone(), connection.id))
     }
 
-    /// Waits for a request to connection `id`. If the connection turns out to
-    /// be closed (e.g. the server exited), it's forgotten.
+    /// Waits for a request to connection `id`, showing the notifications
+    /// that arrive meanwhile. If the connection turns out to be closed (e.g.
+    /// the server exited), it's forgotten.
     fn request<T>(
         &self,
+        ctx: &Context,
         id: u64,
         request: impl Future<Output = Result<T, ServiceError>>,
     ) -> Result<T, BoxError> {
-        match self.runtime.block_on(request) {
+        let (registration, mut events) = self.shared.wait(id, Waiting::Request);
+        let result = self.runtime.block_on(async {
+            let mut request = pin!(request);
+            let result = loop {
+                tokio::select! {
+                    biased;
+                    Some(event) = events.recv() => notify::show_events(ctx, event, &mut events),
+                    result = &mut request => break result,
+                }
+            };
+            let stragglers = tokio::time::sleep(STRAGGLERS);
+            let mut stragglers = pin!(stragglers);
+            loop {
+                tokio::select! {
+                    Some(event) = events.recv() => notify::show_events(ctx, event, &mut events),
+                    () = &mut stragglers => break result,
+                }
+            }
+        });
+        drop(registration);
+        match result {
             Ok(result) => Ok(result),
             Err(ServiceError::TransportClosed) => {
                 let mut connection = lock(&self.connection);
                 if connection.as_ref().is_some_and(|c| c.id == id) {
                     let name = connection.take().map(|c| c.name).unwrap_or_default();
-                    *lock(&self.names) = Names::default();
+                    *lock(&self.shared.names) = Names::default();
+                    self.shared.closed(id);
                     return Err(format!("{name} has disconnected").into());
                 }
                 Err(ServiceError::TransportClosed.into())
@@ -562,12 +706,27 @@ pub fn register(interpreter: &mut Interpreter, client: &Arc<Client>) {
         spec,
         move |ctx, args| c.prompt(ctx, args),
     );
+    let c = client.clone();
+    interpreter.register_spec(
+        "subscribe",
+        "Show a resource's updates, until unsubscribed",
+        Spec::new().arg("URI", names_kind(client, |n| &n.resources)),
+        move |ctx, args| c.subscribe(ctx, args),
+    );
+    let c = client.clone();
+    let levels = Kind::custom(|_| LOG_LEVELS.map(str::to_owned).to_vec());
+    interpreter.register_spec(
+        "log-level",
+        "Set the level from which the server sends log messages",
+        Spec::new().arg("LEVEL", levels),
+        move |ctx, args| c.log_level(ctx, args),
+    );
 }
 
 /// Names completed from those last listed (`which` of them).
 fn names_kind(client: &Client, which: fn(&Names) -> &Vec<String>) -> Kind {
-    let names = client.names.clone();
-    Kind::custom(move |_| which(&lock(&names)).clone())
+    let shared = client.shared.clone();
+    Kind::custom(move |_| which(&lock(&shared.names)).clone())
 }
 
 /// Fails unless the server offers `what` (by `offered`, from its

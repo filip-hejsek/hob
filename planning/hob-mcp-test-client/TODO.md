@@ -2,9 +2,11 @@
 
 Decisions are in DECISIONS.md here.
 
-- Next: showing server notifications (logging, progress, list changes;
-  the lists used for completion aren't refreshed on changes yet), and
-  resource subscriptions.
+- Progress is shown as lines. A progress bar would need an island that
+  its command can close when the request ends; `Context::show` waits for
+  the user.
+- MCP 2026-07-28 (no `initialize`; `subscriptions/listen` for list
+  changes and resource updates) isn't supported: see DECISIONS.md.
 - `call`, `read` and `prompt` don't support the server asking for more
   input (MRTR's `input_required`), and `call` doesn't follow a call made a
   task; both fail with a message.

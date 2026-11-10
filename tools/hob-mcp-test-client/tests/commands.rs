@@ -5,12 +5,19 @@
 //!
 //! It has its own `main` (`harness = false`), so that it can act as the
 //! server. Arguments that don't start with `-` filter the tests by name.
+//!
+//! The server also has tools it doesn't list, for notifications: `work`
+//! sends progress and log messages before its result, and `change` sends
+//! notifications after it.
+
+#![expect(deprecated, reason = "MCP logging is used before 2026-07-28")]
 
 use std::panic;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use hob_core::{Interpreter, Request};
+use hob_core::{Interpreter, Level, Request};
 use hob_mcp_test_client::Client;
 use kettle_ui::Outcome;
 use kettle_ui_headless::{Island, outline};
@@ -18,10 +25,11 @@ use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, EmbeddedResource,
     ErrorData, GetPromptRequestParams, GetPromptResponse, GetPromptResult, Implementation,
     JsonObject, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, Prompt, PromptArgument, PromptMessage,
-    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, ResourceTemplate, Role, ServerCapabilities, ServerConfig, Tool,
-    ToolAnnotations,
+    ListToolsResult, LoggingLevel, LoggingMessageNotificationParam, PaginatedRequestParams,
+    ProgressNotificationParam, Prompt, PromptArgument, PromptMessage, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, ResourceTemplate,
+    ResourceUpdatedNotificationParam, Role, ServerCapabilities, ServerConfig,
+    SetLevelRequestParams, SubscribeRequestParams, Tool, ToolAnnotations, UnsubscribeRequestParams,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
@@ -53,6 +61,13 @@ const TESTS: &[(&str, fn())] = &[
     ("lists_and_describes_prompts", lists_and_describes_prompts),
     ("gets_prompts_through_a_form", gets_prompts_through_a_form),
     ("gets_prompts_with_arguments", gets_prompts_with_arguments),
+    (
+        "shows_notifications_in_the_block",
+        shows_notifications_in_the_block,
+    ),
+    ("logs_other_notifications", logs_other_notifications),
+    ("subscribes_to_resources", subscribes_to_resources),
+    ("sets_the_log_level", sets_the_log_level),
     #[cfg(not(feature = "http"))]
     ("needs_http_for_urls", needs_http_for_urls),
 ];
@@ -68,6 +83,13 @@ fn main() -> ExitCode {
         }
         _ => {}
     }
+    // What's logged outside commands, as commands' log records go to them.
+    let records = hob_core::logger::install(Level::Info, "test".to_owned()).unwrap();
+    std::thread::spawn(move || {
+        for record in futures_executor::block_on_stream(records) {
+            LOGGED.lock().unwrap().push(record.to_string());
+        }
+    });
     let filters: Vec<_> = args.iter().filter(|a| !a.starts_with('-')).collect();
     let mut failed = 0;
     for (name, test) in TESTS {
@@ -85,6 +107,9 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The log records from outside commands, as text.
+static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 struct TestServer {
     /// Exit when the tools are listed.
     dies: bool,
@@ -95,7 +120,9 @@ impl ServerHandler for TestServer {
         let capabilities = ServerCapabilities::builder()
             .enable_tools()
             .enable_resources()
+            .enable_resources_subscribe()
             .enable_prompts()
+            .enable_logging()
             .build();
         ServerConfig::new(capabilities)
             .with_server_info(Implementation::new("test-server", "1.2.3"))
@@ -153,7 +180,7 @@ impl ServerHandler for TestServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let arguments = request.arguments.unwrap_or_default();
         let text = |name: &str| arguments.get(name).and_then(|v| v.as_str()).unwrap_or("");
@@ -174,9 +201,71 @@ impl ServerHandler for TestServer {
                 result.structured_content = Some(json!({"width": 1}));
                 result
             }
+            "work" => {
+                let peer = &context.peer;
+                if let Some(token) = context.meta.get_progress_token() {
+                    let mut progress = ProgressNotificationParam::new(token, 1.0);
+                    progress.total = Some(2.0);
+                    progress.message = Some("Halfway".to_owned());
+                    peer.notify_progress(progress).await.unwrap();
+                }
+                let mut message =
+                    LoggingMessageNotificationParam::new(LoggingLevel::Warning, json!("careful"));
+                message.logger = Some("work".to_owned());
+                peer.notify_logging_message(message).await.unwrap();
+                let message =
+                    LoggingMessageNotificationParam::new(LoggingLevel::Info, json!({"step": 2}));
+                peer.notify_logging_message(message).await.unwrap();
+                // So the notifications are handled before the result.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                CallToolResult::success(vec![ContentBlock::text("Done.")])
+            }
+            "change" => {
+                let peer = context.peer.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    peer.notify_tool_list_changed().await.unwrap();
+                    let message =
+                        LoggingMessageNotificationParam::new(LoggingLevel::Error, json!("late"));
+                    peer.notify_logging_message(message).await.unwrap();
+                });
+                CallToolResult::success(vec![ContentBlock::text("Changing.")])
+            }
             _ => return Err(ErrorData::invalid_params("no such tool", None)),
         };
         Ok(result.into())
+    }
+
+    async fn subscribe(
+        &self,
+        request: SubscribeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        let peer = context.peer.clone();
+        tokio::spawn(async move {
+            for _ in 0..2 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let updated = ResourceUpdatedNotificationParam::new(request.uri.clone());
+                peer.notify_resource_updated(updated).await.unwrap();
+            }
+        });
+        Ok(())
+    }
+
+    async fn unsubscribe(
+        &self,
+        _: UnsubscribeRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        Ok(())
+    }
+
+    async fn set_level(
+        &self,
+        _: SetLevelRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        Ok(())
     }
 
     async fn list_resources(
@@ -353,7 +442,7 @@ fn connects_and_lists_tools() {
         "{output:?}"
     );
     assert!(
-        output[0].ends_with(".\nIt offers: tools, resources, prompts."),
+        output[0].ends_with(".\nIt offers: tools, resources, prompts, logging."),
         "{output:?}"
     );
     assert_eq!(output[1], "Instructions:\nUse echo to repeat things.");
@@ -774,5 +863,71 @@ fn gets_prompts_with_arguments() {
             "image \"image/png image from plain\" (1x1)\n",
             "Assistant:\nResource test://hello:\nHello!",
         ]
+    );
+}
+
+fn shows_notifications_in_the_block() {
+    let h = Harness::new();
+    h.connect("--server");
+    assert_eq!(
+        h.run("call work '{}'"),
+        [
+            "Progress: 1 of 2: Halfway",
+            "warning: work: careful",
+            "info: {\"step\":2}",
+            "Done.",
+        ]
+    );
+}
+
+fn logs_other_notifications() {
+    let h = Harness::new();
+    h.connect("--server");
+    assert_eq!(h.run("call change '{}'"), ["Changing."]);
+    let expected = ["info: The server's tools have changed.", "error: late"];
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let logged = LOGGED.lock().unwrap().clone();
+        if expected.iter().all(|e| logged.iter().any(|l| l == e)) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{logged:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn subscribes_to_resources() {
+    let h = Harness::new();
+    h.connect("--server");
+    let output = h.run_with("subscribe test://hello", |island| {
+        let updated = island.wait_until(Duration::from_secs(5), |island| {
+            matches!(island.state("updates"), Some(kettle_ui::Value::List(l)) if l.len() == 2)
+        });
+        assert!(updated, "{island}");
+        island.press("Unsubscribe").unwrap()
+    });
+    assert_eq!(
+        output,
+        [
+            "column\n\
+             \x20 label \"Subscribed to test://hello\"\n\
+             \x20 list\n\
+             \x20 button \"Unsubscribe\"\n",
+            "Unsubscribed from test://hello.",
+        ]
+    );
+}
+
+fn sets_the_log_level() {
+    let h = Harness::new();
+    h.connect("--server");
+    assert_eq!(
+        h.run("log-level warning"),
+        ["The server now sends log messages from warning up."]
+    );
+    let output = h.run("log-level loud");
+    assert!(
+        output[0].starts_with("error: no level \"loud\""),
+        "{output:?}"
     );
 }

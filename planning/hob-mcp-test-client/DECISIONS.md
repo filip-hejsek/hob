@@ -127,3 +127,42 @@ in ../DECISIONS.md.
   NAME=VALUE...` gives them without asking, like `call TOOL JSON`. A
   prompt without arguments is got without asking. The messages are shown
   under their role ("User:", "Assistant:"), after the description.
+
+## Notifications
+
+- The client connects with `initialize`, so it speaks MCP 2025-11-25 at
+  most. Notifications then arrive unasked, in rmcp's `ClientHandler`
+  (the client's `Handler`), and resources are subscribed to with
+  `resources/subscribe`. MCP 2026-07-28's `subscriptions/listen` (rmcp's
+  `Peer::listen`) isn't used. rmcp deprecates logging and subscribing
+  (gone in 2026-07-28); the client uses them knowingly.
+- A command waiting for a response gets the notifications that arrive
+  meanwhile and shows them in its block: progress as a line ("Progress: 1
+  of 2: Halfway"), log messages as log records at the closest level
+  (notice is info; critical, alert and emergency are errors), and other
+  notifications (list changes, cancellations, unknown ones) as info
+  records. Of several queued progress notifications, only the last is
+  shown. If several commands wait, the latest gets them.
+- Progress goes to the latest waiting command too, not to the request
+  it's about: rmcp gives every request a progress token of its own
+  (replacing any the client sets), and its request methods don't say
+  which. Concurrent requests are rare in a client used by hand.
+- rmcp handles each notification in a task of its own, so one sent just
+  before a response may arrive just after it; a command still takes
+  notifications for 10 ms after its response.
+- Notifications no command takes are logged (target
+  `hob_mcp_test_client::notification`): warnings and errors show in the
+  scrollback, the rest in `messages`. Rejected: printing them all in the
+  scrollback (only log records can appear outside a block, and routine
+  ones would clutter it).
+- A list change also lists that list again, for completion (in a task:
+  the handler can't wait for a response itself).
+- `subscribe URI` shows an island listing the resource's updates ("Updated
+  after 1.2 s") until its Unsubscribe button is pressed, which
+  unsubscribes. It's a running command meanwhile, since an island can be
+  updated only while its command waits on it; other commands can run
+  alongside. If the connection closes, the island says so.
+- `log-level LEVEL` sets the level from which the server sends log
+  messages (`logging/setLevel`); levels are completed. Debug messages
+  show only in a command's block unless `HOB_LOG` is `debug` (hob's
+  logger drops our crates' debug records by default).
