@@ -17,6 +17,9 @@
 //!   updated from outside through a [`StateHandle`], or is *derived*: computed
 //!   from the current field values (e.g. search-as-you-type), and possibly
 //!   from other named state ([`IslandBuilder::derive_with_state`]).
+//! - *Validators* ([`IslandBuilder::validate`]) check the fields before a
+//!   submit button submits them. Each is derived state holding an error
+//!   message, shown only once the user tries to submit.
 //! - Mistakes in the tree (such as referencing named state that doesn't
 //!   exist) are reported by [`IslandBuilder::build`].
 //! - A [`FrozenIsland`] can't change: its fields and state are fixed. It's
@@ -288,6 +291,8 @@ struct DeriveSpec {
     /// The named state it may read.
     deps: Vec<String>,
     compute: DeriveFn,
+    /// Whether it's a validator ([`IslandBuilder::validate`]).
+    validator: bool,
 }
 
 /// Configures an island; create it with [`IslandBuilder::new`], then hand it
@@ -365,6 +370,43 @@ impl IslandBuilder {
             name: name.to_owned(),
             deps: state.iter().map(|&s| s.to_owned()).collect(),
             compute: Arc::new(compute),
+            validator: false,
+        });
+    }
+
+    /// Adds a validator: a check of the field values that must pass for a
+    /// [`submit_button`](widget::submit_button) to submit them. It returns an
+    /// error message, or `None` if the fields are fine (an empty message
+    /// counts as fine too). Other buttons don't validate.
+    ///
+    /// The validator's result is named state `name`, computed like derived
+    /// state ([`derive`](IslandBuilder::derive)). It's `""` until the user
+    /// first tries to submit, so errors don't show while the user is still
+    /// filling the fields in; from then on, it's the current error message.
+    /// Show it with a [`label`](widget::label), which takes no space while
+    /// it's empty.
+    pub fn validate(
+        &mut self,
+        name: &str,
+        check: impl Fn(&Inputs<'_>) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.validate_with_state(name, &[], check);
+    }
+
+    /// Like [`validate`](IslandBuilder::validate), but the check may also
+    /// read the named state in `state`, as in
+    /// [`derive_with_state`](IslandBuilder::derive_with_state).
+    pub fn validate_with_state(
+        &mut self,
+        name: &str,
+        state: &[&str],
+        check: impl Fn(&Inputs<'_>) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.derived.push(DeriveSpec {
+            name: name.to_owned(),
+            deps: state.iter().map(|&s| s.to_owned()).collect(),
+            compute: Arc::new(move |inputs| Value::Text(check(inputs).unwrap_or_default())),
+            validator: true,
         });
     }
 
@@ -830,6 +872,18 @@ mod tests {
         let mut ui = IslandBuilder::new(text_area("a", ""));
         ui.set_checked("a", true);
         assert!(matches!(check(&ui), Err(Error::NotACheckbox(n)) if n == "a"));
+    }
+
+    #[test]
+    fn validators_are_checked_like_derived_state() {
+        let mut ui = IslandBuilder::new(label(state("e")));
+        ui.derive("e", |_| "".into());
+        ui.validate("e", |_| None);
+        assert!(matches!(check(&ui), Err(Error::ConflictingState(n)) if n == "e"));
+
+        let mut ui = IslandBuilder::new(column([]));
+        ui.validate_with_state("e", &["nope"], |_| None);
+        assert!(matches!(check(&ui), Err(Error::UnknownState(n)) if n == "nope"));
     }
 
     #[test]

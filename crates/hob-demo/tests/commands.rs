@@ -98,17 +98,16 @@ fn pizza() {
         assert!(island.to_string().contains(r#"label "Price: €11.00""#));
         island.press("Next").unwrap()
     });
-    // The address is missing, so it asks again, keeping the name.
-    answer(&mut requests, |island| island.press("Order").unwrap());
-    assert_eq!(
-        requests.next().map(|r| match r {
-            Request::Print(m) => m,
-            _ => panic!("expected Print"),
-        }),
-        Some("Please fill in both your name and address.".to_owned())
-    );
     answer(&mut requests, |island| {
         assert_eq!(island.fields().text("name"), "Ada Lovelace");
+        // The address is missing, so it isn't submitted.
+        assert!(!island.to_string().contains("Enter"));
+        let error = island.press("Order").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "not submitted: Enter the delivery address."
+        );
+        assert!((island.to_string()).contains(r#"label "Enter the delivery address.""#));
         island.type_text("address", "12 St James's Square").unwrap();
         island.press("Order").unwrap()
     });

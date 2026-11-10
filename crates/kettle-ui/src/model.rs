@@ -2,7 +2,9 @@
 //!
 //! A backend (such as `kettle-ui-iced`) renders [`Model::root`], feeds user
 //! input back through the `set_*` methods, runs the [`Job`]s they return off
-//! the UI thread, and delivers [`StateUpdate`]s from [`Updates`].
+//! the UI thread, and delivers [`StateUpdate`]s from [`Updates`]. When the
+//! user presses a submit button, it calls [`Model::submit`], then
+//! [`Model::take_submitted`] after that and after every [`Model::finish`].
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -37,6 +39,10 @@ pub struct Model {
     state: HashMap<String, Slot>,
     /// In dependency order: each comes after the derived state it depends on.
     derived: Vec<Derived>,
+    /// Whether the user has tried to submit, so validation errors are shown.
+    errors_shown: bool,
+    /// Whether a submit waits for validators to be up to date.
+    submit_pending: bool,
 }
 
 /// A piece of named state.
@@ -63,6 +69,11 @@ struct Derived {
     /// Whether the value may not match the current inputs; see
     /// [`Model::is_outdated`].
     outdated: bool,
+    /// Whether it's a validator. Its named state is then `""` until errors
+    /// are shown, and the error it found is kept in `error`.
+    validator: bool,
+    /// The last error a validator found; empty if none.
+    error: String,
 }
 
 /// What a computation read, and the values it saw.
@@ -78,7 +89,8 @@ struct Reads {
 /// the host whether to close it.
 #[derive(Clone, Debug)]
 pub enum Outcome {
-    /// The user pressed a [`submit_button`](crate::widget::submit_button).
+    /// The user pressed a [`submit_button`](crate::widget::submit_button),
+    /// and the validators passed.
     Submitted(Fields),
     /// The user pressed a [`cancel_button`](crate::widget::cancel_button).
     Cancelled,
@@ -112,8 +124,9 @@ impl Model {
         let derived = derived
             .into_iter()
             .map(|spec| {
+                // A validator shows nothing until errors are shown.
                 let slot = Slot {
-                    value: None,
+                    value: spec.validator.then(|| Value::Text(String::new())),
                     version: 0,
                 };
                 state.insert(spec.name.clone(), slot);
@@ -130,6 +143,8 @@ impl Model {
                     reads: None,
                     running: false,
                     outdated: true,
+                    validator: spec.validator,
+                    error: String::new(),
                 }
             })
             .collect();
@@ -138,6 +153,8 @@ impl Model {
             fields,
             state,
             derived,
+            errors_shown: false,
+            submit_pending: false,
         };
         let jobs = model.schedule();
         (model, jobs)
@@ -192,11 +209,13 @@ impl Model {
         self.set_field(id, Field::Bool(value))
     }
 
+    /// Changes a field. Drops a pending submit (see [`Model::submit`]).
     #[track_caller]
     fn set_field(&mut self, id: &str, value: Field) -> Vec<Job> {
         match self.fields.0.get_mut(id) {
             Some(field) if std::mem::discriminant(field) == std::mem::discriminant(&value) => {
                 *field = value;
+                self.submit_pending = false;
                 self.schedule()
             }
             _ => {
@@ -208,6 +227,54 @@ impl Model {
                 Vec::new()
             }
         }
+    }
+
+    /// Asks to submit the island, as a
+    /// [`submit_button`](crate::widget::submit_button) does. From now on,
+    /// validators show their errors. Returns the jobs that recompute derived
+    /// state that depends on them.
+    ///
+    /// The submit waits until the validators are up to date; call
+    /// [`take_submitted`](Model::take_submitted) after this and after every
+    /// [`finish`](Model::finish) to get the result. A change of a field
+    /// drops it, since the user didn't submit the new values.
+    pub fn submit(&mut self) -> Vec<Job> {
+        self.submit_pending = true;
+        if !self.errors_shown {
+            self.errors_shown = true;
+            for i in 0..self.derived.len() {
+                let derived = &self.derived[i];
+                if derived.validator {
+                    let (name, error) = (derived.name.clone(), derived.error.clone());
+                    self.store(name, Value::Text(error));
+                }
+            }
+        }
+        self.schedule()
+    }
+
+    /// The fields of a submit ([`submit`](Model::submit)) that went through:
+    /// once the validators are up to date, if none of them found an error.
+    /// Returns them only once. `None` if the submit still waits for the
+    /// validators, if it was dropped, or if there was none.
+    pub fn take_submitted(&mut self) -> Option<Fields> {
+        let waiting = self.derived.iter().any(|d| d.validator && d.outdated);
+        if !self.submit_pending || waiting {
+            return None;
+        }
+        self.submit_pending = false;
+        self.validation_errors()
+            .is_empty()
+            .then(|| self.fields.clone())
+    }
+
+    /// The errors the validators found last, even if they aren't shown
+    /// yet. Empty if all of them passed.
+    pub fn validation_errors(&self) -> Vec<&str> {
+        (self.derived.iter())
+            .filter(|d| d.validator && !d.error.is_empty())
+            .map(|d| d.error.as_str())
+            .collect()
     }
 
     /// Applies an update sent through a [`StateHandle`](crate::StateHandle).
@@ -229,7 +296,13 @@ impl Model {
         let derived = &mut self.derived[result.index];
         derived.running = false;
         derived.reads = Some(result.reads);
-        if let Some(value) = result.value {
+        if let Some(mut value) = result.value {
+            if derived.validator {
+                derived.error = value.to_string();
+                if !self.errors_shown {
+                    value = Value::Text(String::new());
+                }
+            }
             let name = derived.name.clone();
             self.store(name, value);
         }
@@ -656,6 +729,135 @@ mod tests {
         let jobs = model.set_text("a", "ok".into());
         settle(&mut model, jobs);
         assert_eq!(text(&model, "x"), "ok");
+    }
+
+    /// An island with a text field `name` that must not be empty.
+    fn name_required() -> IslandBuilder {
+        let mut b = IslandBuilder::new(column([text_field("name", ""), label(state("err"))]));
+        b.validate("err", |i| {
+            i.text("name").is_empty().then(|| "Enter a name".into())
+        });
+        b
+    }
+
+    #[test]
+    fn errors_are_shown_once_submitting_fails() {
+        let (mut model, jobs) = build(name_required());
+        settle(&mut model, jobs);
+        assert_eq!(text(&model, "err"), "");
+        assert_eq!(model.validation_errors(), ["Enter a name"]);
+        assert!(model.take_submitted().is_none());
+
+        let jobs = model.submit();
+        settle(&mut model, jobs);
+        assert!(model.take_submitted().is_none());
+        assert_eq!(text(&model, "err"), "Enter a name");
+
+        // From now on, the error follows the fields.
+        let jobs = model.set_text("name", "Ada".into());
+        settle(&mut model, jobs);
+        assert_eq!(text(&model, "err"), "");
+        assert!(
+            model.take_submitted().is_none(),
+            "the failed submit is used up"
+        );
+        let jobs = model.set_text("name", "".into());
+        settle(&mut model, jobs);
+        assert_eq!(text(&model, "err"), "Enter a name");
+
+        let jobs = model.set_text("name", "Ada".into());
+        settle(&mut model, jobs);
+        assert!(model.submit().is_empty());
+        assert_eq!(model.take_submitted().unwrap().text("name"), "Ada");
+        assert!(model.take_submitted().is_none());
+    }
+
+    #[test]
+    fn submit_waits_for_validators() {
+        let (mut model, jobs) = build(name_required());
+        settle(&mut model, jobs);
+        let mut jobs = model.set_text("name", "Ada".into());
+        assert!(model.submit().is_empty());
+        assert!(model.take_submitted().is_none());
+        let job = jobs.pop().unwrap();
+        assert!(model.finish(job.run()).is_empty());
+        assert_eq!(model.take_submitted().unwrap().text("name"), "Ada");
+
+        // A field change drops a waiting submit.
+        let jobs = model.set_text("name", "Bob".into());
+        model.submit();
+        assert!(model.set_text("name", "Cy".into()).is_empty());
+        settle(&mut model, jobs);
+        assert!(model.take_submitted().is_none());
+    }
+
+    #[test]
+    fn submits_without_validators() {
+        let (mut model, jobs) = build(IslandBuilder::new(text_field("a", "")));
+        settle(&mut model, jobs);
+        assert!(model.submit().is_empty());
+        assert!(model.take_submitted().is_some());
+    }
+
+    #[test]
+    fn several_validators_must_all_pass() {
+        let mut b = IslandBuilder::new(column([text_field("a", ""), checkbox("c", "")]));
+        b.validate("a_err", |i| i.text("a").is_empty().then(|| "a".into()));
+        b.validate("c_err", |i| (!i.checked("c")).then(|| "c".into()));
+        let (mut model, jobs) = build(b);
+        settle(&mut model, jobs);
+        assert_eq!(model.validation_errors(), ["a", "c"]);
+
+        let jobs = model.set_text("a", "x".into());
+        settle(&mut model, jobs);
+        let jobs = model.submit();
+        settle(&mut model, jobs);
+        assert!(model.take_submitted().is_none());
+        assert_eq!(text(&model, "c_err"), "c");
+
+        let jobs = model.set_checked("c", true);
+        settle(&mut model, jobs);
+        let jobs = model.submit();
+        settle(&mut model, jobs);
+        assert!(model.take_submitted().is_some());
+    }
+
+    #[test]
+    fn validators_can_use_state_and_be_used() {
+        let mut b = IslandBuilder::new(text_field("a", ""));
+        b.derive("len", |i| (i.text("a").len() as f64).into());
+        b.validate_with_state("err", &["len"], |i| {
+            (i.state("len") != Some(&3.0.into())).then(|| "Three letters".into())
+        });
+        b.derive_with_state("shown", &["err"], |i| {
+            format!("<{}>", i.state("err").unwrap()).into()
+        });
+        let (mut model, jobs) = build(b);
+        settle(&mut model, jobs);
+        // Derived state sees what's shown, not the hidden error.
+        assert_eq!(text(&model, "shown"), "<>");
+        let jobs = model.submit();
+        assert_eq!(jobs.len(), 1);
+        settle(&mut model, jobs);
+        assert_eq!(text(&model, "shown"), "<Three letters>");
+
+        // The submit waits for "len" too.
+        let jobs = model.set_text("a", "abc".into());
+        model.submit();
+        assert!(model.take_submitted().is_none());
+        settle(&mut model, jobs);
+        assert!(model.take_submitted().is_some());
+        assert_eq!(text(&model, "shown"), "<>");
+    }
+
+    #[test]
+    fn frozen_island_hides_errors_until_submitted() {
+        let (mut model, jobs) = build(name_required());
+        settle(&mut model, jobs);
+        assert_eq!(model.freeze().state("err"), Some(&"".into()));
+        let jobs = model.submit();
+        settle(&mut model, jobs);
+        assert_eq!(model.freeze().state("err"), Some(&"Enter a name".into()));
     }
 
     #[test]

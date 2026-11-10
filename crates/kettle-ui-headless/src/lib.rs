@@ -67,6 +67,9 @@ pub enum ActionError {
         /// The line that was to be picked.
         line: String,
     },
+    /// A submit button was pressed, but validators found these errors (see
+    /// [`IslandBuilder::validate`]). The island now shows them.
+    Invalid(Vec<String>),
 }
 
 impl fmt::Display for ActionError {
@@ -84,6 +87,7 @@ impl fmt::Display for ActionError {
                     "no suggestion {line:?} is shown for text field {field:?}"
                 )
             }
+            ActionError::Invalid(errors) => write!(f, "not submitted: {}", errors.join("; ")),
         }
     }
 }
@@ -188,6 +192,8 @@ impl Island {
 
     /// Presses the button labelled `label`, and returns how the user finished
     /// with the island. Like in other backends, the island stays usable.
+    /// A submit button submits only if the validators pass; otherwise this
+    /// returns [`ActionError::Invalid`].
     pub fn press(&mut self, label: &str) -> Result<Outcome, ActionError> {
         let mut actions = Vec::new();
         find(&self.model, self.model.root(), &mut |w| {
@@ -210,7 +216,19 @@ impl Island {
             }
         };
         Ok(match action {
-            Action::Submit => Outcome::Submitted(self.model.fields().clone()),
+            Action::Submit => {
+                let jobs = self.model.submit();
+                self.settle(jobs);
+                // Settled, so the validators are up to date.
+                match self.model.take_submitted() {
+                    Some(fields) => Outcome::Submitted(fields),
+                    None => {
+                        let errors = self.model.validation_errors();
+                        let errors = errors.into_iter().map(str::to_owned).collect();
+                        return Err(ActionError::Invalid(errors));
+                    }
+                }
+            }
             Action::Cancel => Outcome::Cancelled,
             Action::Press(id) => Outcome::Pressed(id, self.model.fields().clone()),
         })
@@ -555,6 +573,31 @@ mod tests {
             panic!("not pressed");
         };
         assert_eq!(&*id, "del");
+        assert_eq!(fields.text("t"), "x");
+    }
+
+    #[test]
+    fn only_submit_buttons_validate() {
+        let mut builder = IslandBuilder::new(column([
+            text_field("t", ""),
+            label(state("error")),
+            row([submit_button("OK"), button("other", "Other")]),
+        ]));
+        builder.validate("error", |i| i.text("t").is_empty().then(|| "Empty".into()));
+        let mut island = Island::new(builder).unwrap();
+        assert!(island.to_string().contains("label \"\"\n"));
+        assert!(matches!(island.press("Other"), Ok(Outcome::Pressed(..))));
+
+        let error = island.press("OK").unwrap_err();
+        assert_eq!(error, ActionError::Invalid(vec!["Empty".into()]));
+        assert_eq!(error.to_string(), "not submitted: Empty");
+        assert!(island.to_string().contains("label \"Empty\"\n"));
+
+        island.type_text("t", "x").unwrap();
+        assert!(island.to_string().contains("label \"\"\n"));
+        let Ok(Outcome::Submitted(fields)) = island.press("OK") else {
+            panic!("not submitted");
+        };
         assert_eq!(fields.text("t"), "x");
     }
 

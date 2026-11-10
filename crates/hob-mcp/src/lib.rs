@@ -318,7 +318,9 @@ impl Bridge {
     pub fn press(&mut self, island: IslandId, label: &str, timeout: Duration) -> ToolResult {
         let label = label.to_owned();
         let call = Call::Press { island, label };
-        self.call(call).map_err(|e| self.report_with(&e))?;
+        // Shows the island: a failed submit makes it show its errors.
+        self.call(call)
+            .map_err(|e| self.report(self.island_focus(island), &e))?;
         match self.islands.get(&island) {
             Some(island) => self.wait_for_input(island.block, timeout),
             None => Ok(self.report_with("")),

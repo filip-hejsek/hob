@@ -139,24 +139,24 @@ impl Island {
 
     /// Handles a message from this island's [`view`](Island::view) or tasks.
     /// Returns a task for the host to run, and an outcome if the user just
-    /// submitted or cancelled.
+    /// finished with the island. A submit has its outcome once the validators
+    /// pass ([`Model::submit`]), which may be after a later message.
     pub fn update(&mut self, Message(message): Message) -> (Task<Message>, Option<Outcome>) {
         let jobs = match message {
             Msg::TextChanged(id, value) => self.model.set_text(&id, value),
             Msg::Toggled(id, value) => self.model.set_checked(&id, value),
             Msg::StateSet(update) => self.model.apply(update),
             Msg::Derived(result) => self.model.finish(result),
-            Msg::Submit => {
-                let fields = self.model.fields().clone();
-                return (Task::none(), Some(Outcome::Submitted(fields)));
-            }
+            // Submitted below, once the validators pass.
+            Msg::Submit => self.model.submit(),
             Msg::Cancel => return (Task::none(), Some(Outcome::Cancelled)),
             Msg::Press(id) => {
                 let fields = self.model.fields().clone();
                 return (Task::none(), Some(Outcome::Pressed(id, fields)));
             }
         };
-        (run(jobs), None)
+        let submitted = self.model.take_submitted().map(Outcome::Submitted);
+        (run(jobs), submitted)
     }
 
     /// The island's UI. It doesn't scroll or add padding around itself; that's
@@ -599,7 +599,8 @@ mod tests {
     use iced_test::instruction::{Expectation, Interaction, Key, Keyboard, Mouse, Target};
     use iced_test::{Instruction, simulator};
     use kettle_ui::widget::{
-        cancel_button, checkbox, column, row, submit_button, text_area, text_field, when,
+        cancel_button, checkbox, column, label, row, state, submit_button, text_area, text_field,
+        when,
     };
 
     use super::*;
@@ -713,8 +714,16 @@ mod tests {
     /// An island from `make` as an iced program, which checks on start
     /// whether the island has focus, after focusing what `focus` says.
     fn program(make: fn() -> Island, focus: Focus) -> iced::Application<impl iced::Program> {
+        program_with_task(move || (make(), Task::none()), focus)
+    }
+
+    /// Like [`program`], but runs the island's task from [`Island::new`] too.
+    fn program_with_task(
+        make: impl Fn() -> (Island, Task<super::Message>) + 'static,
+        focus: Focus,
+    ) -> iced::Application<impl iced::Program> {
         let boot = move || {
-            let island = make();
+            let (island, task) = make();
             let focus = match focus {
                 Focus::Nothing => Task::none(),
                 Focus::Field(field) => operation::focus(island.field_id(field).unwrap()),
@@ -726,7 +735,7 @@ mod tests {
                 focused: None,
                 outcome: None,
             };
-            (state, check)
+            (state, Task::batch([task.map(Msg::Island), check]))
         };
         iced::application(boot, State::update, State::view)
     }
@@ -864,6 +873,36 @@ mod tests {
     fn question() -> Island {
         let builder = IslandBuilder::new(row([submit_button("Yes [y]"), cancel_button("No [n]")]));
         Island::new(builder).unwrap().0
+    }
+
+    /// A text field that must not be empty.
+    fn required() -> (Island, Task<super::Message>) {
+        let mut builder = IslandBuilder::new(column([
+            text_field("a", "A"),
+            label(state("error")),
+            submit_button("OK"),
+        ]));
+        builder.validate("error", |i| {
+            i.text("a").is_empty().then(|| "A is required".into())
+        });
+        Island::new(builder).unwrap()
+    }
+
+    #[test]
+    fn submit_waits_for_validators_to_pass() {
+        check(
+            program_with_task(required, Focus::Field("a")),
+            &[
+                expect("focused: Some(true)"),
+                press(Key::Enter),
+                expect("A is required"),
+                expect("outcome: None"),
+                typewrite("1"),
+                // Validated in the background, so the submit waits for it.
+                press(Key::Enter),
+                expect(r#"outcome: Some("submitted \"1\" \"\"")"#),
+            ],
+        );
     }
 
     #[test]

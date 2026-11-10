@@ -295,7 +295,19 @@ impl<W: Write> Server<W> {
         };
         let outcome = match action(&mut live.island) {
             Ok(outcome) => outcome,
-            Err(e) => return Ok(Err(ErrorObject::new(code::ACTION_FAILED, e.to_string()))),
+            Err(e) => {
+                // A failed submit makes the island show its errors.
+                if let ActionError::Invalid(_) = e {
+                    let (block, contents) = (live.block, live.island.freeze());
+                    self.notify(Notification::Island {
+                        block,
+                        island: id,
+                        live: true,
+                        contents,
+                    })?;
+                }
+                return Ok(Err(ErrorObject::new(code::ACTION_FAILED, e.to_string())));
+            }
         };
         let (block, contents) = (live.block, live.island.freeze());
         let frozen = outcome.and_then(|outcome| Some((self.islands.remove(&id)?, outcome)));

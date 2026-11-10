@@ -132,9 +132,13 @@ fn interpreter() -> Interpreter {
             text_field("name", "Name"),
             checkbox("loud", "Loud"),
             label(state("greeting")),
+            label(state("error")),
             submit_button("OK"),
         ]));
         builder.derive("greeting", |f| format!("Hi, {}!", f.text("name")).into());
+        builder.validate("error", |f| {
+            f.text("name").is_empty().then(|| "Enter a name".into())
+        });
         if let Outcome::Submitted(fields) = ctx.show(builder)? {
             ctx.print(format!(
                 "got {} {}",
@@ -265,6 +269,12 @@ fn runs_commands_and_acts_on_islands() {
     assert!(text.contains("[2] showed island #3"), "{text}");
     assert!(text.contains(r#"label "Hi, !""#), "{text}");
     assert!(text.ends_with("[2] is waiting for island #3.\n"), "{text}");
+
+    // Not submitted yet: the island shows why.
+    let (text, error) = tool(&mut bridge, "press", json!({"island": 3, "label": "OK"}));
+    assert!(error, "{text}");
+    assert!(text.contains("not submitted: Enter a name"), "{text}");
+    assert!(text.contains(r#"label "Enter a name""#), "{text}");
 
     let fields = json!({"name": "Ada", "loud": true});
     let (text, error) = tool(&mut bridge, "fill", json!({"island": 3, "fields": fields}));

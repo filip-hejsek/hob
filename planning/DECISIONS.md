@@ -159,6 +159,36 @@ Rejected alternative: declaring field dependencies upfront, e.g.
 boilerplate, the list can drift from what the function reads, and
 conditional reads must be over-declared.
 
+### Submit validation
+
+- Validators (`IslandBuilder::validate`, `validate_with_state`) are derived
+  state: a computation from the fields (and declared named state) that
+  returns an error message or `None`, computed in the background with the
+  same dependency tracking. Several validators are allowed, each with its
+  own named state; all must pass.
+- Its named state is `""` until the user first tries to submit, so a new
+  form doesn't open full of errors for empty fields; from then on it's the
+  current error, updated as the fields change. It's shown with a plain
+  `label`, wherever the island wants it; derived state that depends on it
+  sees the same (hidden or shown) value. Rejected: a dedicated error widget
+  (a label does the job), and a per-field error slot (cross-field checks
+  wouldn't fit).
+- Only a submit button validates; cancel and plain buttons don't, since
+  they often mean "not this" (e.g. Delete).
+- The model, not the backend, decides when a submit goes through
+  (`Model::submit`, then `Model::take_submitted`): the submit waits until
+  every validator is up to date, so a fast typist pressing Enter right
+  after typing isn't judged on stale results. A field change drops a
+  waiting submit, since the user didn't submit the new values. Rejected:
+  running outdated validators on the UI thread at submit time (a validator
+  may wait on slow derived state), and rejecting the submit while they're
+  outdated (it would silently drop Enter).
+- kettle-ui-headless settles everything synchronously, so `press` knows
+  the result at once: a failed submit is `ActionError::Invalid` with the
+  errors, and the island now shows them. hob-headless still sends the
+  changed island with the error, and hob-mcp shows it, so an agent sees
+  the errors even if the island doesn't display them.
+
 ### Frozen islands
 
 A `FrozenIsland` has fixed fields and state. It's created with

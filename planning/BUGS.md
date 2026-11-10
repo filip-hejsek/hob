@@ -33,6 +33,12 @@ TODO.md.
   starts it first), `run` fails with "hob has exited" and the command's
   block isn't reported as interrupted, since the bridge never learned it.
 
+## hob-mcp-test-client
+
+- Flaky test: `shows_notifications_in_the_block` sometimes gets the
+  server's log notification and progress/info lines in a different order
+  (seen once in six runs).
+
 ## Logging
 
 - A dependency that logs many different messages (e.g. with a changing

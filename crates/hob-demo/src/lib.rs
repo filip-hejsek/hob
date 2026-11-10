@@ -176,20 +176,12 @@ fn pizza(ctx: &mut Context, args: &[String]) -> CommandResult {
         .filter(|(id, ..)| fields.checked(id))
         .collect();
 
-    let mut name = args.join(" ");
-    let mut address = String::new();
-    loop {
-        let Outcome::Submitted(fields) = ctx.show(delivery_island(&name, &address))? else {
-            ctx.print("Order cancelled.");
-            return Ok(());
-        };
-        name = fields.text("name").trim().to_owned();
-        address = fields.text("address").trim().to_owned();
-        if !name.is_empty() && !address.is_empty() {
-            break;
-        }
-        ctx.print("Please fill in both your name and address.");
-    }
+    let Outcome::Submitted(fields) = ctx.show(delivery_island(&args.join(" ")))? else {
+        ctx.print("Order cancelled.");
+        return Ok(());
+    };
+    let name = fields.text("name").trim();
+    let address = fields.text("address").trim();
 
     let mut items = vec![format!("Pizza  {}", price(BASE_PRICE))];
     items.extend(
@@ -226,15 +218,26 @@ fn toppings_island() -> IslandBuilder {
     builder
 }
 
-fn delivery_island(name: &str, address: &str) -> IslandBuilder {
+/// Asks for the name (prefilled with `name`) and address; both are required.
+fn delivery_island(name: &str) -> IslandBuilder {
     let mut builder = IslandBuilder::new(column([
         label("Step 2 of 2: delivery"),
         text_field("name", "Name"),
+        label(state("name_error")),
         text_field("address", "Address"),
+        label(state("address_error")),
         row([submit_button("Order"), cancel_button("Cancel")]),
     ]));
     builder.set_text("name", name);
-    builder.set_text("address", address);
+    builder.validate("name_error", |f| {
+        f.text("name")
+            .trim()
+            .is_empty()
+            .then(|| "Enter your name.".into())
+    });
+    builder.validate("address_error", |f| {
+        (f.text("address").trim().is_empty()).then(|| "Enter the delivery address.".into())
+    });
     builder
 }
 

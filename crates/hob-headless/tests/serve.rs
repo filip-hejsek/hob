@@ -120,10 +120,14 @@ fn interpreter() -> Interpreter {
         let mut builder = IslandBuilder::new(column([
             text_field("name", "Name"),
             label(state("greeting")),
+            label(state("error")),
             submit_button("OK"),
             cancel_button("Cancel"),
         ]));
         builder.derive("greeting", |f| format!("Hi, {}!", f.text("name")).into());
+        builder.validate("error", |f| {
+            f.text("name").is_empty().then(|| "Enter a name".into())
+        });
         match ctx.show(builder)? {
             Outcome::Submitted(fields) => ctx.print(format!("got {}", fields.text("name"))),
             Outcome::Cancelled | Outcome::Pressed(..) => ctx.print("cancelled"),
@@ -167,6 +171,23 @@ fn islands_are_live_until_submitted() {
     assert!(shown.starts_with(&format!("{block} island ")), "{shown}");
     assert!(shown.contains(r#"label "Hi, !""#), "{shown}");
     let island = shown.split(' ').nth(2).unwrap().parse().unwrap();
+    assert!(shown.contains("label \"\"\n"), "{shown}");
+
+    // Not submitted while empty; the island shows why.
+    let error = client
+        .call(Call::Press {
+            island,
+            label: "OK".into(),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, code::ACTION_FAILED);
+    assert_eq!(error.message, "not submitted: Enter a name");
+    let changed = client.next();
+    assert!(
+        changed.contains(&format!("island {island} live")),
+        "{changed}"
+    );
+    assert!(changed.contains(r#"label "Enter a name""#), "{changed}");
 
     let typed = client.call(Call::TypeText {
         island,
