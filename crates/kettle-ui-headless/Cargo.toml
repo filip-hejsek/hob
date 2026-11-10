@@ -3,12 +3,9 @@ name = "kettle-ui-headless"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
+license.workspace = true
 publish.workspace = true
-
-[lints]
-workspace = true
 
 [dependencies]
 futures-core.workspace = true
@@ -16,3 +13,6 @@ kettle-ui.workspace = true
 
 [dev-dependencies]
 kettle-ui-demo.workspace = true
+
+[lints]
+workspace = true

@@ -9,22 +9,9 @@ default-members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
-license = "MIT OR Apache-2.0"
 repository = "https://github.com/filip-hejsek/hob"
+license = "MIT OR Apache-2.0"
 publish = false
-
-# Backtraces keep file and line numbers; no variables for a debugger. Halves
-# the size of target/ (see planning/DECISIONS.md).
-[profile.dev]
-debug = "line-tables-only"
-
-[workspace.lints.rust]
-missing_docs = "warn"
-unreachable_pub = "warn"
-unsafe_code = "deny"
-
-[workspace.lints.clippy]
-dbg_macro = "warn"
 
 [workspace.dependencies]
 hob-core = { path = "crates/hob-core" }
@@ -47,7 +34,7 @@ dirs = "7"
 futures-channel = "0.3"
 futures-core = "0.3"
 futures-executor = "0.3"
-gix = { version = "0.90", default-features = false, features = ["max-performance", "sha1", "status", "revision", "blob-diff"] }
+gix = { version = "0.90", default-features = false, features = ["blob-diff", "max-performance", "revision", "sha1", "status"] }
 iced = "0.14"
 image = { version = "0.25", default-features = false }
 jiff = "0.2"
@@ -59,6 +46,13 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 tempfile = "3"
 
+[workspace.lints.clippy]
+dbg_macro = "warn"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+unsafe_code = "deny"
 
 # iced 0.14 with the startup notification fix (iced#3317); see
 # planning/ICED_WISHLIST.md. Every iced crate is patched, so there is one
@@ -78,3 +72,8 @@ iced_tiny_skia = { git = "https://github.com/filip-hejsek/iced", branch = "start
 iced_wgpu = { git = "https://github.com/filip-hejsek/iced", branch = "startup-notify" }
 iced_widget = { git = "https://github.com/filip-hejsek/iced", branch = "startup-notify" }
 iced_winit = { git = "https://github.com/filip-hejsek/iced", branch = "startup-notify" }
+
+# Backtraces keep file and line numbers; no variables for a debugger. Halves
+# the size of target/ (see planning/DECISIONS.md).
+[profile.dev]
+debug = "line-tables-only"

@@ -1,16 +1,16 @@
 [package]
 name = "kettle-jxl"
-description = "Minimal bindings to the system libjxl, for kettle-ui images"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+description = "Minimal bindings to the system libjxl, for kettle-ui images"
 repository.workspace = true
-publish.workspace = true
+license.workspace = true
 links = "jxl"
-
-[lints]
-workspace = true
+publish.workspace = true
 
 [build-dependencies]
 pkg-config = "0.3"
+
+[lints]
+workspace = true

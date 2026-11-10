@@ -3,21 +3,13 @@ name = "hob"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
-publish.workspace = true
+license.workspace = true
 # Sets HOB_COMMIT, for --version.
 build = "../../build/commit.rs"
+publish.workspace = true
 
 default-run = "hob"
-
-[lints]
-workspace = true
-
-[features]
-default = ["gui"]
-# The window (hob-gui). Without it, hob only runs with `--headless`.
-gui = ["dep:hob-gui"]
 
 [dependencies]
 dirs.workspace = true
@@ -28,3 +20,11 @@ hob-git.workspace = true
 hob-gui = { workspace = true, optional = true }
 hob-headless.workspace = true
 hob-notes.workspace = true
+
+[features]
+default = ["gui"]
+# The window (hob-gui). Without it, hob only runs with `--headless`.
+gui = ["dep:hob-gui"]
+
+[lints]
+workspace = true

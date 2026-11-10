@@ -3,17 +3,17 @@ name = "hob-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
-publish.workspace = true
+license.workspace = true
 # Sets HOB_COMMIT, for --version.
 build = "../../build/commit.rs"
-
-[lints]
-workspace = true
+publish.workspace = true
 
 [dependencies]
 hob-core.workspace = true
 hob-headless.workspace = true
 kettle-ui.workspace = true
 kettle-ui-headless.workspace = true
+
+[lints]
+workspace = true

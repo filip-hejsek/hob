@@ -3,28 +3,28 @@ name = "hob-mcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
-publish.workspace = true
+license.workspace = true
 # Sets HOB_COMMIT, for --version.
 build = "../../build/commit.rs"
+publish.workspace = true
 
-[lints]
-workspace = true
+[[test]]
+harness = false
+name = "bridge"
 
 [dependencies]
 base64.workspace = true
 hob-core.workspace = true
 hob-headless.workspace = true
-image = { workspace = true, features = ["png", "jpeg"] }
+image = { workspace = true, features = ["jpeg", "png"] }
 kettle-ui.workspace = true
 kettle-ui-headless.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-[target.'cfg(unix)'.dependencies]
+[target."cfg(unix)".dependencies]
 rustix = { version = "1", features = ["process"] }
 
-[[test]]
-name = "bridge"
-harness = false
+[lints]
+workspace = true

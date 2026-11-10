@@ -3,12 +3,9 @@ name = "hob-gui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
+license.workspace = true
 publish.workspace = true
-
-[lints]
-workspace = true
 
 [dependencies]
 futures-channel.workspace = true
@@ -20,3 +17,6 @@ serde_json.workspace = true
 
 [dev-dependencies]
 iced_test = "0.14"
+
+[lints]
+workspace = true

@@ -3,12 +3,9 @@ name = "hob-headless"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
+license.workspace = true
 publish.workspace = true
-
-[lints]
-workspace = true
 
 [dependencies]
 futures-executor.workspace = true
@@ -17,3 +14,6 @@ kettle-ui.workspace = true
 kettle-ui-headless.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[lints]
+workspace = true
