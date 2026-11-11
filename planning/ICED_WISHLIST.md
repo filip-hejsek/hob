@@ -223,7 +223,8 @@ iced never reads the launcher's token (`XDG_ACTIVATION_TOKEN` on Wayland,
 **Workaround:** iced is patched (`[patch.crates-io]` in Cargo.toml) with
 our fork's `startup-notify` branch: the 0.14 branch plus one commit that
 gives the first window the token from the environment. To be sent
-upstream as a fix for iced#3317.
+upstream as a fix for iced#3317. The patch doesn't apply to the crates
+published on crates.io, which use stock iced.
 
 ## Rows and tables that share their width
 

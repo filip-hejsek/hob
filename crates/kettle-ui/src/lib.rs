@@ -908,3 +908,8 @@ mod tests {
         assert!(matches!(check(&ui), Err(Error::UnknownField(n)) if n == "nope"));
     }
 }
+
+// The README's examples, compiled as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

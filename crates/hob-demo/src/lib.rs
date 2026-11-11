@@ -325,3 +325,8 @@ fn parse_color(s: &str) -> Option<[u8; 3]> {
     let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
     Some([channel(0)?, channel(2)?, channel(4)?])
 }
+
+// The README's examples, compiled as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

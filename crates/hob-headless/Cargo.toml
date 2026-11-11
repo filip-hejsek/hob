@@ -3,9 +3,11 @@ name = "hob-headless"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "Headless hob frontend, driven by a client with JSON-RPC over stdin and stdout"
 repository.workspace = true
 license.workspace = true
-publish.workspace = true
+keywords = ["headless", "json-rpc", "shell"]
+categories = ["gui"]
 
 [dependencies]
 futures-executor.workspace = true

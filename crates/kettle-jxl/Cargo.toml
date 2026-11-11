@@ -3,11 +3,12 @@ name = "kettle-jxl"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Minimal bindings to the system libjxl, for kettle-ui images"
+description = "Minimal, permissively licensed bindings to the system libjxl (JPEG XL)"
 repository.workspace = true
 license.workspace = true
+keywords = ["ffi", "image", "jpeg-xl", "jxl", "libjxl"]
+categories = ["external-ffi-bindings", "multimedia::images"]
 links = "jxl"
-publish.workspace = true
 
 [build-dependencies]
 pkg-config = "0.3"

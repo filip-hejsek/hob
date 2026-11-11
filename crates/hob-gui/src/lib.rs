@@ -1373,3 +1373,8 @@ fn view_record(record: &LogRecord) -> Element<'_, Message> {
 
 #[cfg(test)]
 mod tests;
+
+// The README's examples, compiled as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

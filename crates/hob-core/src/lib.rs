@@ -1102,3 +1102,8 @@ mod tests {
         i.register("echo", "Test", |_, _| Ok(()));
     }
 }
+
+// The README's examples, compiled as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

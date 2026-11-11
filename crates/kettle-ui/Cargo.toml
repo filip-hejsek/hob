@@ -3,9 +3,11 @@ name = "kettle-ui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "A deliberately small, toolkit-independent UI framework for form-like islands"
 repository.workspace = true
 license.workspace = true
-publish.workspace = true
+keywords = ["forms", "gui", "island", "ui"]
+categories = ["gui"]
 
 [dependencies]
 base64.workspace = true

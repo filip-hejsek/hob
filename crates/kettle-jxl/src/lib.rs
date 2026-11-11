@@ -783,3 +783,8 @@ mod tests {
         assert!(recompress_jpeg(b"not a jpeg").is_err());
     }
 }
+
+// The README's examples, compiled as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

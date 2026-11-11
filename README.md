@@ -2,6 +2,10 @@
 
 A desktop GUI application in Rust, built on [iced](https://iced.rs).
 
+> **Most of the code in this project was written by AI** (Claude), with a
+> person directing the design. It's an early prototype: expect bugs, and
+> APIs that change between releases.
+
 Programming simple interactions in a terminal is easy: print a question, read
 a response. One goal of this project is to make simple GUI interactions just as
 easy.
@@ -39,6 +43,9 @@ The project is split into these parts:
 - **hob** — the application: registers the commands and starts the shell
   (or, with `--headless`, the headless frontend; with `--preview`, a
   read-only view of a saved session).
+
+The libraries (kettle-ui and its backends, hob-core, hob-gui, hob-headless,
+hob-demo) and hob-mcp are on crates.io; the others aren't published yet.
 
 Building needs libjxl (0.8 or newer, found with pkg-config), e.g. the
 `libjxl` package on Arch or `libjxl-dev` on Debian and Ubuntu.
@@ -150,7 +157,7 @@ Early prototype; expect everything to change.
 
 ## License
 
-Copyright 2026 Filip Hejsek
+Copyright 2026 the authors listed in [AUTHORS](AUTHORS).
 
 Licensed under either of
 

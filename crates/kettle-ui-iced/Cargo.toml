@@ -3,11 +3,14 @@ name = "kettle-ui-iced"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "iced backend for kettle-ui islands, and the kettle-render tool"
 repository.workspace = true
 license.workspace = true
-# Sets HOB_COMMIT, for --version.
-build = "../../build/commit.rs"
-publish.workspace = true
+keywords = ["forms", "gui", "iced", "ui"]
+categories = ["gui"]
+# build.rs (a link to ../../build/commit.rs) sets HOB_COMMIT, for
+# --version. It's left out of the published package.
+exclude = ["build.rs"]
 
 [dependencies]
 futures-executor.workspace = true

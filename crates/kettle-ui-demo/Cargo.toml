@@ -3,9 +3,11 @@ name = "kettle-ui-demo"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "Demo islands for kettle-ui"
 repository.workspace = true
 license.workspace = true
-publish.workspace = true
+keywords = ["demo", "gui", "ui"]
+categories = ["gui"]
 
 [dependencies]
 kettle-ui.workspace = true

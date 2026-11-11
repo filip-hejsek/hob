@@ -18,15 +18,15 @@ const LOG_PREFIX: &str = "kettle-render";
 const USAGE: &str =
     "usage: kettle-render [--frozen] [--width N] [--theme NAME] ISLAND.json OUT.png";
 
-/// What `--version` prints: the version and the Git commit built from.
-const VERSION: &str = concat!(
-    env!("CARGO_BIN_NAME"),
-    " ",
-    env!("CARGO_PKG_VERSION"),
-    " (",
-    env!("HOB_COMMIT"),
-    ")"
-);
+/// What `--version` prints: the version and the Git commit built from
+/// (unknown in a build from crates.io, which leaves out the build script).
+fn version() -> String {
+    let version = concat!(env!("CARGO_BIN_NAME"), " ", env!("CARGO_PKG_VERSION"));
+    match option_env!("HOB_COMMIT") {
+        Some(commit) => format!("{version} ({commit})"),
+        None => version.to_owned(),
+    }
+}
 
 /// About the width of an island in hob's default window.
 const DEFAULT_WIDTH: u32 = 560;
@@ -41,7 +41,7 @@ fn main() -> ExitCode {
         match arg.as_str() {
             "--frozen" => frozen = true,
             "--version" => {
-                println!("{VERSION}");
+                println!("{}", version());
                 return ExitCode::SUCCESS;
             }
             "--width" => match args.next().and_then(|w| w.parse().ok()) {

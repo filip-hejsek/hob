@@ -3,9 +3,11 @@ name = "kettle-ui-headless"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "Headless backend for kettle-ui: drive islands from tests or agents"
 repository.workspace = true
 license.workspace = true
-publish.workspace = true
+keywords = ["forms", "headless", "testing", "ui"]
+categories = ["development-tools::testing", "gui"]
 
 [dependencies]
 futures-core.workspace = true

@@ -5,9 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-# Sets HOB_COMMIT, for --version.
-build = "../../build/commit.rs"
-publish.workspace = true
+# build.rs (a link to ../../build/commit.rs) sets HOB_COMMIT, for
+# --version. It's left out of the published package.
+exclude = ["build.rs"]
+# Not on crates.io (see planning/DECISIONS.md).
+publish = false
 
 [dependencies]
 hob-core.workspace = true

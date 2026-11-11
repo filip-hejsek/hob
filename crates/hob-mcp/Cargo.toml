@@ -3,11 +3,14 @@ name = "hob-mcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "MCP server that lets an AI agent use hob through its headless frontend"
 repository.workspace = true
 license.workspace = true
-# Sets HOB_COMMIT, for --version.
-build = "../../build/commit.rs"
-publish.workspace = true
+keywords = ["agent", "ai", "mcp", "shell"]
+categories = ["command-line-utilities", "development-tools"]
+# build.rs (a link to ../../build/commit.rs) sets HOB_COMMIT, for
+# --version. It's left out of the published package.
+exclude = ["build.rs"]
 
 [[test]]
 harness = false

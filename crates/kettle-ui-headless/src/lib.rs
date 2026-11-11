@@ -702,3 +702,8 @@ mod tests {
         assert!(!island.wait_until(Duration::from_millis(10), |_| false));
     }
 }
+
+// The README's examples, compiled as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

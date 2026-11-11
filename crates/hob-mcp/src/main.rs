@@ -14,15 +14,15 @@ use hob_mcp::{Bridge, LOG_PREFIX, Launch, Limits};
 const USAGE: &str =
     "usage: hob-mcp [--allow-restart] [--agent-spawns | COMMAND [ARG]...] | --version";
 
-/// What `--version` prints: the version and the Git commit built from.
-const VERSION: &str = concat!(
-    env!("CARGO_BIN_NAME"),
-    " ",
-    env!("CARGO_PKG_VERSION"),
-    " (",
-    env!("HOB_COMMIT"),
-    ")"
-);
+/// What `--version` prints: the version and the Git commit built from
+/// (unknown in a build from crates.io, which leaves out the build script).
+fn version() -> String {
+    let version = concat!(env!("CARGO_BIN_NAME"), " ", env!("CARGO_PKG_VERSION"));
+    match option_env!("HOB_COMMIT") {
+        Some(commit) => format!("{version} ({commit})"),
+        None => version.to_owned(),
+    }
+}
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1).peekable();
@@ -32,7 +32,7 @@ fn main() -> ExitCode {
             Some("--allow-restart") => restart = true,
             Some("--agent-spawns") => by_agent = true,
             Some("--version") => {
-                println!("{VERSION}");
+                println!("{}", version());
                 return ExitCode::SUCCESS;
             }
             _ => {

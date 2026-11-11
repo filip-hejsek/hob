@@ -405,3 +405,8 @@ impl<W: Write> Server<W> {
         }
     }
 }
+
+// The README's examples, compiled as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

@@ -3,9 +3,11 @@ name = "hob-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "The hob command interpreter: commands that talk to the user with text and kettle-ui islands"
 repository.workspace = true
 license.workspace = true
-publish.workspace = true
+keywords = ["commands", "forms", "gui", "shell"]
+categories = ["command-line-interface", "gui"]
 
 [dependencies]
 futures-channel.workspace = true

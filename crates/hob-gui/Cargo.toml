@@ -3,9 +3,11 @@ name = "hob-gui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "The hob shell: an iced window with a terminal-like scrollback of commands and their islands"
 repository.workspace = true
 license.workspace = true
-publish.workspace = true
+keywords = ["gui", "iced", "shell", "terminal"]
+categories = ["gui"]
 
 [dependencies]
 futures-channel.workspace = true

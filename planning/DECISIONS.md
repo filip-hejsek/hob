@@ -28,6 +28,43 @@ Known bugs are in BUGS.md.
 - `--version` rather than a separate `--commit`: one conventional flag,
   printing `NAME VERSION (COMMIT)`. For hob-cli, whose arguments are the
   frontend's command, only when it's the only argument.
+- Each crate with binaries has `build.rs` as a symlink to
+  `build/commit.rs`, excluded from its package (`exclude = ["build.rs"]`),
+  so cargo publishes it with `build = false`. Builds from crates.io don't
+  print a commit, since it's of little use there; `--version` then prints
+  just `NAME VERSION` (`option_env!`). Rejected: `build =
+  "../../build/commit.rs"`, which `cargo package` refuses (a build script
+  outside the package).
+
+## Releases (crates.io)
+
+- Published: what's useful as a library (`kettle-jxl`, `kettle-ui`,
+  `kettle-ui-demo`, `kettle-ui-headless`, `kettle-ui-iced`, `hob-core`,
+  `hob-headless`, `hob-gui`, `hob-demo`) and `hob-mcp`, a self-contained
+  binary that works with different hob versions (it starts hob as another
+  program). Not yet: `hob`, `hob-cli` (mainly a testing tool, still rough),
+  and the command crates `hob-fs`, `hob-git`, `hob-notes` (still rough;
+  `hob-fs` is the closest to ready). They have `publish = false`, and
+  workspace dependencies on them have no version.
+- All crates share one version (`version.workspace = true`). A crate can
+  later get its own version if it needs to release separately.
+- Every README (the workspace's and each published crate's) says up front
+  that most of the code is AI-written, so people who find a crate know
+  what to expect.
+- READMEs with Rust examples are compiled as doctests (a `#[cfg(doctest)]`
+  item documented with `include_str!("../README.md")`), so the examples
+  can't go stale.
+- The license files and `AUTHORS` are symlinked into each published
+  crate, so packages include them. `AUTHORS` lists the copyright holders,
+  and the READMEs' license sections refer to it: otherwise the copyright
+  line would be only in the MIT license, one of the two options, and Git
+  history and the workspace README aren't in the packages.
+- `LICENSE-MIT` keeps naming the one author. It changes to "The hob
+  Authors" (with `AUTHORS` listing them) if and when someone else
+  contributes.
+- Published crates build against stock iced: `[patch.crates-io]` doesn't
+  apply to them, so they lack the startup notification fix (see
+  ICED_WISHLIST.md). hob-gui's README says so.
 
 ## kettle-ui core
 
