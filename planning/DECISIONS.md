@@ -761,6 +761,10 @@ Rejected:
   (`--no-default-features`), hob only runs with `--headless` and doesn't
   build iced. Rejected: a separate headless binary, which would need the
   command registration shared between two binaries.
+- The command crates are features of the `hob` crate too (`demo`, `fs`,
+  `git`, `notes`, all default), so a build can leave out commands and their
+  dependencies (e.g. gitoxide, bundled SQLite). The built-in commands of
+  hob-core are always there.
 - Updates of live islands from `StateHandle`s wake the server through a
   waker (`Island::poll_waking`); no polling on a timer.
 - Nothing is saved; there's no session. The client owns the scrollback

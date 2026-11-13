@@ -2,8 +2,10 @@
 //! instead, for a client program that talks JSON-RPC over stdin and stdout
 //! (see `hob-headless`). With `--preview`, it shows a saved session
 //! read-only, without running commands. Built without the `gui` feature, it
-//! runs only with `--headless`.
+//! runs only with `--headless`. The `demo`, `fs`, `git` and `notes` features
+//! add the commands of the crates of those names.
 
+#[cfg(any(feature = "gui", feature = "notes"))]
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -90,18 +92,24 @@ fn gui_config() -> hob_gui::GuiConfig {
     }
 }
 
-/// An interpreter with all the commands.
+/// An interpreter with the built-in commands and those of the enabled
+/// features.
 fn interpreter() -> Interpreter {
     let mut interpreter = Interpreter::named(NAME);
     hob_core::builtins::register(&mut interpreter);
     hob_core::builtins::register_shell(&mut interpreter);
+    #[cfg(feature = "demo")]
     hob_demo::register(&mut interpreter);
+    #[cfg(feature = "fs")]
     hob_fs::register(&mut interpreter);
+    #[cfg(feature = "git")]
     hob_git::register(&mut interpreter);
+    #[cfg(feature = "notes")]
     hob_notes::register(&mut interpreter, notes_path());
     interpreter
 }
 
+#[cfg(feature = "notes")]
 /// Where the notes are kept: `HOB_NOTES` if set, otherwise in the
 /// platform's data directory.
 fn notes_path() -> Option<PathBuf> {

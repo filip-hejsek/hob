@@ -115,6 +115,9 @@ cargo build && target/debug/hob-cli
 
 To build hob without the window and iced (only `--headless` works then),
 turn off its `gui` feature: `cargo build -p hob --no-default-features`.
+The command sets are features too (`demo`, `fs`, `git`, `notes`, all on by
+default), so e.g. `--no-default-features --features fs` gives a headless hob
+with just the built-in and filesystem commands.
 
 To let an agent use hob, add `hob-mcp` as an MCP server (it also starts
 `hob --headless` from its directory), e.g. for Claude Code:

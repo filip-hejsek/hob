@@ -14,19 +14,24 @@ publish = false
 default-run = "hob"
 
 [dependencies]
-dirs.workspace = true
+dirs = { workspace = true, optional = true }
 hob-core.workspace = true
-hob-demo.workspace = true
-hob-fs.workspace = true
-hob-git.workspace = true
+hob-demo = { workspace = true, optional = true }
+hob-fs = { workspace = true, optional = true }
+hob-git = { workspace = true, optional = true }
 hob-gui = { workspace = true, optional = true }
 hob-headless.workspace = true
-hob-notes.workspace = true
+hob-notes = { workspace = true, optional = true }
 
 [features]
-default = ["gui"]
+default = ["gui", "demo", "fs", "git", "notes"]
 # The window (hob-gui). Without it, hob only runs with `--headless`.
-gui = ["dep:hob-gui"]
+gui = ["dep:hob-gui", "dep:dirs"]
+# Command sets, one per crate.
+demo = ["dep:hob-demo"]
+fs = ["dep:hob-fs"]
+git = ["dep:hob-git"]
+notes = ["dep:hob-notes", "dep:dirs"]
 
 [lints]
 workspace = true
