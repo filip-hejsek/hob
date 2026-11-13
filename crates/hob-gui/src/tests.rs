@@ -360,18 +360,67 @@ fn other_keys_take_the_searched_candidate() {
 }
 
 #[test]
-fn shift_space_takes_the_candidate_without_a_space() {
+fn shift_space_takes_the_candidate_and_cycles_its_endings() {
     let (mut shell, _dir) = shell_with_files();
+    let shift_space = |shell: &mut Shell| {
+        act(shell, Action::TakePick);
+        shell.prompt.text()
+    };
     type_into(&mut shell, "look ");
     act(&mut shell, Action::Complete);
     act(&mut shell, Action::Complete);
     type_into(&mut shell, "lt");
-    act(&mut shell, Action::TakePick);
-    assert_eq!(shell.prompt.text(), "look delta");
+    // With the delimiter, finished with a space, bare, and around again.
+    assert_eq!(shift_space(&mut shell), "look delta/");
     assert!(shell.offer.is_none());
+    assert_eq!(shift_space(&mut shell), "look delta ");
+    assert_eq!(shift_space(&mut shell), "look delta");
+    assert_eq!(shift_space(&mut shell), "look delta/");
+    // Without a delimiter, the quote is closed with the space.
+    shell.set_prompt("look 'al");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    assert_eq!(shift_space(&mut shell), "look 'alpha' ");
+    assert_eq!(shift_space(&mut shell), "look 'alpha");
+    assert_eq!(shift_space(&mut shell), "look 'alpha' ");
     // Otherwise, it types a space.
-    act(&mut shell, Action::TakePick);
-    assert_eq!(shell.prompt.text(), "look delta ");
+    type_into(&mut shell, "x");
+    assert_eq!(shift_space(&mut shell), "look 'alpha' x ");
+}
+
+#[test]
+fn shift_space_cycles_the_endings_of_other_ways_of_taking_a_candidate() {
+    let (mut shell, _dir) = shell_with_files();
+    let shift_space = |shell: &mut Shell| {
+        act(shell, Action::TakePick);
+        shell.prompt.text()
+    };
+    // Space.
+    type_into(&mut shell, "look 'al");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    type_into(&mut shell, " ");
+    assert_eq!(shell.prompt.text(), "look 'alpha' ");
+    assert_eq!(shift_space(&mut shell), "look 'alpha");
+    // The delimiter.
+    shell.set_prompt("look ");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    type_into(&mut shell, "lt/");
+    assert_eq!(shift_space(&mut shell), "look delta ");
+    // Tab, with only one candidate.
+    shell.set_prompt("look 'gam");
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look 'gamma' ");
+    assert_eq!(shift_space(&mut shell), "look 'gamma");
+    shell.set_prompt("look de");
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look delta/");
+    assert_eq!(shift_space(&mut shell), "look delta ");
+    // Moving the cursor stops it.
+    let left = text_editor::Action::Move(Motion::Left);
+    let _ = shell.update(Message::PromptEdited(left));
+    assert_eq!(shift_space(&mut shell), "look delta  ");
 }
 
 #[test]

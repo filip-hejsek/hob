@@ -441,9 +441,14 @@ and renders the island as an indented text outline.
   (`cd 'my dir'`), so Space and Enter finish it there. Typing the
   delimiter then gives the line completing it alone would
   (`cd 'my dir/`, quote still open), not the filled-in line plus `/`
-  (`cd 'my dir'/`), so the next Tab goes on inside the quote. hob-core
-  gives that line with each `Choice` (`continued`), since only it knows
-  the quoting.
+  (`cd 'my dir'/`), so the next Tab goes on inside the quote.
+- Since only hob-core knows the quoting, it gives each `Choice` in parts:
+  the bare line (`cd 'my dir`, quote open), its delimiter (`/`) and its
+  terminator (`'`, or nothing without a quote); a frontend puts the
+  endings together. With a single candidate it gives its `Choice` too
+  (`Completion::only`), so a frontend can offer the other endings.
+  Rejected: the finished lines only (`filled` and `continued`), which a
+  frontend can't take apart again.
 - Commands that work with any frontend (such as `help` and `messages`) are
   built into hob-core (`hob_core::builtins`), and registered by `hob`. The
   shell command `!` is registered separately (`register_shell`), so a
@@ -1073,12 +1078,20 @@ Works like a terminal: a scrollback with the prompt below it.
   nothing is picked, and the prompt shows the line from before picking
   with the query after it; Space or other chars then keep that text. Not
   ignoring the key silently was the point; the rest is tentative.
-  Shift+Space takes the picked candidate without a space (or, with no
-  match, the typed query); otherwise it types a space. Like Escape, it's a
+  Shift+Space takes the picked candidate with its first ending (or, with
+  no match, the typed query); otherwise it types a space. Once a
+  candidate is taken, by Tab (a single one), Space, its delimiter or
+  Shift+Space, Shift+Space cycles its endings: with the delimiter
+  (`cd 'my dir/`, if it has one), finished with a space (`cd 'my dir' `),
+  and bare (`cd 'my dir`). Bare is for going on with the word by hand,
+  e.g. a suffix, inside the quote. It stops when anything else changes the
+  line or moves the cursor; the shell keeps the taken `Choice` and which
+  ending is shown (`Taken`), and Shift+Space checks that the prompt still
+  shows it. Like Escape, it's a
   `Binding::Custom` decided by the shell. Matching uses nucleo-matcher
   (fzf's scoring, as in helix; it gives the match positions), without
-  grapheme segmentation, so positions are char indices. hob-core gives the filled-in line
-  for each candidate (`Completion::filled`). Escape works while nothing
+  grapheme segmentation, so positions are char indices. hob-core gives the parts
+  of each candidate's line (`Choice`). Escape works while nothing
   has focus too (e.g. after a click on the scrollback), and focuses the
   prompt again; otherwise, Escape unfocuses the prompt. The prompt's key
   bindings pass Escape to the shell, which decides when it's done: the

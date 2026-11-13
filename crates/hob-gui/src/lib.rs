@@ -21,8 +21,9 @@
 //! line; long lines wrap, and pasted line breaks become spaces). Up and Down
 //! browse the history, and Tab completes command names and arguments. Tab again, while candidates are
 //! listed, picks one (Tab and Shift+Tab move on, letters and digits search
-//! the candidates, Shift+Space takes the picked one without a space, Escape
-//! goes back to the line from before). Tab doesn't move focus. Anywhere, PageUp and
+//! the candidates, Escape goes back to the line from before). Once one is
+//! taken, Shift+Space cycles how it ends: with its delimiter (the `/` of a
+//! directory), with its closing quote and a space, or bare. Tab doesn't move focus. Anywhere, PageUp and
 //! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). Ctrl+D
 //! in the empty prompt, or while nothing has focus, exits (like `exit`), unless
 //! commands are running: then it says so, and focuses an island waiting for
@@ -229,6 +230,8 @@ struct Shell {
     /// The candidates Tab found, if there are several; shown above the
     /// prompt.
     offer: Option<Offer>,
+    /// The completion taken last, while Shift+Space cycles its endings.
+    taken: Option<Taken>,
     /// The key bindings.
     bindings: Vec<Binding>,
     /// The scrollback, oldest first.
@@ -256,10 +259,10 @@ enum Item {
 /// picked candidate is filled in to the prompt, and Tab and Shift+Tab pick
 /// another. While picking, letters and digits search the candidates (fuzzy,
 /// best match first, picked), and Backspace takes them back. Escape
-/// restores the line from before; Shift+Space takes the candidate as it is;
-/// anything else that changes the line ends the offer (so Space and Enter
-/// take the candidate); typing a candidate's delimiter (`/` after a
-/// directory) goes on as completing it alone would.
+/// restores the line from before; Shift+Space takes the candidate with its
+/// delimiter (see [`Taken`]); anything else that changes the line ends the
+/// offer (so Space and Enter take the candidate); typing a candidate's
+/// delimiter (`/` after a directory) goes on as completing it alone would.
 struct Offer {
     /// The candidates, and the line with each filled in.
     choices: Vec<Choice>,
@@ -324,8 +327,8 @@ impl Offer {
             let mut scored: Vec<(u16, Match)> = (self.choices.iter().enumerate())
                 .filter_map(|(index, choice)| {
                     // Without its delimiter (the `/` of a directory).
-                    let name = (choice.continued.as_ref())
-                        .and_then(|(d, _)| choice.shown.strip_suffix(*d))
+                    let name = (choice.delimiter)
+                        .and_then(|d| choice.shown.strip_suffix(d))
                         .unwrap_or(&choice.shown);
                     indices.clear();
                     let haystack = Utf32Str::new(name, &mut chars);
@@ -354,18 +357,46 @@ impl Offer {
     /// if none matches, the line from before with the query typed after it.
     fn line(&self) -> Option<String> {
         match self.picked() {
-            Some(choice) => Some(choice.filled.clone()),
+            Some(choice) => Some(choice.filled()),
             None => Some(format!("{}{}", self.before.as_ref()?, self.query)),
         }
     }
+}
 
-    /// The line with `c` typed after the picked candidate, if `c` is its
-    /// delimiter.
-    fn continued(&self, c: char) -> Option<String> {
-        match &self.picked()?.continued {
-            Some((delimiter, line)) if *delimiter == c => Some(line.clone()),
-            _ => None,
-        }
+/// A completion that was taken (by Tab, Space, its delimiter or
+/// Shift+Space), while Shift+Space cycles how it ends: with its delimiter
+/// (if it has one), finished with a space, and bare (quote still open).
+struct Taken {
+    choice: Choice,
+    /// Which of its endings the prompt shows.
+    ending: usize,
+}
+
+impl Taken {
+    /// The choice taken, if `line` is one of its endings.
+    fn find(choice: Choice, line: &str) -> Option<Self> {
+        let ending = Self::endings(&choice).iter().position(|e| e == line)?;
+        Some(Taken { choice, ending })
+    }
+
+    /// The lines with each ending, in the order Shift+Space cycles them.
+    fn endings(choice: &Choice) -> Vec<String> {
+        let bare = choice.bare.clone();
+        (choice.continued().into_iter())
+            .chain([choice.finished(), bare])
+            .collect()
+    }
+
+    /// The line with the ending shown.
+    fn line(&self) -> String {
+        Self::endings(&self.choice).swap_remove(self.ending)
+    }
+
+    /// Moves on to the next ending, and returns its line.
+    fn next(&mut self) -> String {
+        let endings = Self::endings(&self.choice);
+        self.ending = (self.ending + 1) % endings.len();
+        endings[self.ending].clone()
     }
 }
 
@@ -480,6 +511,7 @@ impl Shell {
             prompt: Content::new(),
             history: History::new(),
             offer: None,
+            taken: None,
             bindings: keys::defaults(),
             scrollback: Vec::new(),
             cleared_records: Vec::new(),
@@ -708,14 +740,23 @@ impl Shell {
                         return Task::none();
                     }
                 }
+                // Anything else stops cycling a taken completion's endings.
+                self.taken = None;
                 if action.is_edit() {
                     self.history.stop_browsing();
-                    let offer = self.offer.take();
-                    // Typing the picked candidate's delimiter goes on after it.
-                    if let A(Edit::Insert(c)) = action
-                        && let Some(line) = offer.and_then(|o| o.continued(c))
-                    {
-                        self.set_prompt(&line);
+                    let picked = self.offer.take().and_then(|o| o.picked().cloned());
+                    if let Some(choice) = picked {
+                        match (&action, choice.continued()) {
+                            // Typing its delimiter goes on as completing it
+                            // alone would.
+                            (A(Edit::Insert(c)), Some(line)) if choice.delimiter == Some(*c) => {
+                                self.set_prompt(&line);
+                            }
+                            _ => self.prompt.perform(action),
+                        }
+                        // If that took it (Space, or the delimiter),
+                        // Shift+Space then cycles its endings.
+                        self.taken = Taken::find(choice, &self.prompt.text());
                         return Task::none();
                     }
                 }
@@ -865,18 +906,31 @@ impl Shell {
                 let completion = interpreter.complete(&self.prompt.text());
                 self.offer =
                     (!completion.choices.is_empty()).then(|| Offer::new(completion.choices));
+                self.taken = (completion.only).and_then(|c| Taken::find(c, &completion.line));
                 self.history.stop_browsing();
                 Some(completion.line)
             }
             Action::PickPrevious => self.pick(-1),
             Action::TakePick => {
-                if self.offer.as_ref().is_some_and(Offer::picking) {
-                    // The prompt already shows the line.
-                    self.offer = None;
-                    return Task::none();
+                let text = self.prompt.text();
+                if let Some(taken) = self.taken.as_mut().filter(|t| t.line() == text) {
+                    Some(taken.next())
+                } else if let Some(offer) = self.offer.take_if(|o| o.picking()) {
+                    let Some(choice) = offer.picked() else {
+                        // The prompt already shows the query typed.
+                        return Task::none();
+                    };
+                    let taken = Taken {
+                        choice: choice.clone(),
+                        ending: 0,
+                    };
+                    let line = taken.line();
+                    self.taken = Some(taken);
+                    Some(line)
+                } else {
+                    let space = text_editor::Action::Edit(Edit::Insert(' '));
+                    return self.update(Message::PromptEdited(space));
                 }
-                let space = text_editor::Action::Edit(Edit::Insert(' '));
-                return self.update(Message::PromptEdited(space));
             }
             Action::CancelPick => {
                 let Some(offer) = self.offer.as_mut() else {
