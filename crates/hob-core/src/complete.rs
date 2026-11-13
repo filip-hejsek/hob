@@ -17,22 +17,35 @@ pub struct Completion {
     /// The line, completed as far as it's unambiguous.
     pub line: String,
     /// The possible completions, if there are several; otherwise empty.
-    /// Paths are shown by their last component, like a shell does.
-    pub candidates: Vec<String>,
-    /// For each candidate, the line with it filled in as a finished word
-    /// (its quote closed), but without a space after it: what a picker
-    /// shows while the candidate is picked.
-    pub filled: Vec<String>,
+    pub choices: Vec<Choice>,
+}
+
+/// One of several possible completions, as a picker offers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Choice {
+    /// How it's listed, with its delimiter. Paths are shown by their last
+    /// component, like a shell does.
+    pub shown: String,
+    /// The line with it filled in as a finished word (its quote closed),
+    /// but without its delimiter or a space after it: what a picker shows
+    /// while it's picked.
+    pub filled: String,
+    /// Its delimiter, if it has one (`/` after a directory), and the line
+    /// with the delimiter typed after it: as completing it alone gives it,
+    /// with its quote still open.
+    pub continued: Option<(char, String)>,
 }
 
 /// A possible completion of the word being typed.
 struct Candidate {
-    /// The whole word.
+    /// The whole word, without its delimiter.
     value: String,
-    /// How it's listed.
+    /// How it's listed, with its delimiter.
     shown: String,
-    /// Whether the word can go on (a directory): no space after it.
-    open: bool,
+    /// What ends the word while letting it go on (`/` after a directory):
+    /// completing it alone adds this instead of a space, but a picker
+    /// doesn't fill it in.
+    delimiter: Option<char>,
 }
 
 impl Candidate {
@@ -40,7 +53,7 @@ impl Candidate {
         Candidate {
             value: value.to_owned(),
             shown: value.to_owned(),
-            open: false,
+            delimiter: None,
         }
     }
 }
@@ -54,8 +67,7 @@ pub(crate) fn complete(
 ) -> Completion {
     let unchanged = Completion {
         line: line.to_owned(),
-        candidates: Vec::new(),
-        filled: Vec::new(),
+        choices: Vec::new(),
     };
     let home = line::home();
     let trimmed = line.trim_start();
@@ -96,36 +108,36 @@ pub(crate) fn complete(
             candidates(&expect, &ctx, typed)
         }
     };
+    let fill = |value: &str, done| rewrite(line, &partial, value, done, home.as_deref(), syntax);
+    // The word completed alone: with its delimiter, or finished.
+    let alone = |c: &Candidate| match c.delimiter {
+        Some(d) => fill(&format!("{}{d}", c.value), false),
+        None => fill(&c.value, true),
+    };
     match candidates.as_slice() {
         [] => unchanged,
         [only] => Completion {
-            line: rewrite(
-                line,
-                &partial,
-                &only.value,
-                !only.open,
-                home.as_deref(),
-                syntax,
-            ),
-            candidates: Vec::new(),
-            filled: Vec::new(),
+            line: alone(only),
+            choices: Vec::new(),
         },
         [first, rest @ ..] => {
             let len = (rest.iter()).fold(first.value.len(), |len, c| {
                 common_prefix_len(&first.value[..len], &c.value)
             });
-            let common = &first.value[..len];
-            let filled = (candidates.iter())
+            let choices = (candidates.iter())
                 .map(|c| {
-                    let mut line = rewrite(line, &partial, &c.value, true, home.as_deref(), syntax);
-                    line.pop(); // The space.
-                    line
+                    let mut filled = fill(&c.value, true);
+                    filled.pop(); // The space.
+                    Choice {
+                        shown: c.shown.clone(),
+                        filled,
+                        continued: c.delimiter.map(|d| (d, alone(c))),
+                    }
                 })
                 .collect();
             Completion {
-                line: rewrite(line, &partial, common, false, home.as_deref(), syntax),
-                candidates: candidates.into_iter().map(|c| c.shown).collect(),
-                filled,
+                line: fill(&first.value[..len], false),
+                choices,
             }
         }
     }
@@ -226,7 +238,7 @@ enum Filter {
 
 /// The paths that `typed` (relative to `cwd`) can be completed to: the
 /// entries of its directory that start with its last component. Hidden ones
-/// only if that starts with `.`. Directories end with `/`.
+/// only if that starts with `.`. Directories have `/` as their delimiter.
 fn paths(cwd: &Path, typed: &str, filter: Filter) -> Vec<Candidate> {
     let (dir, base) = match typed.rfind('/') {
         Some(i) => typed.split_at(i + 1),
@@ -254,9 +266,9 @@ fn paths(cwd: &Path, typed: &str, filter: Filter) -> Vec<Candidate> {
             }
             let slash = if is_dir { "/" } else { "" };
             Some(Candidate {
-                value: format!("{dir}{name}{slash}"),
+                value: format!("{dir}{name}"),
                 shown: format!("{name}{slash}"),
-                open: is_dir,
+                delimiter: is_dir.then_some('/'),
             })
         })
         .collect();
@@ -284,6 +296,36 @@ fn common_prefix_len(a: &str, b: &str) -> usize {
     a.char_indices()
         .find(|&(i, c)| !b[i..].starts_with(c))
         .map_or(a.len(), |(i, _)| i)
+}
+
+/// A completion without the filled-in lines, for tests.
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Listed {
+    /// The completed line.
+    pub(crate) line: String,
+    /// How the choices are listed.
+    pub(crate) candidates: Vec<String>,
+}
+
+#[cfg(test)]
+impl Listed {
+    pub(crate) fn new(line: &str, candidates: &[&str]) -> Self {
+        Listed {
+            line: line.to_owned(),
+            candidates: candidates.iter().map(|&c| c.to_owned()).collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<Completion> for Listed {
+    fn from(c: Completion) -> Self {
+        Listed {
+            line: c.line,
+            candidates: c.choices.into_iter().map(|c| c.shown).collect(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -338,33 +380,74 @@ mod tests {
         (i, dir)
     }
 
-    fn completion(line: &str, candidates: &[&str]) -> Completion {
-        Completion {
-            line: line.to_owned(),
-            candidates: candidates.iter().map(|&c| c.to_owned()).collect(),
-            filled: Vec::new(),
-        }
+    fn completion(line: &str, candidates: &[&str]) -> Listed {
+        Listed::new(line, candidates)
     }
 
     /// Completes `line`, leaving out the filled-in lines, which
     /// [`fills_in_candidates`] checks.
-    fn complete(i: &Interpreter, line: &str) -> Completion {
-        Completion {
-            filled: Vec::new(),
-            ..i.complete(line)
-        }
+    fn complete(i: &Interpreter, line: &str) -> Listed {
+        i.complete(line).into()
+    }
+
+    /// The filled-in lines of completing `line`.
+    fn filled(i: &Interpreter, line: &str) -> Vec<String> {
+        (i.complete(line).choices.into_iter())
+            .map(|c| c.filled)
+            .collect()
+    }
+
+    /// The lines with each candidate's delimiter typed after it.
+    fn continued(i: &Interpreter, line: &str) -> Vec<Option<(char, String)>> {
+        (i.complete(line).choices.into_iter())
+            .map(|c| c.continued)
+            .collect()
     }
 
     #[test]
     fn fills_in_candidates() {
         let (i, _dir) = setup();
-        assert_eq!(i.complete("ls n").filled, [r"ls new\ file", "ls notes.txt"]);
+        assert_eq!(filled(&i, "ls n"), [r"ls new\ file", "ls notes.txt"]);
+        assert_eq!(filled(&i, "ls 'n"), ["ls 'new file'", "ls 'notes.txt'"]);
+        assert_eq!(continued(&i, "ls n"), [None, None]);
+        // Without the delimiter.
+        assert_eq!(filled(&i, "cd s"), ["cd sub", "cd subway"]);
+        assert_eq!(filled(&i, "ls --c"), [""; 0]);
+    }
+
+    #[test]
+    fn continues_after_a_delimiter_as_completing_alone_does() {
+        let (i, dir) = setup();
+        fs::create_dir_all(dir.path().join("dir/nested dir")).unwrap();
+        fs::create_dir_all(dir.path().join("dir/new")).unwrap();
+        let slash = |line: &str| Some(('/', line.to_owned()));
+        assert_eq!(complete(&i, "cd dir/").candidates, ["nested dir/", "new/"]);
+        assert_eq!(filled(&i, "cd dir/"), [r"cd dir/nested\ dir", "cd dir/new"]);
         assert_eq!(
-            i.complete("ls 'n").filled,
-            ["ls 'new file'", "ls 'notes.txt'"]
+            continued(&i, "cd dir/"),
+            [slash(r"cd dir/nested\ dir/"), slash("cd dir/new/")]
         );
-        assert_eq!(i.complete("cd s").filled, ["cd sub/", "cd subway/"]);
-        assert_eq!(i.complete("ls --c").filled, [""; 0]);
+        // The quote is closed while picking, but left open to go on.
+        assert_eq!(
+            filled(&i, "cd 'dir/"),
+            ["cd 'dir/nested dir'", "cd 'dir/new'"]
+        );
+        assert_eq!(
+            continued(&i, "cd 'dir/"),
+            [slash("cd 'dir/nested dir/"), slash("cd 'dir/new/")]
+        );
+        assert_eq!(
+            continued(&i, r#"cd "dir/"#)[0],
+            slash(r#"cd "dir/nested dir/"#)
+        );
+        assert_eq!(
+            complete(&i, "cd 'dir/ne"),
+            completion("cd 'dir/ne", &["nested dir/", "new/"])
+        );
+        assert_eq!(
+            complete(&i, "cd 'dir/nes"),
+            completion("cd 'dir/nested dir/", &[])
+        );
     }
 
     #[test]
@@ -503,11 +586,8 @@ mod tests {
     }
 
     /// Like [`sh_filled`], leaving out the filled-in lines.
-    fn sh(line: &str) -> Completion {
-        Completion {
-            filled: Vec::new(),
-            ..sh_filled(line)
-        }
+    fn sh(line: &str) -> Listed {
+        sh_filled(line).into()
     }
 
     #[test]
@@ -540,9 +620,9 @@ mod tests {
         assert_eq!(sh("!cat a"), completion(r"!cat a\$b.txt ", &[]));
         assert_eq!(sh(r#"!cat "a"#), completion(r#"!cat "a\$b.txt" "#, &[]));
         assert_eq!(sh("!cat 'a"), completion("!cat 'a$b.txt' ", &[]));
-        assert_eq!(
-            sh_filled("!cat ").filled[..2],
-            [r"!cat a\$b.txt", "!cat bin/"]
-        );
+        let filled: Vec<String> = (sh_filled("!cat ").choices.into_iter())
+            .map(|c| c.filled)
+            .collect();
+        assert_eq!(filled[..2], [r"!cat a\$b.txt", "!cat bin"]);
     }
 }

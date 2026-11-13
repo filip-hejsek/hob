@@ -54,7 +54,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use hob_core::{
-    History, Interpreter, Level, Limits, LogRecord, Reply, Request, Session, SessionError, Trim,
+    Choice, History, Interpreter, Level, Limits, LogRecord, Reply, Request, Session, SessionError,
+    Trim,
 };
 use iced::advanced::widget::operation::{
     Focusable, Outcome as OperationOutcome, Scrollable, focusable,
@@ -243,14 +244,26 @@ enum Item {
 /// Candidates offered by Tab completion. Tab again starts picking one: the
 /// picked candidate is filled in to the prompt, and Tab and Shift+Tab pick
 /// another. Escape restores the line from before; anything that changes the
-/// line ends the offer (so Space and Enter take the candidate).
+/// line ends the offer (so Space and Enter take the candidate); typing a
+/// candidate's delimiter (`/` after a directory) goes on as completing it
+/// alone would.
 struct Offer {
-    /// How the candidates are listed.
-    candidates: Vec<String>,
-    /// The line with each candidate filled in.
-    filled: Vec<String>,
+    /// The candidates, and the line with each filled in.
+    choices: Vec<Choice>,
     /// The candidate picked, if picking, and the line from before.
     picked: Option<(usize, String)>,
+}
+
+impl Offer {
+    /// The line with `c` typed after the picked candidate, if `c` is its
+    /// delimiter.
+    fn continued(&self, c: char) -> Option<String> {
+        let (index, _) = self.picked.as_ref()?;
+        match &self.choices[*index].continued {
+            Some((delimiter, line)) if *delimiter == c => Some(line.clone()),
+            _ => None,
+        }
+    }
 }
 
 /// A command line and its output.
@@ -576,7 +589,14 @@ impl Shell {
                 };
                 if action.is_edit() {
                     self.history.stop_browsing();
-                    self.offer = None;
+                    let offer = self.offer.take();
+                    // Typing the picked candidate's delimiter goes on after it.
+                    if let A(Edit::Insert(c)) = action
+                        && let Some(line) = offer.and_then(|o| o.continued(c))
+                    {
+                        self.set_prompt(&line);
+                        return Task::none();
+                    }
                 }
                 self.prompt.perform(action);
                 Task::none()
@@ -722,9 +742,8 @@ impl Shell {
                     return Task::none();
                 };
                 let completion = interpreter.complete(&self.prompt.text());
-                self.offer = (!completion.candidates.is_empty()).then_some(Offer {
-                    candidates: completion.candidates,
-                    filled: completion.filled,
+                self.offer = (!completion.choices.is_empty()).then_some(Offer {
+                    choices: completion.choices,
                     picked: None,
                 });
                 self.history.stop_browsing();
@@ -767,7 +786,7 @@ impl Shell {
     /// yet, starts picking with the first (or, going back, the last).
     fn pick(&mut self, step: isize) -> Option<String> {
         let offer = self.offer.as_mut()?;
-        let len = offer.filled.len();
+        let len = offer.choices.len();
         let index = match &offer.picked {
             Some((index, _)) => (*index as isize + step).rem_euclid(len as isize) as usize,
             None if step < 0 => len - 1,
@@ -778,7 +797,7 @@ impl Shell {
             None => self.prompt.text(),
         };
         offer.picked = Some((index, before));
-        Some(offer.filled[index].clone())
+        Some(offer.choices[index].filled.clone())
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -1354,7 +1373,7 @@ fn view_block<'a>(block: &'a Block, level: Level, name: &str) -> Element<'a, Mes
 /// colour.
 fn view_offer(offer: &Offer) -> Element<'_, Message> {
     let picked = offer.picked.as_ref().map(|(index, _)| *index);
-    let candidates = offer.candidates.iter().enumerate().map(|(i, candidate)| {
+    let candidates = offer.choices.iter().enumerate().map(|(i, choice)| {
         let style = move |theme: &Theme| match picked == Some(i) {
             true => {
                 let primary = theme.extended_palette().primary.base;
@@ -1364,7 +1383,7 @@ fn view_offer(offer: &Offer) -> Element<'_, Message> {
             }
             false => container::Style::default(),
         };
-        container(text(candidate))
+        container(text(&choice.shown))
             .padding(padding::horizontal(spacing() / 2.0))
             .style(style)
             .into()

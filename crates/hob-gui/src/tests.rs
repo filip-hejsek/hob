@@ -5,6 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures_channel::mpsc;
+use hob_core::args::{Kind, Spec};
 use iced::{Size, mouse};
 use iced_test::emulator::{Emulator, Event, Mode};
 use iced_test::instruction::{Expectation, Interaction, Key, Keyboard, Mouse, Target};
@@ -206,6 +207,32 @@ fn escape_restores_the_line_from_before_picking() {
     shell.step(typewrite("ay hi"));
     shell.step(press(Key::Enter));
     shell.expect("> say hi");
+}
+
+#[test]
+fn typing_the_delimiter_goes_on_into_the_picked_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("nested dir")).unwrap();
+    std::fs::create_dir(dir.path().join("new")).unwrap();
+    std::fs::write(dir.path().join("notes"), "").unwrap();
+    let dir = dir.path().display().to_string();
+    let mut shell = start(None);
+    shell.step(click(PLACEHOLDER));
+    shell.step(typewrite(&format!("look '{dir}/")));
+    shell.update(Message::Action(Action::Complete));
+    // Picks "nested dir", filled in with its quote closed.
+    shell.update(Message::Action(Action::Complete));
+    // The quote is open again after the slash, as if completed alone.
+    shell.step(typewrite("/x'"));
+    shell.step(press(Key::Enter));
+    shell.expect(&format!("{dir}/nested dir/x"));
+    // A slash after a file is just typed.
+    shell.step(typewrite(&format!("look '{dir}/")));
+    shell.update(Message::Action(Action::Complete));
+    shell.update(Message::Action(Action::PickPrevious));
+    shell.step(typewrite("/ y"));
+    shell.step(press(Key::Enter));
+    shell.expect(&format!("{dir}/notes/ | y"));
 }
 
 #[test]
@@ -727,6 +754,11 @@ fn interpreter() -> Interpreter {
     hob_core::builtins::register(&mut interpreter);
     interpreter.register("say", "Print the arguments", |ctx, args| {
         ctx.print(args.join(" "));
+        Ok(())
+    });
+    let paths = Spec::new().arg("PATH", Kind::Path).optional().repeated();
+    interpreter.register_spec("look", "Print the paths", paths, |ctx, args| {
+        ctx.print(args.values("PATH").join(" | "));
         Ok(())
     });
     interpreter.register("sing", "Print a song", |ctx, _| {

@@ -433,6 +433,17 @@ and renders the island as an indented text outline.
   quote is continued, and closed if the word is finished; otherwise
   backslashes), and a `~` stays a `~`. Commands without a spec, and text
   arguments, aren't completed.
+- A candidate may have a delimiter, which ends the word but lets it go on
+  (so far only the `/` of a directory; the rule is for all future
+  completions too). Completing it alone adds the delimiter instead of a
+  space, with any quote left open. The list shows it, but a picker
+  doesn't fill it in: a picked directory is filled in as a finished word
+  (`cd 'my dir'`), so Space and Enter finish it there. Typing the
+  delimiter then gives the line completing it alone would
+  (`cd 'my dir/`, quote still open), not the filled-in line plus `/`
+  (`cd 'my dir'/`), so the next Tab goes on inside the quote. hob-core
+  gives that line with each `Choice` (`continued`), since only it knows
+  the quoting.
 - Commands that work with any frontend (such as `help` and `messages`) are
   built into hob-core (`hob_core::builtins`), and registered by `hob`. The
   shell command `!` is registered separately (`register_shell`), so a
@@ -1015,12 +1026,13 @@ Works like a terminal: a scrollback with the prompt below it.
 - Tab again, while candidates are listed, picks one, a bit like zsh's menu
   completion: the picked one has a box of the primary colour (no border)
   and is filled in to the prompt as a finished word (quote closed), but
-  without the space. Tab and Shift+Tab pick the next and previous,
+  without the space or its delimiter (see hob-core). Tab and Shift+Tab pick the next and previous,
   wrapping (Shift+Tab first picks the last). Escape restores the line from
   before picking, and keeps the list. Anything else that changes the line
   ends it, so Space and Enter need no handling of their own: Space takes
   the candidate and adds the space, Enter takes it and runs the line, and
-  typing other text goes on after it. hob-core gives the filled-in line
+  typing other text goes on after it (typing the candidate's delimiter
+  gives its `continued` line). hob-core gives the filled-in line
   for each candidate (`Completion::filled`). Escape works while nothing
   has focus too (e.g. after a click on the scrollback), and focuses the
   prompt again; otherwise, Escape unfocuses the prompt. The prompt's key

@@ -20,6 +20,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 iced_test = "0.14"
+tempfile.workspace = true
 
 [lints]
 workspace = true

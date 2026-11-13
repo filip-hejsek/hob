@@ -66,7 +66,7 @@ use futures_channel::mpsc;
 use futures_core::Stream;
 use kettle_ui::{FrozenIsland, IslandBuilder, Outcome};
 
-pub use complete::Completion;
+pub use complete::{Choice, Completion};
 pub use history::History;
 pub use line::{quote, trim_line_end};
 pub use record::{Level, LogRecord};
@@ -861,21 +861,14 @@ mod tests {
         assert_eq!(printed(&mut requests), "the island was closed");
     }
 
-    fn completion(line: &str, candidates: &[&str]) -> Completion {
-        Completion {
-            line: line.to_owned(),
-            candidates: candidates.iter().map(|&c| c.to_owned()).collect(),
-            filled: Vec::new(),
-        }
+    fn completion(line: &str, candidates: &[&str]) -> complete::Listed {
+        complete::Listed::new(line, candidates)
     }
 
     /// Completes `line`, leaving out the filled-in lines (tested in
     /// `complete`).
-    fn complete(i: &Interpreter, line: &str) -> Completion {
-        Completion {
-            filled: Vec::new(),
-            ..i.complete(line)
-        }
+    fn complete(i: &Interpreter, line: &str) -> complete::Listed {
+        i.complete(line).into()
     }
 
     #[test]
