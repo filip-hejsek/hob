@@ -1113,9 +1113,12 @@ Works like a terminal: a scrollback with the prompt below it.
   the text out again as the editor does (an `iced_graphics` `Paragraph`,
   whose cosmic-text buffer tells which row has the cursor), and scrolls
   as little as needed to show the cursor's row with half a row above and
-  below it (less on the first and last row), so that a row cut off at an
-  edge hints at more. It does so only when the text, width or cursor
-  changed, so the wheel can scroll away from the cursor.
+  below it (less on the first and last row, or when there's no room), so
+  that a row cut off at an edge hints at more. If even the row doesn't fit,
+  it keeps any offset that shows part of it, so it doesn't flip between
+  the row's ends each time it's laid out. It does so only when the text,
+  width, cursor or its height changed, so the wheel can scroll away from
+  the cursor.
 - The command line has one line: Enter runs it, and Up and Down always
   browse the history. Pasted line breaks become spaces, and those at the
   ends are dropped, so a leading one can't make the line private.

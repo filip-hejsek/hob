@@ -177,8 +177,9 @@ impl<Message> Widget<Message, Theme, Renderer> for Prompt<'_, Message> {
             // The row is below the editor's padding; leave half a row
             // above and below it.
             let mut reveal = Reveal {
-                top: TOP + top - height / 2.0,
-                bottom: TOP + top + height * 1.5,
+                top: TOP + top,
+                bottom: TOP + top + height,
+                margin: height / 2.0,
             };
             let layout = Layout::new(&node);
             (self.scrollable).operate(&mut tree.children[0], layout, renderer, &mut reveal);
@@ -292,26 +293,26 @@ fn cursor_row(rows: &Paragraph, cursor: Position) -> Option<(f32, f32)> {
     Some((run.line_top, run.line_height))
 }
 
-/// Scrolls the scrollable so that `top..bottom` of its content is shown,
-/// or as much of it as there is.
+/// Scrolls the scrollable so that `top..bottom` of its content is shown
+/// (with margins, if there's room), or as much of it as fits.
 pub(crate) struct Reveal {
     pub(crate) top: f32,
     pub(crate) bottom: f32,
+    /// How much to show above and below it too, if there's room.
+    pub(crate) margin: f32,
 }
 
 impl Reveal {
     /// The offset to scroll to from `offset`, with `height` of `content`
-    /// shown, if it has to change: as little as needed.
+    /// shown, if it has to change: as little as needed. If it doesn't fit,
+    /// any part of it will do, so the offset doesn't flip between its ends.
     fn offset(&self, offset: f32, height: f32, content: f32) -> Option<f32> {
-        let top = self.top.max(0.0);
-        let bottom = self.bottom.min(content);
-        if top < offset {
-            Some(top)
-        } else if bottom > offset + height {
-            Some(bottom - height)
-        } else {
-            None
-        }
+        // The margins shrink to fit.
+        let margin = ((height - (self.bottom - self.top)) / 2.0).clamp(0.0, self.margin);
+        let (top, bottom) = (self.top - margin, self.bottom + margin);
+        let (low, high) = (top.min(bottom - height), top.max(bottom - height));
+        let to = offset.clamp(low, high).min(content - height).max(0.0);
+        (to != offset).then_some(to)
     }
 }
 
@@ -390,6 +391,7 @@ mod tests {
         let reveal = Reveal {
             top: 100.0,
             bottom: 120.0,
+            margin: 0.0,
         };
         // Shown already.
         assert_eq!(reveal.offset(50.0, 100.0, 500.0), None);
@@ -401,12 +403,45 @@ mod tests {
         let first = Reveal {
             top: -10.0,
             bottom: 30.0,
+            margin: 0.0,
         };
         assert_eq!(first.offset(50.0, 100.0, 500.0), Some(0.0));
         let last = Reveal {
             top: 480.0,
             bottom: 520.0,
+            margin: 0.0,
         };
         assert_eq!(last.offset(0.0, 100.0, 500.0), Some(400.0));
+    }
+
+    #[test]
+    fn reveal_keeps_the_offset_if_it_shows_part_of_what_doesnt_fit() {
+        let tall = Reveal {
+            top: 100.0,
+            bottom: 200.0,
+            margin: 0.0,
+        };
+        assert_eq!(tall.offset(120.0, 50.0, 500.0), None);
+        assert_eq!(tall.offset(150.0, 50.0, 500.0), None);
+        assert_eq!(tall.offset(0.0, 50.0, 500.0), Some(100.0));
+        assert_eq!(tall.offset(300.0, 50.0, 500.0), Some(150.0));
+    }
+
+    #[test]
+    fn reveal_margins_shrink_to_fit() {
+        let row = Reveal {
+            top: 100.0,
+            bottom: 120.0,
+            margin: 10.0,
+        };
+        // Room for the margins.
+        assert_eq!(row.offset(0.0, 100.0, 500.0), Some(30.0));
+        // Room for half of them; then no more scrolling.
+        assert_eq!(row.offset(0.0, 30.0, 500.0), Some(95.0));
+        assert_eq!(row.offset(95.0, 30.0, 500.0), None);
+        // No room: the row itself.
+        assert_eq!(row.offset(0.0, 15.0, 500.0), Some(100.0));
+        assert_eq!(row.offset(105.0, 15.0, 500.0), None);
+        assert_eq!(row.offset(100.0, 15.0, 500.0), None);
     }
 }

@@ -118,6 +118,7 @@ impl<Message> Widget<Message, Theme, Renderer> for Follow<'_, Message> {
                 let mut reveal = Reveal {
                     top: target.y,
                     bottom: target.y + target.height,
+                    margin: 0.0,
                 };
                 (self.scrollable).operate(&mut tree.children[0], layout, renderer, &mut reveal);
             }
