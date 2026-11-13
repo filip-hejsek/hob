@@ -59,3 +59,9 @@ TODO.md.
   no longer lists them after a restart.
 - Edits in a live island are only saved on close (or with the next
   scrollback change), so a crash loses them.
+- Upstream (winit 0.30 on Wayland, calloop): releasing a repeating key
+  sometimes logs "[calloop] Received an event for non-existence source"
+  (about 1 in 10 key releases). If the key release and the due repeat
+  timer come back from the same poll, the Wayland event goes first and
+  winit removes the timer; calloop then warns about the timer's event.
+  Harmless: no key is lost or repeated. Still present in calloop 0.14.
