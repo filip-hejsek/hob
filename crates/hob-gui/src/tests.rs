@@ -823,7 +823,19 @@ fn escape_cancels_an_island() {
     shell.settle();
     shell.step(typewrite("Ann"));
     shell.step(press(Key::Escape));
+    // The subscription sees the Escape the island took, and leaves it be.
+    let escape = keyboard::Key::Named(keyboard::key::Named::Escape);
+    shell.update(Message::Key(
+        escape,
+        Modifiers::empty(),
+        event::Status::Captured,
+    ));
     shell.expect("Not greeting.");
+    shell.settle();
+    // The prompt has focus.
+    shell.step(typewrite("say hi"));
+    shell.step(press(Key::Enter));
+    shell.expect("> say hi");
 }
 
 #[test]
