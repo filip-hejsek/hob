@@ -1060,8 +1060,20 @@ Works like a terminal: a scrollback with the prompt below it.
   without the space or its delimiter (see hob-core), with the cursor
   before its terminator (`cd 'my dir|'`), where typed text goes. Tab and
   Shift+Tab pick the next and previous, wrapping (Shift+Tab first picks
-  the last). Escape restores the line from before picking, and keeps the
-  list; Escape again hides it. Anything else that changes the line ends it, taking the
+  the last). The arrows pick too, as the candidates are laid out (rows
+  wrapped like text): Left and Right do what Shift+Tab and Tab do, Up
+  and Down pick the candidate in the row above or below whose centre
+  is closest horizontally (the first of equally close ones), wrapping
+  from the last row to the first and back. Only while picking: otherwise
+  they browse the history and move the cursor, as before, so Tab still
+  starts picking. Like Escape, they're `Binding::Custom`s decided by the
+  shell. Up and Down get the candidates' bounds from an operation (each
+  candidate's container has an id), then pick in a second message, which
+  ignores bounds that don't match the list any more. Rejected: picking
+  by index with a fixed number of columns, since candidates differ in
+  width. Without a match, the arrows do nothing. Escape restores the
+  line from before picking, and keeps the list; Escape again hides it.
+  Anything else that changes the line ends it, taking the
   candidate: its delimiter gives the line with it (`cd 'my dir/`), Space
   finishes it with a space (`cd 'my dir' `), Shift+Space leaves it bare
   (`cd 'my dir`), and other typed or pasted text goes after it bare

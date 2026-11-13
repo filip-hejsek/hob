@@ -6,10 +6,18 @@ use iced::keyboard::{Key, Modifiers, key::Named};
 /// Something a key binding does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
-    /// The previous line in the history.
-    HistoryBack,
-    /// The next line in the history.
-    HistoryForward,
+    /// Picks the candidate above the picked one, while picking; otherwise
+    /// the previous line in the history.
+    Up,
+    /// Picks the candidate below the picked one, while picking; otherwise
+    /// the next line in the history.
+    Down,
+    /// Picks the previous candidate, while picking; otherwise moves the
+    /// cursor left.
+    Left,
+    /// Picks the next candidate, while picking; otherwise moves the cursor
+    /// right.
+    Right,
     /// Completes the word being typed; once candidates are listed, picks
     /// the next one.
     Complete,
@@ -45,8 +53,10 @@ impl Action {
     /// Where focus must be for it to work.
     pub(crate) fn scope(self) -> Scope {
         match self {
-            Action::HistoryBack
-            | Action::HistoryForward
+            Action::Up
+            | Action::Down
+            | Action::Left
+            | Action::Right
             | Action::Complete
             | Action::PickPrevious
             | Action::TakePick => Scope::Prompt,
@@ -81,8 +91,10 @@ pub(crate) fn defaults() -> Vec<Binding> {
     let shift = |key, action| Binding::new(Key::Named(key), Modifiers::SHIFT, action);
     let ctrl = |c: &str, action| Binding::new(Key::Character(c.into()), Modifiers::CTRL, action);
     vec![
-        named(Named::ArrowUp, Action::HistoryBack),
-        named(Named::ArrowDown, Action::HistoryForward),
+        named(Named::ArrowUp, Action::Up),
+        named(Named::ArrowDown, Action::Down),
+        named(Named::ArrowLeft, Action::Left),
+        named(Named::ArrowRight, Action::Right),
         named(Named::Tab, Action::Complete),
         shift(Named::Tab, Action::PickPrevious),
         shift(Named::Space, Action::TakePick),

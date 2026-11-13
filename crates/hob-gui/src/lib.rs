@@ -20,7 +20,8 @@
 //! The prompt works like a shell's: Enter runs the command line (it has one
 //! line; long lines wrap, and pasted line breaks become spaces). Up and Down
 //! browse the history, and Tab completes command names and arguments. Tab again, while candidates are
-//! listed, picks one (Tab and Shift+Tab move on, letters and digits search
+//! listed, picks one (Tab and Shift+Tab move on, as do the arrows, as the
+//! candidates are laid out; letters and digits search
 //! the candidates, Escape goes back to the line from before). Taking one
 //! with Space finishes it, Shift+Space leaves it bare (quote still open),
 //! and its delimiter (the `/` of a directory) goes on into it; Shift+Space
@@ -208,6 +209,9 @@ const SCROLLBACK: &str = "scrollback";
 /// The id of the picked completion candidate, kept in view.
 const PICKED: &str = "picked";
 
+/// The id of the other listed candidates, to find their bounds.
+const CANDIDATE: &str = "candidate";
+
 struct Shell {
     /// Runs commands; without one, the shell is a read-only preview.
     interpreter: Option<Arc<Interpreter>>,
@@ -257,8 +261,8 @@ enum Item {
 }
 
 /// Candidates offered by Tab completion. Tab again starts picking one: the
-/// picked candidate is filled in to the prompt, and Tab and Shift+Tab pick
-/// another. While picking, letters and digits search the candidates (fuzzy,
+/// picked candidate is filled in to the prompt, and Tab and Shift+Tab (or
+/// the arrows) pick another. While picking, letters and digits search the candidates (fuzzy,
 /// best match first, picked), and Backspace takes them back. Escape, or
 /// Backspace without a query, restores the line from before; Escape again
 /// hides the candidates. Anything else that changes the line ends the
@@ -449,6 +453,9 @@ enum Message {
     Action(Action),
     /// Moves focus, depending on what has it now (the Id).
     Refocus(Refocus, Option<Id>),
+    /// Picks the candidate below the picked one (above, if false), given
+    /// the bounds of the listed candidates, in order.
+    PickVertically(bool, Vec<Rectangle>),
     /// A request from the command of a block.
     Request(BlockId, Pending<Request>),
     Island(IslandId, kettle_ui_iced::Message),
@@ -823,6 +830,20 @@ impl Shell {
                 operation::focus(Id::new(PROMPT))
             }
             Message::Refocus(target, focused) => self.refocus(target, focused),
+            Message::PickVertically(down, bounds) => {
+                let Some(offer) = self.offer.as_mut().filter(|o| o.picking()) else {
+                    return Task::none();
+                };
+                // The bounds may be from before the list changed.
+                if let Some(picked) = offer.picked
+                    && bounds.len() == offer.matches.len()
+                    && let Some(index) = vertical_neighbour(&bounds, picked, down)
+                {
+                    offer.picked = Some(index);
+                    self.show_pick();
+                }
+                Task::none()
+            }
             Message::Request(block, request) => match request.take() {
                 Some(request) => {
                     let ephemeral = match &request {
@@ -917,13 +938,35 @@ impl Shell {
             return Task::none();
         }
         let line = match action {
-            Action::HistoryBack => {
+            // While picking, the arrows pick a candidate, as they're laid
+            // out; Up and Down need their bounds for that.
+            Action::Up | Action::Down if self.offer.as_ref().is_some_and(Offer::picking) => {
+                let down = action == Action::Down;
+                return candidate_bounds().map(move |bounds| Message::PickVertically(down, bounds));
+            }
+            Action::Left if self.offer.as_ref().is_some_and(Offer::picking) => {
+                self.pick(-1);
+                None
+            }
+            Action::Right if self.offer.as_ref().is_some_and(Offer::picking) => {
+                self.pick(1);
+                None
+            }
+            Action::Up => {
                 self.offer = None;
                 self.history.back(&self.prompt.text()).map(str::to_owned)
             }
-            Action::HistoryForward => {
+            Action::Down => {
                 self.offer = None;
                 self.history.forward().map(str::to_owned)
+            }
+            Action::Left | Action::Right => {
+                let motion = match action {
+                    Action::Left => Motion::Left,
+                    _ => Motion::Right,
+                };
+                let motion = text_editor::Action::Move(motion);
+                return self.update(Message::PromptEdited(motion));
             }
             Action::Complete if self.offer.is_some() => {
                 self.pick(1);
@@ -1431,6 +1474,55 @@ fn focused() -> Task<Option<Id>> {
     operate(Focused(None))
 }
 
+/// The bounds of the listed candidates, in order.
+fn candidate_bounds() -> Task<Vec<Rectangle>> {
+    struct Candidates(Vec<Rectangle>);
+
+    impl Operation<Vec<Rectangle>> for Candidates {
+        fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
+            if id.is_some_and(|id| *id == Id::new(PICKED) || *id == Id::new(CANDIDATE)) {
+                self.0.push(bounds);
+            }
+        }
+
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<Vec<Rectangle>>)) {
+            operate(self);
+        }
+
+        fn finish(&self) -> OperationOutcome<Vec<Rectangle>> {
+            OperationOutcome::Some(self.0.clone())
+        }
+    }
+
+    operate(Candidates(Vec::new()))
+}
+
+/// The candidate in the row below the one at `from` (above, if not
+/// `down`), wrapping around, that's closest to it horizontally (the first
+/// of equally close ones), given the candidates' `bounds` in order, rows
+/// wrapped like text. `None` if there's only one row.
+fn vertical_neighbour(bounds: &[Rectangle], from: usize, down: bool) -> Option<usize> {
+    // Where each row starts; a row starts where a candidate is below the
+    // one before it.
+    let starts: Vec<usize> = (0..bounds.len())
+        .filter(|&i| i == 0 || bounds[i].y > bounds[i - 1].y + 0.5)
+        .collect();
+    if starts.len() < 2 {
+        return None;
+    }
+    let row = starts.iter().rposition(|&start| start <= from)?;
+    let target = match down {
+        true => (row + 1) % starts.len(),
+        false => (row + starts.len() - 1) % starts.len(),
+    };
+    let end = starts.get(target + 1).copied().unwrap_or(bounds.len());
+    let x = bounds[from].center_x();
+    (starts[target]..end).min_by(|&a, &b| {
+        let distance = |i: usize| (bounds[i].center_x() - x).abs();
+        distance(a).total_cmp(&distance(b))
+    })
+}
+
 /// Scrolls the scrollback up by `pages` pages (down if negative).
 fn scroll_page<T: Send + 'static>(pages: f32) -> Task<T> {
     scroll_by(Amount::Pages(pages))
@@ -1585,9 +1677,11 @@ fn prompt_binding(bindings: &[Binding], key: KeyPress) -> Option<text_editor::Bi
         // are listed), since keys pressed before the next view would see a
         // stale state here.
         Some(
-            action @ (Action::HistoryBack
+            action @ (Action::Up
             | Action::CancelPick
-            | Action::HistoryForward
+            | Action::Down
+            | Action::Left
+            | Action::Right
             | Action::Complete
             | Action::PickPrevious
             | Action::TakePick
@@ -1666,7 +1760,7 @@ fn view_offer(offer: &Offer) -> Element<'_, Message> {
         match picked == Some(i) {
             // Kept in view.
             true => candidate.id(Id::new(PICKED)).into(),
-            false => candidate.into(),
+            false => candidate.id(Id::new(CANDIDATE)).into(),
         }
     });
     row(candidates).spacing(spacing()).wrap().into()

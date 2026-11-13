@@ -179,6 +179,100 @@ fn tab_again_picks_a_candidate_and_enter_runs_it() {
 }
 
 #[test]
+fn up_and_down_pick_the_candidates_above_and_below() {
+    // Candidates of the same width, in several rows.
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..24 {
+        std::fs::write(dir.path().join(format!("a candidate {i:02}")), "").unwrap();
+    }
+    let dir = dir.path().display().to_string();
+    let line = |i: usize| format!("look '{dir}/a candidate {i:02}'");
+    let mut shell = start(None);
+    shell.step(click(PLACEHOLDER));
+    shell.step(typewrite(&format!("look '{dir}/")));
+    shell.update(Message::Action(Action::Complete));
+    shell.update(Message::Action(Action::Complete));
+    shell.expect(&line(0));
+    // Down picks one in the next row, Up comes back.
+    shell.update(Message::Action(Action::Down));
+    shell.expect_absent(&line(0));
+    shell.expect_absent(&line(1));
+    shell.update(Message::Action(Action::Up));
+    shell.expect(&line(0));
+    // Up from the first row goes round to the last.
+    shell.update(Message::Action(Action::Up));
+    shell.expect_absent(&line(0));
+    shell.update(Message::Action(Action::Down));
+    shell.expect(&line(0));
+    // Left and Right go through them in order, wrapping.
+    shell.update(Message::Action(Action::Left));
+    shell.expect(&line(23));
+    shell.update(Message::Action(Action::Right));
+    shell.expect(&line(0));
+}
+
+#[test]
+fn vertical_neighbours_are_the_closest_in_the_next_row() {
+    use iced::Point;
+
+    // Rows: [0 1 2] [3 4] [5], of different widths.
+    let at = |x, y, width| Rectangle::new(Point::new(x, y), Size::new(width, 10.0));
+    let bounds = [
+        at(0.0, 0.0, 30.0),
+        at(40.0, 0.0, 30.0),
+        at(80.0, 0.0, 30.0),
+        at(0.0, 20.0, 60.0),
+        at(70.0, 20.0, 40.0),
+        at(0.0, 40.0, 10.0),
+    ];
+    let down = |from| vertical_neighbour(&bounds, from, true);
+    let up = |from| vertical_neighbour(&bounds, from, false);
+    assert_eq!(down(0), Some(3));
+    // Equally close to 3 and 4: the first.
+    assert_eq!(down(1), Some(3));
+    assert_eq!(down(2), Some(4));
+    assert_eq!(down(4), Some(5));
+    assert_eq!(up(4), Some(2));
+    assert_eq!(up(3), Some(0));
+    // Wrapping.
+    assert_eq!(down(5), Some(0));
+    assert_eq!(up(1), Some(5));
+    // A single row: nowhere to go.
+    assert_eq!(vertical_neighbour(&bounds[..3], 1, true), None);
+}
+
+#[test]
+fn left_and_right_pick_while_picking_and_move_the_cursor_otherwise() {
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "look ");
+    act(&mut shell, Action::Complete);
+    // Not picking yet: the cursor moves.
+    act(&mut shell, Action::Left);
+    type_into(&mut shell, "x");
+    assert_eq!(shell.prompt.text(), "lookx ");
+    assert!(shell.offer.is_none());
+    act(&mut shell, Action::Right);
+    type_into(&mut shell, "y");
+    assert_eq!(shell.prompt.text(), "lookx y");
+
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "look ");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    assert_eq!(listed(&shell).1, Some("README"));
+    act(&mut shell, Action::Right);
+    assert_eq!(listed(&shell).1, Some("alpha"));
+    act(&mut shell, Action::Left);
+    act(&mut shell, Action::Left);
+    assert_eq!(listed(&shell).1, Some("gamma"));
+    // Without a match, they do nothing.
+    type_into(&mut shell, "zz");
+    act(&mut shell, Action::Left);
+    assert_eq!(shell.prompt.text(), "look zz");
+    assert!(shell.offer.as_ref().unwrap().picking());
+}
+
+#[test]
 fn the_offer_doesnt_scroll_a_short_scrollback() {
     // Enough candidates for several rows, so the view gets shorter by more
     // than a line.
@@ -557,7 +651,7 @@ fn history_puts_the_cursor_at_the_end() {
     let mut shell = start(None);
     shell.run("say one");
     shell.expect("one");
-    shell.update(Message::Action(Action::HistoryBack));
+    shell.update(Message::Action(Action::Up));
     shell.step(typewrite(" two"));
     shell.step(press(Key::Enter));
     shell.expect("one two");
@@ -593,17 +687,28 @@ fn prompt_keys() {
     assert!(matches!(enter, Some(B::Custom(Message::PromptSubmitted))));
     let shift_enter = key(Named::Enter, Code::Enter, Modifiers::SHIFT);
     assert!(shift_enter.is_none());
-    // Up and Down browse the history.
+    // The shell decides what the arrows do (pick a candidate, or browse
+    // the history and move the cursor).
     let up = key(Named::ArrowUp, Code::ArrowUp, none);
-    assert!(matches!(
-        up,
-        Some(B::Custom(Message::Action(Action::HistoryBack)))
-    ));
+    assert!(matches!(up, Some(B::Custom(Message::Action(Action::Up)))));
     let down = key(Named::ArrowDown, Code::ArrowDown, none);
     assert!(matches!(
         down,
-        Some(B::Custom(Message::Action(Action::HistoryForward)))
+        Some(B::Custom(Message::Action(Action::Down)))
     ));
+    let left = key(Named::ArrowLeft, Code::ArrowLeft, none);
+    assert!(matches!(
+        left,
+        Some(B::Custom(Message::Action(Action::Left)))
+    ));
+    let right = key(Named::ArrowRight, Code::ArrowRight, none);
+    assert!(matches!(
+        right,
+        Some(B::Custom(Message::Action(Action::Right)))
+    ));
+    // With Shift, they select.
+    let select = key(Named::ArrowLeft, Code::ArrowLeft, Modifiers::SHIFT);
+    assert!(matches!(select, Some(B::Select(Motion::Left))));
     let tab = key(Named::Tab, Code::Tab, none);
     assert!(matches!(
         tab,
