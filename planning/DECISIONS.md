@@ -923,6 +923,8 @@ Works like a terminal: a scrollback with the prompt below it.
   what's shown down; the space goes as the view moves up, and only reaches
   down to the view's bottom (so a view that gets shorter, e.g. when
   completion candidates appear, doesn't push short content out of sight).
+  It's at most half the view, so content that shrinks a lot isn't left
+  mostly out of sight.
   A width change may shrink that space but not grow it, so content that
   reflows shorter at the bottom doesn't leave empty space. Starting a
   command, or clearing, scrolls to the bottom and drops the space. Our own

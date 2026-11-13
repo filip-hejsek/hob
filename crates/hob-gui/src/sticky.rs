@@ -10,9 +10,9 @@
 //! While it's scrolled to the bottom, it also keeps the content's bottom in
 //! sight, so new content pushes what's shown up. Content that gets shorter
 //! doesn't pull what's shown down: the content is padded to the bottom of the
-//! view, so there's empty space below it instead. The padding goes away as the
-//! view moves up, or when the owner asks to reveal the bottom, and it doesn't
-//! grow when the view's width changes.
+//! view, so there's empty space below it instead, up to half the view. The
+//! padding goes away as the view moves up, or when the owner asks to reveal
+//! the bottom, and it doesn't grow when the view's width changes.
 //!
 //! iced's scrollable only keeps its offset from its top or its bottom, so this
 //! sets the offset each time the content is laid out, before it's drawn.
@@ -425,6 +425,8 @@ impl Plan {
         if let Some(space) = self.resized {
             top = top.min(content + space - height);
         }
+        // At most half the view is empty space.
+        top = top.min(content - height / 2.0);
         top.max(0.0)
     }
 }
@@ -795,7 +797,9 @@ mod tests {
         // Growing doesn't move it.
         assert_eq!(h.show(500.0, None), (50.0, 500.0));
         // Neither does shrinking past its bottom: the content is padded.
-        assert_eq!(h.show(80.0, None), (50.0, 150.0));
+        assert_eq!(h.show(120.0, None), (50.0, 150.0));
+        // But only up to half the view.
+        assert_eq!(h.show(80.0, None), (30.0, 130.0));
     }
 
     #[test]
@@ -810,11 +814,20 @@ mod tests {
     }
 
     #[test]
+    fn empty_space_is_at_most_half_the_view() {
+        let mut h = Harness::new();
+        h.show(300.0, None);
+        assert_eq!(h.show(120.0, None), (70.0, 170.0));
+        // Content shorter than half the view isn't scrolled at all.
+        assert_eq!(h.show(40.0, None), (0.0, 40.0));
+    }
+
+    #[test]
     fn empty_space_goes_as_the_view_moves_up() {
         let mut h = Harness::new();
         h.show(300.0, None);
-        h.show(150.0, None);
-        assert_eq!(h.scroll(150.0, -120.0), (80.0, 300.0));
+        h.show(260.0, None);
+        assert_eq!(h.scroll(260.0, -120.0), (80.0, 300.0));
         // Only down to the view's bottom.
         assert_eq!(h.show(150.0, None), (80.0, 180.0));
     }
