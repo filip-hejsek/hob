@@ -5,8 +5,9 @@
 //! what's shown up. Otherwise what's shown doesn't move. Either way, content
 //! that gets shorter doesn't pull what's shown down: the content is padded to
 //! the bottom of what was shown, so there's empty space below it instead.
-//! The padding goes away as the view moves up, or when the owner asks to
-//! reveal the bottom.
+//! The padding goes away as the view moves up, when the view's width changes
+//! (the content reflows, so what's shown moves anyway), or when the owner asks
+//! to reveal the bottom.
 //!
 //! iced's scrollable only keeps its offset from its top or its bottom, so this
 //! sets the offset each time the content is laid out, before it's drawn.
@@ -53,6 +54,8 @@ struct Seen {
     top: f32,
     /// The height of the view.
     height: f32,
+    /// The width the view was laid out with.
+    width: f32,
     /// Whether the view was at the bottom of the content.
     at_bottom: bool,
     /// The last `reveal` handled.
@@ -72,6 +75,7 @@ impl<Message> Widget<Message, Theme, Renderer> for Sticky<'_, Message> {
         tree::State::new(Seen {
             top: 0.0,
             height: 0.0,
+            width: 0.0,
             at_bottom: true,
             reveal: self.reveal,
         })
@@ -100,8 +104,13 @@ impl<Message> Widget<Message, Theme, Renderer> for Sticky<'_, Message> {
         // Keep the content at least down to the bottom of the view, so
         // nothing shown moves down when it gets shorter. If the view got
         // shorter, down to its new bottom, so that the space kept doesn't
-        // push what's shown up.
-        let floor = match reveal {
+        // push what's shown up. If the width changed, not at all: the
+        // content reflows, so what's shown moves anyway, and space kept below
+        // content that got shorter would just be left empty.
+        let width = limits.max().width;
+        let resized = width != seen.width;
+        seen.width = width;
+        let floor = match reveal || resized {
             true => 0.0,
             false => seen.top + seen.height.min(limits.max().height),
         };
@@ -489,11 +498,13 @@ mod tests {
     use iced_test::futures::futures::executor::block_on;
     use iced_test::runtime::user_interface::{Cache, UserInterface};
 
-    /// A [`Sticky`] 100 pixels high, with content of a given height.
+    /// A [`Sticky`] 100 pixels high (and 100 wide, unless changed), with
+    /// content of a given height.
     struct Harness {
         renderer: Renderer,
         cache: Cache,
         reveal: u64,
+        width: f32,
     }
 
     impl Harness {
@@ -504,6 +515,7 @@ mod tests {
                 renderer,
                 cache: Cache::default(),
                 reveal: 0,
+                width: 100.0,
             }
         }
 
@@ -513,7 +525,7 @@ mod tests {
             let content = space().height(height);
             let element: Element<'_, ()> = sticky(content, Id::unique(), self.reveal).into();
             let cache = std::mem::take(&mut self.cache);
-            let size = Size::new(100.0, 100.0);
+            let size = Size::new(self.width, 100.0);
             let mut ui = UserInterface::build(element, size, cache, &mut self.renderer);
             if let Some(operation) = operation {
                 ui.operate(&self.renderer, operation);
@@ -618,5 +630,24 @@ mod tests {
         h.show(150.0, None);
         h.reveal += 1;
         assert_eq!(h.show(160.0, None), (60.0, 160.0));
+    }
+
+    #[test]
+    fn a_width_change_drops_the_empty_space() {
+        let mut h = Harness::new();
+        h.show(300.0, None);
+        // Wider, the content reflows shorter: the view stays at its bottom,
+        // without empty space.
+        h.width = 150.0;
+        assert_eq!(h.show(250.0, None), (150.0, 250.0));
+        // Same when the space was there before.
+        h.show(200.0, None);
+        h.width = 200.0;
+        assert_eq!(h.show(180.0, None), (80.0, 180.0));
+        // And when not at the bottom.
+        h.scroll(180.0, -50.0);
+        h.show(120.0, None);
+        h.width = 250.0;
+        assert_eq!(h.show(110.0, None), (10.0, 110.0));
     }
 }

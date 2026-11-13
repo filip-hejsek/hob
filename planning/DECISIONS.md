@@ -917,8 +917,10 @@ Works like a terminal: a scrollback with the prompt below it.
   instead of pulling what's shown down; the space goes as the view moves
   up. A view that gets shorter (e.g. when completion candidates appear)
   keeps that space only down to its new bottom, so it doesn't push short
-  content out of sight. Starting a command, or clearing, scrolls to the
-  bottom and drops the space. Our own `Sticky` widget sets the offset while
+  content out of sight. A change of the view's width drops the space: the
+  content reflows, so what's shown moves anyway, and space kept below
+  content that reflowed shorter would just be left empty. Starting a
+  command, or clearing, scrolls to the bottom and drops the space. Our own `Sticky` widget sets the offset while
   laying out, before drawing. Rejected: iced's `anchor_bottom`, which moves
   what's shown by whatever is added below it, even out of sight; and fixing
   the offset from `on_scroll`, a frame late, so content would jump.
