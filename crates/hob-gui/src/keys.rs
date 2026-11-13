@@ -17,6 +17,9 @@ pub(crate) enum Action {
     PickPrevious,
     /// Stops picking a candidate, restoring the line from before.
     CancelPick,
+    /// Takes the picked candidate as it is, without a space after it;
+    /// otherwise types a space.
+    TakePick,
     /// Scrolls the scrollback up by a page.
     PageUp,
     /// Scrolls the scrollback down by a page.
@@ -45,7 +48,8 @@ impl Action {
             Action::HistoryBack
             | Action::HistoryForward
             | Action::Complete
-            | Action::PickPrevious => Scope::Prompt,
+            | Action::PickPrevious
+            | Action::TakePick => Scope::Prompt,
             // Escape also restores the line after a click elsewhere.
             Action::Exit | Action::CancelPick => Scope::PromptOrNothing,
             Action::PageUp | Action::PageDown | Action::Clear => Scope::Anywhere,
@@ -81,6 +85,7 @@ pub(crate) fn defaults() -> Vec<Binding> {
         named(Named::ArrowDown, Action::HistoryForward),
         named(Named::Tab, Action::Complete),
         shift(Named::Tab, Action::PickPrevious),
+        shift(Named::Space, Action::TakePick),
         named(Named::Escape, Action::CancelPick),
         named(Named::PageUp, Action::PageUp),
         named(Named::PageDown, Action::PageDown),
@@ -138,6 +143,10 @@ mod tests {
         assert_eq!(
             lookup(&bindings, Key::Named(Named::Tab), Modifiers::CTRL),
             None
+        );
+        assert_eq!(
+            lookup(&bindings, Key::Named(Named::Space), Modifiers::SHIFT),
+            Some(Action::TakePick)
         );
     }
 }

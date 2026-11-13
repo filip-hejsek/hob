@@ -20,8 +20,9 @@
 //! The prompt works like a shell's: Enter runs the command line (it has one
 //! line; long lines wrap, and pasted line breaks become spaces). Up and Down
 //! browse the history, and Tab completes command names and arguments. Tab again, while candidates are
-//! listed, picks one (Tab and Shift+Tab move on, Escape goes back to the line
-//! from before). Tab doesn't move focus. Anywhere, PageUp and
+//! listed, picks one (Tab and Shift+Tab move on, letters and digits search
+//! the candidates, Shift+Space takes the picked one without a space, Escape
+//! goes back to the line from before). Tab doesn't move focus. Anywhere, PageUp and
 //! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). Ctrl+D
 //! in the empty prompt, or while nothing has focus, exits (like `exit`), unless
 //! commands are running: then it says so, and focuses an island waiting for
@@ -48,6 +49,7 @@
 //! [`preview`] shows a saved session read-only, without an interpreter: there
 //! is no prompt, nothing runs, and the session file is never written.
 
+use std::cmp::Reverse;
 use std::fmt;
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -64,10 +66,12 @@ use iced::advanced::widget::{Operation, operate};
 use iced::keyboard::{self, Modifiers};
 use iced::widget::scrollable::AbsoluteOffset;
 use iced::widget::text_editor::{self, Content, Edit, KeyPress, Motion};
-use iced::widget::{Id, column, container, operation, row, rule, text};
+use iced::widget::{Id, column, container, operation, rich_text, row, rule, span, text};
 use iced::{Element, Event, Rectangle, Subscription, Task, Theme, event, padding, window};
 use kettle_ui::FrozenIsland;
 use kettle_ui_iced::{Island, spacing, view_frozen};
+use nucleo_matcher::pattern::{Atom, AtomKind, CaseMatching, Normalization};
+use nucleo_matcher::{Matcher, Utf32Str};
 
 use keyed::keyed;
 use keys::{Action, Binding, Scope};
@@ -243,23 +247,115 @@ enum Item {
 
 /// Candidates offered by Tab completion. Tab again starts picking one: the
 /// picked candidate is filled in to the prompt, and Tab and Shift+Tab pick
-/// another. Escape restores the line from before; anything that changes the
-/// line ends the offer (so Space and Enter take the candidate); typing a
-/// candidate's delimiter (`/` after a directory) goes on as completing it
-/// alone would.
+/// another. While picking, letters and digits search the candidates (fuzzy,
+/// best match first, picked), and Backspace takes them back. Escape
+/// restores the line from before; Shift+Space takes the candidate as it is;
+/// anything else that changes the line ends the offer (so Space and Enter
+/// take the candidate); typing a candidate's delimiter (`/` after a
+/// directory) goes on as completing it alone would.
 struct Offer {
     /// The candidates, and the line with each filled in.
     choices: Vec<Choice>,
-    /// The candidate picked, if picking, and the line from before.
-    picked: Option<(usize, String)>,
+    /// What's been typed to search the candidates while picking.
+    query: String,
+    /// The candidates matching the query, best first; all of them, in
+    /// order, without one.
+    matches: Vec<Match>,
+    /// The match picked, while picking (unless none matches).
+    picked: Option<usize>,
+    /// The line from before picking, while picking.
+    before: Option<String>,
+}
+
+/// A candidate matching an [`Offer`]'s query.
+struct Match {
+    /// Which of the offer's choices.
+    index: usize,
+    /// The positions of the chars of its listed name that match, ascending.
+    positions: Vec<usize>,
 }
 
 impl Offer {
+    fn new(choices: Vec<Choice>) -> Self {
+        let mut offer = Offer {
+            choices,
+            query: String::new(),
+            matches: Vec::new(),
+            picked: None,
+            before: None,
+        };
+        offer.search();
+        offer
+    }
+
+    /// Whether a candidate is being picked (or searched for, even if none
+    /// matches).
+    fn picking(&self) -> bool {
+        self.before.is_some()
+    }
+
+    /// Finds the candidates matching the query, best first, ties in order,
+    /// and while picking, picks the best.
+    fn search(&mut self) {
+        self.matches = if self.query.is_empty() {
+            (0..self.choices.len())
+                .map(|index| Match {
+                    index,
+                    positions: Vec::new(),
+                })
+                .collect()
+        } else {
+            let atom = Atom::new(
+                &self.query,
+                CaseMatching::Smart,
+                Normalization::Smart,
+                AtomKind::Fuzzy,
+                false,
+            );
+            let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+            let (mut chars, mut indices) = (Vec::new(), Vec::new());
+            let mut scored: Vec<(u16, Match)> = (self.choices.iter().enumerate())
+                .filter_map(|(index, choice)| {
+                    // Without its delimiter (the `/` of a directory).
+                    let name = (choice.continued.as_ref())
+                        .and_then(|(d, _)| choice.shown.strip_suffix(*d))
+                        .unwrap_or(&choice.shown);
+                    indices.clear();
+                    let haystack = Utf32Str::new(name, &mut chars);
+                    let score = atom.indices(haystack, &mut matcher, &mut indices)?;
+                    indices.sort_unstable();
+                    indices.dedup();
+                    let positions = indices.iter().map(|&i| i as usize).collect();
+                    Some((score, Match { index, positions }))
+                })
+                .collect();
+            scored.sort_by_key(|(score, _)| Reverse(*score));
+            scored.into_iter().map(|(_, m)| m).collect()
+        };
+        if self.picking() {
+            self.picked = (!self.matches.is_empty()).then_some(0);
+        }
+    }
+
+    /// The picked choice, if any.
+    fn picked(&self) -> Option<&Choice> {
+        let m = &self.matches[self.picked?];
+        Some(&self.choices[m.index])
+    }
+
+    /// The line to show while picking: the picked candidate filled in, or
+    /// if none matches, the line from before with the query typed after it.
+    fn line(&self) -> Option<String> {
+        match self.picked() {
+            Some(choice) => Some(choice.filled.clone()),
+            None => Some(format!("{}{}", self.before.as_ref()?, self.query)),
+        }
+    }
+
     /// The line with `c` typed after the picked candidate, if `c` is its
     /// delimiter.
     fn continued(&self, c: char) -> Option<String> {
-        let (index, _) = self.picked.as_ref()?;
-        match &self.choices[*index].continued {
+        match &self.picked()?.continued {
             Some((delimiter, line)) if *delimiter == c => Some(line.clone()),
             _ => None,
         }
@@ -587,6 +683,24 @@ impl Shell {
                     A(Edit::Paste(text)) => A(Edit::Paste(Arc::new(one_line(&text)))),
                     action => action,
                 };
+                // While picking, letters and digits search the candidates.
+                if let Some(offer) = self.offer.as_mut().filter(|o| o.picking()) {
+                    let searched = match action {
+                        A(Edit::Insert(c)) if c.is_alphanumeric() => {
+                            offer.query.push(c);
+                            true
+                        }
+                        A(Edit::Backspace) => offer.query.pop().is_some(),
+                        _ => false,
+                    };
+                    if searched {
+                        offer.search();
+                        if let Some(line) = offer.line() {
+                            self.set_prompt(&line);
+                        }
+                        return Task::none();
+                    }
+                }
                 if action.is_edit() {
                     self.history.stop_browsing();
                     let offer = self.offer.take();
@@ -742,19 +856,32 @@ impl Shell {
                     return Task::none();
                 };
                 let completion = interpreter.complete(&self.prompt.text());
-                self.offer = (!completion.choices.is_empty()).then_some(Offer {
-                    choices: completion.choices,
-                    picked: None,
-                });
+                self.offer =
+                    (!completion.choices.is_empty()).then(|| Offer::new(completion.choices));
                 self.history.stop_browsing();
                 Some(completion.line)
             }
             Action::PickPrevious => self.pick(-1),
+            Action::TakePick => {
+                if self.offer.as_ref().is_some_and(Offer::picking) {
+                    // The prompt already shows the line.
+                    self.offer = None;
+                    return Task::none();
+                }
+                let space = text_editor::Action::Edit(Edit::Insert(' '));
+                return self.update(Message::PromptEdited(space));
+            }
             Action::CancelPick => {
-                let Some((_, before)) = self.offer.as_mut().and_then(|o| o.picked.take()) else {
+                let Some(offer) = self.offer.as_mut() else {
                     // Escape unfocuses the prompt, unless a candidate is picked.
                     return operate(focusable::unfocus());
                 };
+                let Some(before) = offer.before.take() else {
+                    return operate(focusable::unfocus());
+                };
+                offer.query.clear();
+                offer.picked = None;
+                offer.search();
                 self.set_prompt(&before);
                 // Escape may have been pressed while nothing had focus.
                 return operation::focus(Id::new(PROMPT));
@@ -781,23 +908,25 @@ impl Shell {
         (self.prompt).perform(text_editor::Action::Move(Motion::DocumentEnd));
     }
 
-    /// Picks the candidate `step` places after the picked one (before, if
+    /// Picks the match `step` places after the picked one (before, if
     /// negative), and returns the line with it filled in. If none is picked
     /// yet, starts picking with the first (or, going back, the last).
     fn pick(&mut self, step: isize) -> Option<String> {
         let offer = self.offer.as_mut()?;
-        let len = offer.choices.len();
-        let index = match &offer.picked {
-            Some((index, _)) => (*index as isize + step).rem_euclid(len as isize) as usize,
+        let len = offer.matches.len();
+        if len == 0 {
+            return None;
+        }
+        let index = match offer.picked {
+            Some(index) => (index as isize + step).rem_euclid(len as isize) as usize,
             None if step < 0 => len - 1,
             None => 0,
         };
-        let before = match offer.picked.take() {
-            Some((_, before)) => before,
-            None => self.prompt.text(),
-        };
-        offer.picked = Some((index, before));
-        Some(offer.choices[index].filled.clone())
+        if offer.before.is_none() {
+            offer.before = Some(self.prompt.text());
+        }
+        offer.picked = Some(index);
+        offer.line()
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -1320,6 +1449,7 @@ fn prompt_binding(bindings: &[Binding], key: KeyPress) -> Option<text_editor::Bi
             | Action::HistoryForward
             | Action::Complete
             | Action::PickPrevious
+            | Action::TakePick
             | Action::Exit),
         ) => custom(action),
         // The shell does it (e.g. PageUp scrolls the scrollback).
@@ -1369,11 +1499,17 @@ fn view_block<'a>(block: &'a Block, level: Level, name: &str) -> Element<'a, Mes
     .into()
 }
 
-/// Lists the candidates of an offer; the picked one has a box of the primary
-/// colour.
+/// Lists the candidates of an offer that match its query; the picked one
+/// has a box of the primary colour, and the chars matching the query are
+/// underlined.
 fn view_offer(offer: &Offer) -> Element<'_, Message> {
-    let picked = offer.picked.as_ref().map(|(index, _)| *index);
-    let candidates = offer.choices.iter().enumerate().map(|(i, choice)| {
+    if offer.matches.is_empty() {
+        let note = format!("no match for \"{}\"", offer.query);
+        return text(note).style(text::secondary).into();
+    }
+    let picked = offer.picked;
+    let candidates = offer.matches.iter().enumerate().map(|(i, m)| {
+        let choice = &offer.choices[m.index];
         let style = move |theme: &Theme| match picked == Some(i) {
             true => {
                 let primary = theme.extended_palette().primary.base;
@@ -1383,12 +1519,41 @@ fn view_offer(offer: &Offer) -> Element<'_, Message> {
             }
             false => container::Style::default(),
         };
-        container(text(&choice.shown))
+        container(highlighted(&choice.shown, &m.positions))
             .padding(padding::horizontal(spacing() / 2.0))
             .style(style)
             .into()
     });
     row(candidates).spacing(spacing()).wrap().into()
+}
+
+/// `name`, with the chars at `positions` (ascending) underlined. Not bold:
+/// a bold span makes the rest of its word bold too (see ICED_WISHLIST.md).
+fn highlighted<'a>(name: &'a str, positions: &[usize]) -> Element<'a, Message> {
+    if positions.is_empty() {
+        return text(name).into();
+    }
+    // Runs of chars that match, or don't.
+    let mut spans = Vec::new();
+    let mut start = 0;
+    let mut matching = false;
+    let mut positions = positions.iter().peekable();
+    for (i, (offset, _)) in name.char_indices().enumerate() {
+        let matches = positions.next_if_eq(&&i).is_some();
+        if matches != matching {
+            spans.push((&name[start..offset], matching));
+            (start, matching) = (offset, matches);
+        }
+    }
+    spans.push((&name[start..], matching));
+    let spans = (spans.into_iter())
+        .filter(|(s, _)| !s.is_empty())
+        .map(|(s, matching)| match matching {
+            true => span(s).underline(true),
+            false => span(s),
+        });
+    let spans: Vec<text::Span<'_>> = spans.collect();
+    rich_text(spans).into()
 }
 
 fn view_entry(entry: &Entry) -> Element<'_, Message> {

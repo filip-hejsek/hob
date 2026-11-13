@@ -286,3 +286,15 @@ not around it.
 kettle-ui-iced), which starts new lines in a row and shares the width
 between table columns; the outer table lines come from a bordered
 container (all borders) or rules above and below (horizontal only).
+
+## Bold spans in rich text
+
+**Needed for:** highlighting the chars of a completion candidate that
+match the search (hob-gui).
+
+In a `rich_text`, a span with a bold font makes the rest of its word bold
+too (up to the next word boundary, e.g. `-` or `/`), though underline is
+applied to exactly the span. Seen with the default font (Adwaita Sans);
+likely in cosmic-text's font selection per word.
+
+**Workaround:** matching chars are only underlined.

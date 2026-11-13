@@ -1032,7 +1032,26 @@ Works like a terminal: a scrollback with the prompt below it.
   ends it, so Space and Enter need no handling of their own: Space takes
   the candidate and adds the space, Enter takes it and runs the line, and
   typing other text goes on after it (typing the candidate's delimiter
-  gives its `continued` line). hob-core gives the filled-in line
+  gives its `continued` line).
+- While picking, letters and digits (`char::is_alphanumeric`) search the
+  candidates instead of taking the picked one: fuzzy, like fzf, against
+  the listed name without its delimiter, best match first (ties in
+  order), smart case. The best match is picked and filled in, and Tab and
+  Shift+Tab go through the matches only. The query isn't shown by itself:
+  the matching chars of each listed candidate are underlined, which shows
+  it. Backspace takes back a letter of the query; with none, it edits the
+  line (ending the offer), as before. Escape restores the line from before
+  picking and clears the search. Other chars take the candidate as
+  before; letters typed before picking (or after Escape) are plain text.
+  If nothing matches, a dimmed "no match for" line shows the query,
+  nothing is picked, and the prompt shows the line from before picking
+  with the query after it; Space or other chars then keep that text. Not
+  ignoring the key silently was the point; the rest is tentative.
+  Shift+Space takes the picked candidate without a space (or, with no
+  match, the typed query); otherwise it types a space. Like Escape, it's a
+  `Binding::Custom` decided by the shell. Matching uses nucleo-matcher
+  (fzf's scoring, as in helix; it gives the match positions), without
+  grapheme segmentation, so positions are char indices. hob-core gives the filled-in line
   for each candidate (`Completion::filled`). Escape works while nothing
   has focus too (e.g. after a click on the scrollback), and focuses the
   prompt again; otherwise, Escape unfocuses the prompt. The prompt's key

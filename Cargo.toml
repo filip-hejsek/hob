@@ -41,6 +41,8 @@ iced_graphics = "0.14"
 image = { version = "0.25", default-features = false }
 jiff = "0.2"
 log = "0.4"
+# Without grapheme segmentation, so match indices are char indices.
+nucleo-matcher = { version = "0.3", default-features = false, features = ["unicode-casefold", "unicode-normalization"] }
 png = "0.18"
 # Bundled SQLite: no system library to find (see planning/DECISIONS.md).
 rusqlite = { version = "0.41", default-features = false, features = ["bundled"] }

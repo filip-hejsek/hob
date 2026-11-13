@@ -235,6 +235,163 @@ fn typing_the_delimiter_goes_on_into_the_picked_directory() {
     shell.expect(&format!("{dir}/notes/ | y"));
 }
 
+/// A shell without a window, whose interpreter works in a temporary
+/// directory with some files and directories.
+fn shell_with_files() -> (Shell, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    for file in ["alpha", "alphabet", "beta", "gamma", "README"] {
+        std::fs::write(dir.path().join(file), "").unwrap();
+    }
+    std::fs::create_dir(dir.path().join("delta")).unwrap();
+    let interpreter = interpreter();
+    interpreter.set_cwd(dir.path());
+    let (shell, _) = Shell::new(
+        Some(Arc::new(interpreter)),
+        None,
+        Limits::default(),
+        Arc::new(gui_config()),
+        Level::Info,
+        None,
+    );
+    (shell, dir)
+}
+
+/// Types `text` into the shell's prompt.
+fn type_into(shell: &mut Shell, text: &str) {
+    for c in text.chars() {
+        let insert = text_editor::Action::Edit(Edit::Insert(c));
+        let _ = shell.update(Message::PromptEdited(insert));
+    }
+}
+
+/// Presses Backspace in the shell's prompt.
+fn backspace(shell: &mut Shell) {
+    let backspace = text_editor::Action::Edit(Edit::Backspace);
+    let _ = shell.update(Message::PromptEdited(backspace));
+}
+
+fn act(shell: &mut Shell, action: Action) {
+    let _ = shell.update(Message::Action(action));
+}
+
+/// The candidates listed, and the picked one.
+fn listed(shell: &Shell) -> (Vec<&str>, Option<&str>) {
+    let offer = shell.offer.as_ref().expect("an offer");
+    let shown = |index: usize| offer.choices[index].shown.as_str();
+    let listed = offer.matches.iter().map(|m| shown(m.index)).collect();
+    (listed, offer.picked.map(|i| shown(offer.matches[i].index)))
+}
+
+#[test]
+fn typing_while_picking_searches_the_candidates() {
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "look ");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look README");
+    // Ranked: the adjacent match first.
+    type_into(&mut shell, "lt");
+    assert_eq!(listed(&shell), (vec!["delta/", "alphabet"], Some("delta/")));
+    assert_eq!(shell.offer.as_ref().unwrap().matches[0].positions, [2, 3]);
+    assert_eq!(shell.prompt.text(), "look delta");
+    // Tab goes through the matches only.
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look alphabet");
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look delta");
+    // Backspace takes letters back, picking the best match again.
+    backspace(&mut shell);
+    assert_eq!(listed(&shell).0, ["alpha", "alphabet", "delta/"]);
+    assert_eq!(shell.prompt.text(), "look alpha");
+    backspace(&mut shell);
+    assert_eq!(listed(&shell).0.len(), 6);
+    // Then it edits the line, ending the offer.
+    backspace(&mut shell);
+    assert_eq!(shell.prompt.text(), "look READM");
+    assert!(shell.offer.is_none());
+}
+
+#[test]
+fn searching_ignores_case_in_lowercase() {
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "look ");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::PickPrevious);
+    type_into(&mut shell, "rdm");
+    assert_eq!(listed(&shell), (vec!["README"], Some("README")));
+}
+
+#[test]
+fn other_keys_take_the_searched_candidate() {
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "look ");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    type_into(&mut shell, "lt ");
+    assert_eq!(shell.prompt.text(), "look delta ");
+    assert!(shell.offer.is_none());
+    // The delimiter goes on into the directory.
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    type_into(&mut shell, "lt/");
+    assert_eq!(shell.prompt.text(), "look delta delta/");
+    assert!(shell.offer.is_none());
+}
+
+#[test]
+fn shift_space_takes_the_candidate_without_a_space() {
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "look ");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    type_into(&mut shell, "lt");
+    act(&mut shell, Action::TakePick);
+    assert_eq!(shell.prompt.text(), "look delta");
+    assert!(shell.offer.is_none());
+    // Otherwise, it types a space.
+    act(&mut shell, Action::TakePick);
+    assert_eq!(shell.prompt.text(), "look delta ");
+}
+
+#[test]
+fn a_search_without_matches_types_the_query() {
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "look ");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    type_into(&mut shell, "lxq");
+    assert_eq!(listed(&shell), (vec![], None));
+    assert_eq!(shell.prompt.text(), "look lxq");
+    // Tab has nothing to pick.
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look lxq");
+    // Backspace brings matches back.
+    backspace(&mut shell);
+    backspace(&mut shell);
+    assert_eq!(listed(&shell).1, Some("alpha"));
+    // Space keeps the query.
+    type_into(&mut shell, "xq ");
+    assert_eq!(shell.prompt.text(), "look lxq ");
+    assert!(shell.offer.is_none());
+}
+
+#[test]
+fn escape_after_searching_restores_the_line_and_the_list() {
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "look ");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    type_into(&mut shell, "lt");
+    act(&mut shell, Action::CancelPick);
+    assert_eq!(shell.prompt.text(), "look ");
+    assert_eq!(listed(&shell).0.len(), 6);
+    assert_eq!(listed(&shell).1, None);
+    // Letters are typed again.
+    type_into(&mut shell, "b");
+    assert_eq!(shell.prompt.text(), "look b");
+    assert!(shell.offer.is_none());
+}
+
 #[test]
 fn escape_restores_the_line_while_nothing_has_focus() {
     let mut shell = start(None);
@@ -334,6 +491,12 @@ fn prompt_keys() {
     assert!(matches!(
         escape,
         Some(B::Custom(Message::Action(Action::CancelPick)))
+    ));
+    // And Shift+Space (it types a space unless a candidate is picked).
+    let shift_space = key(Named::Space, Code::Space, Modifiers::SHIFT);
+    assert!(matches!(
+        shift_space,
+        Some(B::Custom(Message::Action(Action::TakePick)))
     ));
     // The shell scrolls.
     assert!(key(Named::PageUp, Code::PageUp, none).is_none());
