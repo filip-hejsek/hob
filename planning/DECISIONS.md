@@ -1168,7 +1168,10 @@ Works like a terminal: a scrollback with the prompt below it.
   separate `text`; a small wrapper (`prompt.rs`) reads the editor's focus
   from its widget state and passes the colour down as the inherited text
   colour, so the shell doesn't track focus. A click on the `>` focuses the
-  editor, as it did when the `>` was the text input's icon. The wrapper
+  editor, as it did when the `>` was the text input's icon. While the
+  pointer is over the unfocused prompt, the `>` is dim with a hint of
+  primary (30%), so it's clear a click focuses it; the background's
+  stronger shades were too close to the dim colour to notice. The wrapper
   also reports the text (or the placeholder) to operations, so tests can
   find the prompt.
 - End-to-end tests run the real shell (`application()`, the same builder

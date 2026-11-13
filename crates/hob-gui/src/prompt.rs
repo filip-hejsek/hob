@@ -3,7 +3,8 @@
 //!
 //! It's a `text_editor` rather than a `text_input`, since the shell can read
 //! an editor's cursor (from its `Content`) and an editor can take key
-//! bindings. The `>` is coloured while the editor has focus, and a click on
+//! bindings. The `>` is coloured while the editor has focus, slightly
+//! tinted while the pointer is over the prompt otherwise, and a click on
 //! it focuses the editor.
 //!
 //! The `>` and the editor are in a scrollable, the editor at its full
@@ -19,12 +20,13 @@ use iced::advanced::text::{self as advanced_text, LineHeight, Paragraph as _, Re
 use iced::advanced::widget::operation::{Focusable, Scrollable};
 use iced::advanced::widget::{Id, Operation, Tree, Widget, tree};
 use iced::advanced::{Clipboard, Shell, mouse, renderer};
-use iced::alignment;
+use iced::theme::palette;
 use iced::widget::scrollable::{AbsoluteOffset, Direction, Scrollbar};
 use iced::widget::text::{Shaping, Wrapping};
 use iced::widget::text_editor::{Content, Position};
 use iced::widget::{Scrollable as ScrollableWidget, container, row, scrollable, text, text_editor};
 use iced::{Element, Event, Font, Length, Rectangle, Renderer, Size, Theme, Vector, font, padding};
+use iced::{alignment, window};
 use iced_graphics::text::Paragraph;
 
 use crate::selectable::boxless;
@@ -91,6 +93,8 @@ struct State {
     cursor: Option<Position>,
     /// The height it was laid out to.
     height: f32,
+    /// Whether the `>` was last drawn as hovered.
+    hovered: bool,
 }
 
 impl<Message> Prompt<'_, Message> {
@@ -197,16 +201,18 @@ impl<Message> Widget<Message, Theme, Renderer> for Prompt<'_, Message> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        let focused = tree.children[0].children[0].children[1]
-            .state
-            .downcast_ref::<text_editor::State<PlainText>>()
-            .is_focused();
         let palette = theme.extended_palette();
         // The `>` takes the inherited colour; the editor has its own style.
         let style = renderer::Style {
-            text_color: match focused {
-                true => palette.primary.base.color,
-                false => palette.background.strong.color,
+            text_color: match icon_status(tree, layout, cursor) {
+                IconStatus::Focused => palette.primary.base.color,
+                // A hint of the focused colour.
+                IconStatus::Hovered => palette::mix(
+                    palette.background.strong.color,
+                    palette.primary.base.color,
+                    0.3,
+                ),
+                IconStatus::Active => palette.background.strong.color,
             },
         };
         let inner = &tree.children[0];
@@ -250,6 +256,14 @@ impl<Message> Widget<Message, Theme, Renderer> for Prompt<'_, Message> {
             shell,
             viewport,
         );
+        // Redraw when the `>` would look different (as iced's widgets do).
+        let hovered = icon_status(tree, layout, cursor) == IconStatus::Hovered;
+        let state = tree.state.downcast_mut::<State>();
+        if let Event::Window(window::Event::RedrawRequested(_)) = event {
+            state.hovered = hovered;
+        } else if hovered != state.hovered {
+            shell.request_redraw();
+        }
         if shell.is_event_captured() {
             return;
         }
@@ -279,6 +293,31 @@ impl<Message> Widget<Message, Theme, Renderer> for Prompt<'_, Message> {
     ) -> mouse::Interaction {
         let inner = &tree.children[0];
         (self.scrollable).mouse_interaction(inner, layout, cursor, viewport, renderer)
+    }
+}
+
+/// How the `>` looks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum IconStatus {
+    /// The editor has focus.
+    Focused,
+    /// The pointer is over the prompt, which doesn't have focus.
+    Hovered,
+    Active,
+}
+
+/// How the `>` of the prompt with `tree` looks.
+fn icon_status(tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor) -> IconStatus {
+    let focused = tree.children[0].children[0].children[1]
+        .state
+        .downcast_ref::<text_editor::State<PlainText>>()
+        .is_focused();
+    if focused {
+        IconStatus::Focused
+    } else if cursor.is_over(layout.bounds()) {
+        IconStatus::Hovered
+    } else {
+        IconStatus::Active
     }
 }
 
