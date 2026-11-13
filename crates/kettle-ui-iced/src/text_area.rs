@@ -75,10 +75,9 @@ impl<'a> TextArea<'a> {
         if let Some(id) = &self.id {
             editor = editor.id(id.clone());
         }
-        if self.on_change.is_some() {
-            editor = editor.on_action(|action| action);
-        }
-        editor
+        // Even when disabled, so its text can be selected and copied; the
+        // edits are dropped in `update`.
+        editor.on_action(|action| action)
     }
 }
 
@@ -100,10 +99,13 @@ impl Widget<Message, Theme, Renderer> for TextArea<'_> {
     }
 
     fn children(&self) -> Vec<Tree> {
-        // The editor's state doesn't depend on its content.
+        // The editor's state doesn't depend on its content. The second one
+        // is never focused: a disabled text area is drawn with it while
+        // nothing is selected, so no caret shows, as in a disabled text input.
         let content = Content::new();
         let editor: Editor<'_> = TextEditor::new(&content);
-        vec![Tree::new(&editor as &dyn Widget<Action, Theme, Renderer>)]
+        let tree = || Tree::new(&editor as &dyn Widget<Action, Theme, Renderer>);
+        vec![tree(), tree()]
     }
 
     fn diff(&self, tree: &mut Tree) {
@@ -143,8 +145,14 @@ impl Widget<Message, Theme, Renderer> for TextArea<'_> {
         viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<State>();
+        let disabled = self.on_change.is_none();
+        let editor_tree = if disabled && state.content.selection().is_none() {
+            &tree.children[1]
+        } else {
+            &tree.children[0]
+        };
         self.editor(&state.content, state.status, renderer).draw(
-            &tree.children[0],
+            editor_tree,
             renderer,
             theme,
             style,
@@ -194,7 +202,19 @@ impl Widget<Message, Theme, Renderer> for TextArea<'_> {
             &mut inner,
             viewport,
         );
+        // Like a disabled text input, a disabled text area drops edits, and
+        // lets others have the keys that would make them.
+        let captured = inner.is_event_captured();
         forward(&inner, shell);
+        drop(inner);
+        let disabled = self.on_change.is_none();
+        let dropped = disabled && !actions.is_empty() && actions.iter().all(Action::is_edit);
+        if disabled {
+            actions.retain(|action| !action.is_edit());
+        }
+        if captured && !dropped {
+            shell.capture_event();
+        }
 
         // As in iced's text editor, which can't keep it here.
         let focused = (tree.children[0].state)
@@ -240,8 +260,8 @@ impl Widget<Message, Theme, Renderer> for TextArea<'_> {
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        // iced's editor shows NotAllowed when disabled; its text_input
-        // shows Idle, and so do we.
+        // A disabled text input shows Idle, so we do too; the editor, which
+        // never looks disabled to iced, would show Text.
         if self.on_change.is_none() {
             return if cursor.is_over(layout.bounds()) {
                 mouse::Interaction::Idle
@@ -261,11 +281,9 @@ impl<'a> From<TextArea<'a>> for Element<'a, Message> {
     }
 }
 
-/// Passes on what the editor asked of its shell, except its messages.
+/// Passes on what the editor asked of its shell, except its messages and
+/// capturing the event.
 fn forward(inner: &Shell<'_, Action>, shell: &mut Shell<'_, Message>) {
-    if inner.is_event_captured() {
-        shell.capture_event();
-    }
     shell.request_redraw_at(inner.redraw_request());
     shell.request_input_method(inner.input_method());
     if inner.is_layout_invalid() {

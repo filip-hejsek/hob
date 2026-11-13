@@ -871,6 +871,23 @@ mod tests {
         assert!(text.contains("old") && text.contains('!'), "{text:?}");
     }
 
+    #[test]
+    fn a_frozen_text_area_takes_clicks_and_moves_but_not_edits() {
+        // Like a disabled text input, so its text can be selected.
+        let builder = IslandBuilder::new(text_area("b", "B"));
+        let frozen = Island::new(builder).unwrap().0.freeze();
+        let mut ui = simulator(view_frozen::<()>(&frozen));
+        ui.point_at((20.0, 10.0));
+        let clicked = ui.simulate(iced_test::simulator::click());
+        assert!(clicked.contains(&iced::event::Status::Captured));
+        assert_eq!(ui.typewrite("x"), iced::event::Status::Ignored);
+        assert_eq!(
+            ui.tap_key(iced::keyboard::key::Named::ArrowLeft),
+            iced::event::Status::Captured
+        );
+        assert_eq!(ui.into_messages().count(), 0);
+    }
+
     /// Buttons with keys, and no text fields.
     fn question() -> Island {
         let builder = IslandBuilder::new(row([submit_button("Yes [y]"), cancel_button("No [n]")]));

@@ -299,13 +299,15 @@ likely in cosmic-text's font selection per word.
 
 **Workaround:** matching chars are only underlined.
 
-## The same cursor for disabled text inputs and editors
+## Disabled text editors that work like disabled text inputs
 
-**Needed for:** a frozen island's text areas and text fields showing the
-same mouse cursor.
+**Needed for:** a frozen island's text areas working like its text fields.
 
-A disabled `text_input` shows `Interaction::Idle`, but a disabled
-`text_editor` shows `Interaction::NotAllowed`.
+The text in a disabled `text_input` can be selected and copied; it shows
+the selection but no caret, and the `Idle` mouse cursor. A disabled
+`text_editor` ignores all events, and shows `NotAllowed`.
 
-**Workaround:** `TextArea` (kettle-ui-iced) returns `Idle` itself when
-disabled, instead of asking the editor.
+**Workaround:** `TextArea` (kettle-ui-iced) never disables its editor. When
+disabled, it drops the editor's edits (and doesn't capture the keys that
+made them), shows `Idle` itself, and while nothing is selected draws the
+editor with a second, never focused state, so no caret shows.
