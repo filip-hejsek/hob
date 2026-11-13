@@ -20,13 +20,15 @@ the shell) tells the cursor and selection. Islands' text fields are still
 ## Which visual row a text editor's caret is on
 
 **Needed for:** Up from the first row and Down from the last row of a
-text area moving to the island's previous and next field.
+text area moving to the island's previous and next field; likewise in a
+multi-line prompt, browsing the history (see TODO.md).
 
 `Content::cursor` gives the caret's logical line and column, but not which
 wrapped row it's on, nor whether it's on the first or last one.
 
 **Workaround:** Up and Down stay in a text area; Ctrl+Up and Ctrl+Down
-leave it. (It could be found
+leave it. Multi-line command lines, which browsed the history from the
+first and last logical line, were dropped, partly for this. (It could be found
 by moving the caret with Home and DocumentStart, End and DocumentEnd, and
 comparing, then moving it back, but that wasn't worth it.) Another way,
 not tried yet: lay the text out again as the prompt does (see "A text
@@ -50,6 +52,19 @@ height, so it never scrolls itself. The prompt keeps the cursor in view:
 it lays the text out again in an `iced_graphics` `Paragraph`, finds the
 cursor's row in its cosmic-text buffer, and scrolls the scrollable to it
 with an operation.
+
+## Key bindings that see the app's state when a key is pressed
+
+**Needed for:** prompt keys that depend on the shell's state, such as
+Escape restoring the line while a completion candidate is picked, and
+otherwise unfocusing the prompt.
+
+`text_editor::key_binding` decides what a key does with what its closure
+captured at the last view. Keys pressed before the next view (key repeat,
+or several keys in one batch) see stale state.
+
+**Workaround:** the prompt's bindings pass such keys to the shell as a
+message (`Binding::Custom`), and the shell decides when it handles it.
 
 ## Key handlers on a text input
 
@@ -159,22 +174,27 @@ Ctrl+Enter in kettle-ui-iced islands.
 The `Emulator` passes interactions only to the widgets, not to
 subscriptions such as `event::listen_with` or `window::close_requests`.
 Also, its `Key` has only Enter, Escape, Tab and Backspace (no arrows or
-PageUp/PageDown), and there are no modifiers.
+PageUp/PageDown), there are no modifiers, and there's no mouse wheel.
 
 **Workaround:** history and completion are tested on `History` and
 `Interpreter::complete`, Ctrl+L by calling the shell's `update` directly
 (or the emulator's `update`, with the shell's key message), and all of them
-checked by hand in a real window (Xvfb).
+checked by hand in a real window (Xvfb). Shift+Enter in the prompt is
+tested by sending the editor's action, and the prompt's key bindings by
+calling them. Wheel scrolling in the prompt is tested only by hand; its
+scroll arithmetic has unit tests.
 
 ## Finding a text editor's text in `iced_test`
 
 **Needed for:** checking what was typed into a text area in kettle-ui-iced
-tests.
+tests, and finding hob-gui's prompt (a `text_editor`) in its tests.
 
 `Expectation::Text` finds the text of `text` and `text_input` widgets, but
 not of a `text_editor`.
 
 **Workaround:** the tests submit the island and check the submitted value.
+The prompt's wrapper reports the editor's text (or its placeholder) to
+operations itself.
 
 ## Waiting for an app to settle in `iced_test`
 
