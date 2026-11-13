@@ -247,11 +247,11 @@ fn typing_the_delimiter_goes_on_into_the_picked_directory() {
     shell.step(typewrite("/x'"));
     shell.step(press(Key::Enter));
     shell.expect(&format!("{dir}/nested dir/x"));
-    // A slash after a file is just typed.
+    // A slash after a file goes after it bare, quote still open.
     shell.step(typewrite(&format!("look '{dir}/")));
     shell.update(Message::Action(Action::Complete));
     shell.update(Message::Action(Action::PickPrevious));
-    shell.step(typewrite("/ y"));
+    shell.step(typewrite("/' y"));
     shell.step(press(Key::Enter));
     shell.expect(&format!("{dir}/notes/ | y"));
 }
@@ -360,7 +360,7 @@ fn other_keys_take_the_searched_candidate() {
 }
 
 #[test]
-fn shift_space_takes_the_candidate_and_cycles_its_endings() {
+fn shift_space_takes_the_candidate_bare_and_cycles_its_endings() {
     let (mut shell, _dir) = shell_with_files();
     let shift_space = |shell: &mut Shell| {
         act(shell, Action::TakePick);
@@ -370,22 +370,64 @@ fn shift_space_takes_the_candidate_and_cycles_its_endings() {
     act(&mut shell, Action::Complete);
     act(&mut shell, Action::Complete);
     type_into(&mut shell, "lt");
-    // With the delimiter, finished with a space, bare, and around again.
-    assert_eq!(shift_space(&mut shell), "look delta/");
+    // Bare, with the delimiter, finished with a space, and around again.
+    assert_eq!(shift_space(&mut shell), "look delta");
     assert!(shell.offer.is_none());
+    assert_eq!(shift_space(&mut shell), "look delta/");
     assert_eq!(shift_space(&mut shell), "look delta ");
     assert_eq!(shift_space(&mut shell), "look delta");
-    assert_eq!(shift_space(&mut shell), "look delta/");
     // Without a delimiter, the quote is closed with the space.
     shell.set_prompt("look 'al");
     act(&mut shell, Action::Complete);
     act(&mut shell, Action::Complete);
-    assert_eq!(shift_space(&mut shell), "look 'alpha' ");
     assert_eq!(shift_space(&mut shell), "look 'alpha");
     assert_eq!(shift_space(&mut shell), "look 'alpha' ");
+    assert_eq!(shift_space(&mut shell), "look 'alpha");
     // Otherwise, it types a space.
     type_into(&mut shell, "x");
-    assert_eq!(shift_space(&mut shell), "look 'alpha' x ");
+    assert_eq!(shift_space(&mut shell), "look 'alphax ");
+}
+
+#[test]
+fn the_cursor_is_before_the_picked_candidates_terminator() {
+    let (mut shell, _dir) = shell_with_files();
+    let column = |shell: &Shell| shell.prompt.cursor().position.column;
+    type_into(&mut shell, "look 'al");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look 'alpha'");
+    assert_eq!(column(&shell), "look 'alpha".len());
+    act(&mut shell, Action::Complete);
+    assert_eq!(column(&shell), "look 'alphabet".len());
+    type_into(&mut shell, "a");
+    assert_eq!(column(&shell), "look 'alpha".len());
+    // Without a quote, it's at the end.
+    shell.offer = None;
+    shell.set_prompt("look al");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    assert_eq!(column(&shell), "look alpha".len());
+}
+
+#[test]
+fn other_text_goes_after_the_picked_candidate_bare() {
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "look 'al");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    type_into(&mut shell, ".");
+    assert_eq!(shell.prompt.text(), "look 'alpha.");
+    assert!(shell.offer.is_none());
+    // No cycling.
+    act(&mut shell, Action::TakePick);
+    assert_eq!(shell.prompt.text(), "look 'alpha. ");
+    // Pasting too.
+    shell.set_prompt("look 'al");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    let paste = text_editor::Action::Edit(Edit::Paste(Arc::new("-x".to_owned())));
+    let _ = shell.update(Message::PromptEdited(paste));
+    assert_eq!(shell.prompt.text(), "look 'alpha-x");
 }
 
 #[test]

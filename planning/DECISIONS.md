@@ -1057,13 +1057,17 @@ Works like a terminal: a scrollback with the prompt below it.
 - Tab again, while candidates are listed, picks one, a bit like zsh's menu
   completion: the picked one has a box of the primary colour (no border)
   and is filled in to the prompt as a finished word (quote closed), but
-  without the space or its delimiter (see hob-core). Tab and Shift+Tab pick the next and previous,
-  wrapping (Shift+Tab first picks the last). Escape restores the line from
-  before picking, and keeps the list. Anything else that changes the line
-  ends it, so Space and Enter need no handling of their own: Space takes
-  the candidate and adds the space, Enter takes it and runs the line, and
-  typing other text goes on after it (typing the candidate's delimiter
-  gives its `continued` line).
+  without the space or its delimiter (see hob-core), with the cursor
+  before its terminator (`cd 'my dir|'`), where typed text goes. Tab and
+  Shift+Tab pick the next and previous, wrapping (Shift+Tab first picks
+  the last). Escape restores the line from before picking, and keeps the
+  list. Anything else that changes the line ends it, taking the
+  candidate: its delimiter gives the line with it (`cd 'my dir/`), Space
+  finishes it with a space (`cd 'my dir' `), Shift+Space leaves it bare
+  (`cd 'my dir`), and other typed or pasted text goes after it bare
+  (`cd 'my dir.`), quote still open. Enter takes it as shown and runs the
+  line; other edits (Backspace without a query, Delete) work at the
+  cursor.
 - While picking, letters and digits (`char::is_alphanumeric`) search the
   candidates instead of taking the picked one: fuzzy, like fzf, against
   the listed name without its delimiter, best match first (ties in
@@ -1078,16 +1082,15 @@ Works like a terminal: a scrollback with the prompt below it.
   nothing is picked, and the prompt shows the line from before picking
   with the query after it; Space or other chars then keep that text. Not
   ignoring the key silently was the point; the rest is tentative.
-  Shift+Space takes the picked candidate with its first ending (or, with
-  no match, the typed query); otherwise it types a space. Once a
-  candidate is taken, by Tab (a single one), Space, its delimiter or
-  Shift+Space, Shift+Space cycles its endings: with the delimiter
-  (`cd 'my dir/`, if it has one), finished with a space (`cd 'my dir' `),
-  and bare (`cd 'my dir`). Bare is for going on with the word by hand,
-  e.g. a suffix, inside the quote. It stops when anything else changes the
-  line or moves the cursor; the shell keeps the taken `Choice` and which
-  ending is shown (`Taken`), and Shift+Space checks that the prompt still
-  shows it. Like Escape, it's a
+  With no match, Shift+Space takes the typed query; while not picking,
+  it types a space. Once a candidate is taken by Tab (a single one),
+  Space, its delimiter or Shift+Space, Shift+Space cycles its endings:
+  with the delimiter (if it has one), finished with a space, and bare.
+  Bare is for going on with the word by hand, e.g. a suffix, inside the
+  quote. Other text taken after it doesn't cycle. Cycling stops when
+  anything else changes the line or moves the cursor; the shell keeps the
+  taken `Choice` and which ending is shown (`Taken`), and Shift+Space
+  checks that the prompt still shows it. Like Escape, it's a
   `Binding::Custom` decided by the shell. Matching uses nucleo-matcher
   (fzf's scoring, as in helix; it gives the match positions), without
   grapheme segmentation, so positions are char indices. hob-core gives the parts

@@ -17,8 +17,8 @@ pub(crate) enum Action {
     PickPrevious,
     /// Stops picking a candidate, restoring the line from before.
     CancelPick,
-    /// Takes the picked candidate, or cycles the endings of the one taken;
-    /// otherwise types a space.
+    /// Takes the picked candidate bare, or cycles the endings of the one
+    /// taken; otherwise types a space.
     TakePick,
     /// Scrolls the scrollback up by a page.
     PageUp,

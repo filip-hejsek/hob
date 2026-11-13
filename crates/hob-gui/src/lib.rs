@@ -21,9 +21,10 @@
 //! line; long lines wrap, and pasted line breaks become spaces). Up and Down
 //! browse the history, and Tab completes command names and arguments. Tab again, while candidates are
 //! listed, picks one (Tab and Shift+Tab move on, letters and digits search
-//! the candidates, Escape goes back to the line from before). Once one is
-//! taken, Shift+Space cycles how it ends: with its delimiter (the `/` of a
-//! directory), with its closing quote and a space, or bare. Tab doesn't move focus. Anywhere, PageUp and
+//! the candidates, Escape goes back to the line from before). Taking one
+//! with Space finishes it, Shift+Space leaves it bare (quote still open),
+//! and its delimiter (the `/` of a directory) goes on into it; Shift+Space
+//! then cycles between those endings. Tab doesn't move focus. Anywhere, PageUp and
 //! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). Ctrl+D
 //! in the empty prompt, or while nothing has focus, exits (like `exit`), unless
 //! commands are running: then it says so, and focuses an island waiting for
@@ -259,10 +260,11 @@ enum Item {
 /// picked candidate is filled in to the prompt, and Tab and Shift+Tab pick
 /// another. While picking, letters and digits search the candidates (fuzzy,
 /// best match first, picked), and Backspace takes them back. Escape
-/// restores the line from before; Shift+Space takes the candidate with its
-/// delimiter (see [`Taken`]); anything else that changes the line ends the
-/// offer (so Space and Enter take the candidate); typing a candidate's
-/// delimiter (`/` after a directory) goes on as completing it alone would.
+/// restores the line from before. Anything else that changes the line ends
+/// the offer, taking the candidate: its delimiter (`/` after a directory)
+/// goes on as completing it alone would, Space finishes it, Shift+Space
+/// leaves it bare (all three then cycle its endings, see [`Taken`]), and
+/// other text goes after it bare (quote still open).
 struct Offer {
     /// The candidates, and the line with each filled in.
     choices: Vec<Choice>,
@@ -353,12 +355,14 @@ impl Offer {
         Some(&self.choices[m.index])
     }
 
-    /// The line to show while picking: the picked candidate filled in, or
-    /// if none matches, the line from before with the query typed after it.
-    fn line(&self) -> Option<String> {
+    /// The line to show while picking, and how many chars before its end
+    /// the cursor goes: the picked candidate filled in, with the cursor
+    /// before its terminator (where typing goes on), or if none matches,
+    /// the line from before with the query typed after it.
+    fn line(&self) -> Option<(String, usize)> {
         match self.picked() {
-            Some(choice) => Some(choice.filled()),
-            None => Some(format!("{}{}", self.before.as_ref()?, self.query)),
+            Some(choice) => Some((choice.filled(), choice.terminator.chars().count())),
+            None => Some((format!("{}{}", self.before.as_ref()?, self.query), 0)),
         }
     }
 }
@@ -734,9 +738,7 @@ impl Shell {
                     };
                     if searched {
                         offer.search();
-                        if let Some(line) = offer.line() {
-                            self.set_prompt(&line);
-                        }
+                        self.show_pick();
                         return Task::none();
                     }
                 }
@@ -746,17 +748,34 @@ impl Shell {
                     self.history.stop_browsing();
                     let picked = self.offer.take().and_then(|o| o.picked().cloned());
                     if let Some(choice) = picked {
-                        match (&action, choice.continued()) {
-                            // Typing its delimiter goes on as completing it
-                            // alone would.
-                            (A(Edit::Insert(c)), Some(line)) if choice.delimiter == Some(*c) => {
-                                self.set_prompt(&line);
+                        let line = match &action {
+                            // Its delimiter goes on as completing it alone
+                            // would; Space finishes it. Shift+Space then
+                            // cycles its endings.
+                            A(Edit::Insert(c)) if choice.delimiter == Some(*c) => {
+                                choice.continued()
                             }
-                            _ => self.prompt.perform(action),
+                            A(Edit::Insert(' ')) => Some(choice.finished()),
+                            // Other text goes after it bare.
+                            A(Edit::Insert(c)) => {
+                                self.set_prompt(&format!("{}{c}", choice.bare));
+                                return Task::none();
+                            }
+                            A(Edit::Paste(text)) => {
+                                self.set_prompt(&format!("{}{text}", choice.bare));
+                                return Task::none();
+                            }
+                            // Other edits work at the cursor, before the
+                            // terminator.
+                            _ => None,
+                        };
+                        match line {
+                            Some(line) => {
+                                self.set_prompt(&line);
+                                self.taken = Taken::find(choice, &line);
+                            }
+                            None => self.prompt.perform(action),
                         }
-                        // If that took it (Space, or the delimiter),
-                        // Shift+Space then cycles its endings.
-                        self.taken = Taken::find(choice, &self.prompt.text());
                         return Task::none();
                     }
                 }
@@ -898,7 +917,10 @@ impl Shell {
                 self.offer = None;
                 self.history.forward().map(str::to_owned)
             }
-            Action::Complete if self.offer.is_some() => self.pick(1),
+            Action::Complete if self.offer.is_some() => {
+                self.pick(1);
+                None
+            }
             Action::Complete => {
                 let Some(interpreter) = &self.interpreter else {
                     return Task::none();
@@ -910,7 +932,10 @@ impl Shell {
                 self.history.stop_browsing();
                 Some(completion.line)
             }
-            Action::PickPrevious => self.pick(-1),
+            Action::PickPrevious => {
+                self.pick(-1);
+                None
+            }
             Action::TakePick => {
                 let text = self.prompt.text();
                 if let Some(taken) = self.taken.as_mut().filter(|t| t.line() == text) {
@@ -920,12 +945,9 @@ impl Shell {
                         // The prompt already shows the query typed.
                         return Task::none();
                     };
-                    let taken = Taken {
-                        choice: choice.clone(),
-                        ending: 0,
-                    };
-                    let line = taken.line();
-                    self.taken = Some(taken);
+                    // Bare; it cycles on from there.
+                    let line = choice.bare.clone();
+                    self.taken = Taken::find(choice.clone(), &line);
                     Some(line)
                 } else {
                     let space = text_editor::Action::Edit(Edit::Insert(' '));
@@ -969,14 +991,27 @@ impl Shell {
         (self.prompt).perform(text_editor::Action::Move(Motion::DocumentEnd));
     }
 
+    /// Shows the offer's line while picking in the prompt.
+    fn show_pick(&mut self) {
+        let Some((line, back)) = self.offer.as_ref().and_then(Offer::line) else {
+            return;
+        };
+        self.set_prompt(&line);
+        for _ in 0..back {
+            self.prompt.perform(text_editor::Action::Move(Motion::Left));
+        }
+    }
+
     /// Picks the match `step` places after the picked one (before, if
-    /// negative), and returns the line with it filled in. If none is picked
-    /// yet, starts picking with the first (or, going back, the last).
-    fn pick(&mut self, step: isize) -> Option<String> {
-        let offer = self.offer.as_mut()?;
+    /// negative), and shows it filled in. If none is picked yet, starts
+    /// picking with the first (or, going back, the last).
+    fn pick(&mut self, step: isize) {
+        let Some(offer) = self.offer.as_mut() else {
+            return;
+        };
         let len = offer.matches.len();
         if len == 0 {
-            return None;
+            return;
         }
         let index = match offer.picked {
             Some(index) => (index as isize + step).rem_euclid(len as isize) as usize,
@@ -987,7 +1022,7 @@ impl Shell {
             offer.before = Some(self.prompt.text());
         }
         offer.picked = Some(index);
-        offer.line()
+        self.show_pick();
     }
 
     fn subscription(&self) -> Subscription<Message> {
