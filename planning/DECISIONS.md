@@ -1066,17 +1066,17 @@ Works like a terminal: a scrollback with the prompt below it.
   finishes it with a space (`cd 'my dir' `), Shift+Space leaves it bare
   (`cd 'my dir`), and other typed or pasted text goes after it bare
   (`cd 'my dir.`), quote still open. Enter takes it as shown and runs the
-  line; other edits (Backspace without a query, Delete) work at the
-  cursor.
+  line; other edits (e.g. Delete) work at the cursor.
 - While picking, letters and digits (`char::is_alphanumeric`) search the
   candidates instead of taking the picked one: fuzzy, like fzf, against
   the listed name without its delimiter, best match first (ties in
   order), smart case. The best match is picked and filled in, and Tab and
   Shift+Tab go through the matches only. The query isn't shown by itself:
   the matching chars of each listed candidate are underlined, which shows
-  it. Backspace takes back a letter of the query; with none, it edits the
-  line (ending the offer), as before. Escape restores the line from before
-  picking and clears the search. Other chars take the candidate as
+  it. Backspace takes back a letter of the query; with none, it does what
+  Escape does (taking the candidate and deleting its last char was never
+  what was wanted). Escape restores the line from before picking and
+  clears the search. Other chars take the candidate as
   before; letters typed before picking (or after Escape) are plain text.
   If nothing matches, a dimmed "no match for" line shows the query,
   nothing is picked, and the prompt shows the line from before picking

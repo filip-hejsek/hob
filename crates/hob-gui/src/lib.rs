@@ -259,8 +259,8 @@ enum Item {
 /// Candidates offered by Tab completion. Tab again starts picking one: the
 /// picked candidate is filled in to the prompt, and Tab and Shift+Tab pick
 /// another. While picking, letters and digits search the candidates (fuzzy,
-/// best match first, picked), and Backspace takes them back. Escape
-/// restores the line from before. Anything else that changes the line ends
+/// best match first, picked), and Backspace takes them back. Escape, or
+/// Backspace without a query, restores the line from before. Anything else that changes the line ends
 /// the offer, taking the candidate: its delimiter (`/` after a directory)
 /// goes on as completing it alone would, Space finishes it, Shift+Space
 /// leaves it bare (all three then cycle its endings, see [`Taken`]), and
@@ -733,7 +733,14 @@ impl Shell {
                             offer.query.push(c);
                             true
                         }
-                        A(Edit::Backspace) => offer.query.pop().is_some(),
+                        // With no query, it goes back like Escape.
+                        A(Edit::Backspace) if offer.query.is_empty() => {
+                            return self.perform(Action::CancelPick);
+                        }
+                        A(Edit::Backspace) => {
+                            offer.query.pop();
+                            true
+                        }
                         _ => false,
                     };
                     if searched {

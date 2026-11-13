@@ -326,9 +326,13 @@ fn typing_while_picking_searches_the_candidates() {
     assert_eq!(shell.prompt.text(), "look alpha");
     backspace(&mut shell);
     assert_eq!(listed(&shell).0.len(), 6);
+    // Then it goes back to the line from before, like Escape.
+    backspace(&mut shell);
+    assert_eq!(shell.prompt.text(), "look ");
+    assert!(!shell.offer.as_ref().unwrap().picking());
     // Then it edits the line, ending the offer.
     backspace(&mut shell);
-    assert_eq!(shell.prompt.text(), "look READM");
+    assert_eq!(shell.prompt.text(), "look");
     assert!(shell.offer.is_none());
 }
 
