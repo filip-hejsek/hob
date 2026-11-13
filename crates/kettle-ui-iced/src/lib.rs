@@ -1280,6 +1280,46 @@ mod tests {
     }
 
     #[test]
+    fn numpad_digits_with_num_lock_type_instead_of_moving() {
+        use iced::keyboard::key::{Code, Named, Physical};
+        use iced::keyboard::{Key, Location, Modifiers};
+
+        let builder = IslandBuilder::new(column([
+            text_field("a", "A"),
+            text_field("b", "B"),
+            submit_button("OK"),
+        ]));
+        let island = Island::new(builder).unwrap().0;
+        let a = island.field_id("a").unwrap();
+        let mut ui = simulator(island.view());
+        ui.click(a).unwrap();
+        // Numpad 2 with Num Lock on: without modifiers, it's still Down.
+        let key = Key::Named(Named::ArrowDown);
+        let modified_key = Key::Character("2".into());
+        let physical_key = Physical::Code(Code::Numpad2);
+        ui.simulate([
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: key.clone(),
+                modified_key: modified_key.clone(),
+                physical_key,
+                location: Location::Numpad,
+                modifiers: Modifiers::empty(),
+                text: Some("2".into()),
+                repeat: false,
+            }),
+            iced::Event::Keyboard(iced::keyboard::Event::KeyReleased {
+                key,
+                modified_key,
+                physical_key,
+                location: Location::Numpad,
+                modifiers: Modifiers::empty(),
+            }),
+        ]);
+        let messages: Vec<String> = ui.into_messages().map(|m| format!("{m:?}")).collect();
+        assert_eq!(messages, [r#"Message(TextChanged("a", "2"))"#]);
+    }
+
+    #[test]
     fn down_from_the_last_text_field_focuses_the_island() {
         use iced::keyboard::{Key, key::Named};
 

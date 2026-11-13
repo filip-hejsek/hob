@@ -1009,7 +1009,11 @@ Works like a terminal: a scrollback with the prompt below it.
   `jobs` prints the same list, one command line per line.
 - Key bindings are a table (the `keys` module) from a key with exact
   modifiers to a named action, kept apart from what the actions do, so it
-  can become configurable. Letters are compared in lowercase. History and
+  can become configurable. Letters are compared in lowercase. Keys are
+  looked up without modifiers (iced's `key`), except a named key the
+  modifiers made a character (`modified_key`): without modifiers, Num Lock
+  is off too, so the numpad's 2 and 8 would browse the history (islands
+  do the same for their arrow keys). History and
   completion work only while the prompt has focus (the prompt's key
   bindings look them up; see below); the others anywhere:
   PageUp/PageDown scroll the scrollback by a bit less than a page, and

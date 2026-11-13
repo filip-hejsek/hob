@@ -114,6 +114,16 @@ pub(crate) fn lookup(bindings: &[Binding], key: Key, modifiers: Modifiers) -> Op
         .map(|b| b.action)
 }
 
+/// The key to look up in the bindings: the key without modifiers, so
+/// that e.g. Ctrl+Shift+L is still an L, except where the modifiers turned
+/// a named key into a character, as Num Lock does with the numpad's arrows.
+pub(crate) fn bound_key(key: Key, modified_key: Key) -> Key {
+    match (&key, &modified_key) {
+        (Key::Named(_), Key::Character(_)) => modified_key,
+        _ => key,
+    }
+}
+
 /// Letters in lowercase, so caps lock doesn't matter.
 fn normalize(key: Key) -> Key {
     match key {

@@ -311,3 +311,16 @@ the selection but no caret, and the `Idle` mouse cursor. A disabled
 disabled, it drops the editor's edits (and doesn't capture the keys that
 made them), shows `Idle` itself, and while nothing is selected draws the
 editor with a second, never focused state, so no caret shows.
+
+## A key without modifiers that keeps Num Lock
+
+**Needed for:** key bindings that work whatever Shift and Caps Lock do
+(hob-gui's bindings, islands' keys in kettle-ui-iced), without taking the
+numpad's digits.
+
+On Linux, a key press's `key` is the key's first level, ignoring every
+modifier, Num Lock too: the numpad's 2 is `ArrowDown` there, even when it
+types a 2. `modified_key` keeps Num Lock, but also Shift and the rest.
+
+**Workaround:** a named `key` whose `modified_key` is a character is taken
+to be that character.

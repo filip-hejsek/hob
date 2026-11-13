@@ -779,6 +779,20 @@ fn prompt_keys() {
     ));
     // The shell scrolls.
     assert!(key(Named::PageUp, Code::PageUp, none).is_none());
+    // With Num Lock on, the numpad's Down types a 2 (its key without
+    // modifiers is still Down).
+    let numpad_2 = prompt_binding(
+        &bindings,
+        KeyPress {
+            key: keyboard::Key::Named(Named::ArrowDown),
+            modified_key: keyboard::Key::Character("2".into()),
+            physical_key: Physical::Code(Code::Numpad2),
+            modifiers: none,
+            text: Some("2".into()),
+            status: text_editor::Status::Focused { is_hovered: false },
+        },
+    );
+    assert!(matches!(numpad_2, Some(B::Insert('2'))));
     // Nothing while unfocused.
     assert!(press(Named::Enter, Code::Enter, none, false).is_none());
 }

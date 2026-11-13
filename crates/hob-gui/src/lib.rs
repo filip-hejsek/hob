@@ -1451,6 +1451,7 @@ fn log_records(items: &[Item]) -> Vec<LogRecord> {
 fn key_message(event: Event, status: event::Status) -> Option<Message> {
     let Event::Keyboard(keyboard::Event::KeyPressed {
         key,
+        modified_key,
         modifiers,
         text,
         ..
@@ -1463,7 +1464,11 @@ fn key_message(event: Event, status: event::Status) -> Option<Message> {
         Some(text) if !command && !text.chars().any(char::is_control) => {
             (status == event::Status::Ignored).then(|| Message::Typed(text.into()))
         }
-        _ => Some(Message::Key(key, modifiers, status)),
+        _ => Some(Message::Key(
+            keys::bound_key(key, modified_key),
+            modifiers,
+            status,
+        )),
     }
 }
 
@@ -1689,7 +1694,8 @@ fn prompt_binding(bindings: &[Binding], key: KeyPress) -> Option<text_editor::Bi
         return None;
     }
     let custom = |action| Some(text_editor::Binding::Custom(Message::Action(action)));
-    match keys::lookup(bindings, key.key.clone(), key.modifiers) {
+    let bound = keys::bound_key(key.key.clone(), key.modified_key.clone());
+    match keys::lookup(bindings, bound, key.modifiers) {
         // Escape is decided when it's done (it unfocuses, unless candidates
         // are listed), since keys pressed before the next view would see a
         // stale state here.

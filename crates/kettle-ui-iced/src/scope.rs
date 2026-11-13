@@ -363,10 +363,17 @@ impl Widget<Message, Theme, Renderer> for Scope<'_> {
             }
             Event::Keyboard(keyboard::Event::KeyPressed {
                 key,
+                modified_key,
                 physical_key,
                 modifiers,
                 ..
             }) => {
+                // A named key the modifiers turned into a character (like
+                // a numpad arrow with Num Lock on) is that character.
+                let key = match (key, modified_key) {
+                    (keyboard::Key::Named(_), keyboard::Key::Character(_)) => modified_key,
+                    _ => key,
+                };
                 if let Some(action) = self.key_action(
                     tree,
                     key,
