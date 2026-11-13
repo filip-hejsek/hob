@@ -926,9 +926,12 @@ impl Shell {
                     return Task::none();
                 };
                 let completion = interpreter.complete(&self.prompt.text());
+                // Without any completions, a taken one still cycles.
+                if !completion.choices.is_empty() || completion.only.is_some() {
+                    self.taken = (completion.only).and_then(|c| Taken::find(c, &completion.line));
+                }
                 self.offer =
                     (!completion.choices.is_empty()).then(|| Offer::new(completion.choices));
-                self.taken = (completion.only).and_then(|c| Taken::find(c, &completion.line));
                 self.history.stop_browsing();
                 Some(completion.line)
             }

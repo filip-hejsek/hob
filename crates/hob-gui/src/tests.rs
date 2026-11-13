@@ -458,6 +458,9 @@ fn shift_space_cycles_the_endings_of_other_ways_of_taking_a_candidate() {
     shell.set_prompt("look de");
     act(&mut shell, Action::Complete);
     assert_eq!(shell.prompt.text(), "look delta/");
+    // Tab with nothing to complete (delta is empty) doesn't stop it.
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look delta/");
     assert_eq!(shift_space(&mut shell), "look delta ");
     // Moving the cursor stops it.
     let left = text_editor::Action::Move(Motion::Left);
