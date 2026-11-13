@@ -179,6 +179,27 @@ fn tab_again_picks_a_candidate_and_enter_runs_it() {
 }
 
 #[test]
+fn the_offer_doesnt_scroll_a_short_scrollback() {
+    // Enough candidates for several rows, so the view gets shorter by more
+    // than a line.
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..24 {
+        std::fs::write(dir.path().join(format!("a candidate {i:02}")), "").unwrap();
+    }
+    let dir = dir.path().display().to_string();
+    let mut shell = start(None);
+    shell.run("say hi");
+    shell.expect("hi");
+    shell.step(click(PLACEHOLDER));
+    shell.step(typewrite(&format!("look '{dir}/")));
+    shell.update(Message::Action(Action::Complete));
+    shell.expect("a candidate 23");
+    // The view got shorter, but the top line is still shown: clicking it
+    // needs it in sight.
+    shell.step(click("> say hi"));
+}
+
+#[test]
 fn space_takes_the_picked_candidate() {
     let mut shell = start(None);
     shell.step(click(PLACEHOLDER));

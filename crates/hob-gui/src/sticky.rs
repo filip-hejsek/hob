@@ -98,10 +98,12 @@ impl<Message> Widget<Message, Theme, Renderer> for Sticky<'_, Message> {
             seen.at_bottom = true;
         }
         // Keep the content at least down to the bottom of the view, so
-        // nothing shown moves down when it gets shorter.
+        // nothing shown moves down when it gets shorter. If the view got
+        // shorter, down to its new bottom, so that the space kept doesn't
+        // push what's shown up.
         let floor = match reveal {
             true => 0.0,
-            false => seen.top + seen.height,
+            false => seen.top + seen.height.min(limits.max().height),
         };
         floor_state(tree).min = floor;
 
