@@ -29,7 +29,8 @@
 //! PageDown scroll the scrollback, and Ctrl+L clears it (like `clear`). Ctrl+D
 //! in the empty prompt, or while nothing has focus, exits (like `exit`), unless
 //! commands are running: then it says so, and focuses an island waiting for
-//! input. Typing while nothing has focus types into the prompt. The bindings are a table (see the
+//! input. Typing while nothing has focus types into the prompt, and Escape
+//! focuses it. The bindings are a table (see the
 //! `keys` module), to make them configurable later.
 //!
 //! Command lines and output can be selected with the mouse and copied with
@@ -451,6 +452,8 @@ enum Message {
     /// Performs a bound action; for one that needs the prompt, it has
     /// focus.
     Action(Action),
+    /// Performs a bound action while nothing has focus.
+    ActionUnfocused(Action),
     /// Moves focus, depending on what has it now (the Id).
     Refocus(Refocus, Option<Id>),
     /// Picks the candidate below the picked one (above, if false), given
@@ -808,13 +811,21 @@ impl Shell {
                     // While the prompt has focus, its key bindings do it.
                     Scope::Prompt => Task::none(),
                     Scope::PromptOrNothing => focused().then(move |focused| match focused {
-                        None => Task::done(Message::Action(action)),
+                        None => Task::done(Message::ActionUnfocused(action)),
                         Some(_) => Task::none(),
                     }),
                 },
                 None => Task::none(),
             },
             Message::Action(action) => self.perform(action),
+            // Escape focuses the prompt, also restoring the line if a
+            // candidate is picked; listed candidates stay.
+            Message::ActionUnfocused(Action::CancelPick)
+                if !self.offer.as_ref().is_some_and(Offer::picking) =>
+            {
+                operation::focus(Id::new(PROMPT))
+            }
+            Message::ActionUnfocused(action) => self.perform(action),
             Message::Typed(text) if !self.is_preview() => {
                 focused().then(move |focused| match focused {
                     None => Task::done(Message::TypedUnfocused(text.clone())),

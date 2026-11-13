@@ -630,6 +630,21 @@ fn escape_restores_the_line_while_nothing_has_focus() {
 }
 
 #[test]
+fn escape_focuses_the_prompt_while_nothing_has_focus() {
+    let mut shell = start(None);
+    shell.run("say hi");
+    shell.expect("hi");
+    shell.step(click("> say hi"));
+    shell.settle();
+    // The emulator doesn't pass events to subscriptions.
+    let escape = keyboard::Key::Named(keyboard::key::Named::Escape);
+    shell.update(Message::Key(escape, Modifiers::empty()));
+    shell.step(typewrite("say again"));
+    shell.step(press(Key::Enter));
+    shell.expect("> say again");
+}
+
+#[test]
 fn the_command_line_has_one_line() {
     let mut shell = start(None);
     shell.step(click(PLACEHOLDER));

@@ -1107,9 +1107,10 @@ Works like a terminal: a scrollback with the prompt below it.
   (fzf's scoring, as in helix; it gives the match positions), without
   grapheme segmentation, so positions are char indices. hob-core gives the parts
   of each candidate's line (`Choice`). Escape works while nothing
-  has focus too (e.g. after a click on the scrollback), and focuses the
-  prompt again; otherwise, Escape hides listed candidates (none picked),
-  and only then unfocuses the prompt. The prompt's key
+  has focus too (e.g. after a click on the scrollback): it focuses the
+  prompt again (restoring the line if a candidate is picked, keeping
+  listed candidates); otherwise, Escape hides listed candidates (none
+  picked), and only then unfocuses the prompt. The prompt's key
   bindings pass Escape to the shell, which decides when it's done: the
   bindings are built at the last view, so keys pressed before the next one
   would see a stale state.
