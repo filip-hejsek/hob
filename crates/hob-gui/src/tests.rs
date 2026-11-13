@@ -102,7 +102,11 @@ fn clearing_keeps_the_focus_of_a_live_island() {
     shell.settle();
     shell.step(typewrite("An"));
     // Ctrl+L removes the block before the island's.
-    let ctrl_l = Message::Key(keyboard::Key::Character("l".into()), Modifiers::CTRL);
+    let ctrl_l = Message::Key(
+        keyboard::Key::Character("l".into()),
+        Modifiers::CTRL,
+        event::Status::Ignored,
+    );
     shell.update(ctrl_l);
     shell.expect_absent("> say before");
     // The name field still has focus.
@@ -622,7 +626,11 @@ fn escape_restores_the_line_while_nothing_has_focus() {
     shell.settle();
     // The emulator doesn't pass events to subscriptions.
     let escape = keyboard::Key::Named(keyboard::key::Named::Escape);
-    shell.update(Message::Key(escape, Modifiers::empty()));
+    shell.update(Message::Key(
+        escape,
+        Modifiers::empty(),
+        event::Status::Ignored,
+    ));
     // The prompt has focus again.
     shell.step(typewrite("ay again"));
     shell.step(press(Key::Enter));
@@ -638,8 +646,36 @@ fn escape_focuses_the_prompt_while_nothing_has_focus() {
     shell.settle();
     // The emulator doesn't pass events to subscriptions.
     let escape = keyboard::Key::Named(keyboard::key::Named::Escape);
-    shell.update(Message::Key(escape, Modifiers::empty()));
+    shell.update(Message::Key(
+        escape,
+        Modifiers::empty(),
+        event::Status::Ignored,
+    ));
     shell.step(typewrite("say again"));
+    shell.step(press(Key::Enter));
+    shell.expect("> say again");
+}
+
+#[test]
+fn escape_toggles_the_prompt_focus() {
+    let mut shell = start(None);
+    shell.step(click(PLACEHOLDER));
+    shell.step(typewrite("say"));
+    shell.step(press(Key::Escape));
+    // The subscription sees the Escape the prompt took, and leaves it be.
+    let escape = || keyboard::Key::Named(keyboard::key::Named::Escape);
+    let captured = Message::Key(escape(), Modifiers::empty(), event::Status::Captured);
+    shell.update(captured);
+    shell.settle();
+    // Unfocused: the emulator doesn't run the subscription that types into
+    // the prompt, so this is lost.
+    shell.step(typewrite(" lost"));
+    shell.update(Message::Key(
+        escape(),
+        Modifiers::empty(),
+        event::Status::Ignored,
+    ));
+    shell.step(typewrite(" again"));
     shell.step(press(Key::Enter));
     shell.expect("> say again");
 }
@@ -770,7 +806,11 @@ fn ctrl_d_works_while_nothing_has_focus() {
     shell.settle();
     shell.step(click("> greet"));
     shell.settle();
-    let ctrl_d = Message::Key(keyboard::Key::Character("d".into()), Modifiers::CTRL);
+    let ctrl_d = Message::Key(
+        keyboard::Key::Character("d".into()),
+        Modifiers::CTRL,
+        event::Status::Ignored,
+    );
     shell.update(ctrl_d);
     shell.expect("warning: Not exiting: greet is running");
 }
@@ -816,7 +856,11 @@ fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
             interrupted: false,
         }));
     }
-    let ctrl_l = Message::Key(keyboard::Key::Character("l".into()), Modifiers::CTRL);
+    let ctrl_l = Message::Key(
+        keyboard::Key::Character("l".into()),
+        Modifiers::CTRL,
+        event::Status::Ignored,
+    );
     let _ = shell.update(ctrl_l);
     let lines: Vec<_> = (shell.scrollback.iter())
         .map(|item| match item {
@@ -1114,7 +1158,11 @@ fn preview_shows_the_session_without_changing_it() {
         Level::Info,
         None,
     );
-    let ctrl_l = Message::Key(keyboard::Key::Character("l".into()), Modifiers::CTRL);
+    let ctrl_l = Message::Key(
+        keyboard::Key::Character("l".into()),
+        Modifiers::CTRL,
+        event::Status::Ignored,
+    );
     let _ = shell.update(ctrl_l);
     assert_eq!(shell.scrollback.len(), 1);
     let _ = shell.update(Message::CloseRequested);

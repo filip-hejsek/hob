@@ -443,8 +443,9 @@ enum Message {
     /// The user did something in the prompt.
     PromptEdited(text_editor::Action),
     PromptSubmitted,
-    /// A key was pressed (the shell's bindings decide what it does).
-    Key(keyboard::Key, Modifiers),
+    /// A key was pressed (the shell's bindings decide what it does), and
+    /// whether a widget took it.
+    Key(keyboard::Key, Modifiers, event::Status),
     /// Text was typed, and no widget took it.
     Typed(String),
     /// Text was typed while nothing had focus; it goes to the prompt.
@@ -805,18 +806,23 @@ impl Shell {
                 self.save();
                 task
             }
-            Message::Key(key, modifiers) => match keys::lookup(&self.bindings, key, modifiers) {
-                Some(action) => match action.scope() {
-                    Scope::Anywhere => self.perform(action),
-                    // While the prompt has focus, its key bindings do it.
-                    Scope::Prompt => Task::none(),
-                    Scope::PromptOrNothing => focused().then(move |focused| match focused {
-                        None => Task::done(Message::ActionUnfocused(action)),
-                        Some(_) => Task::none(),
-                    }),
-                },
-                None => Task::none(),
-            },
+            Message::Key(key, modifiers, status) => {
+                match keys::lookup(&self.bindings, key, modifiers) {
+                    Some(action) => match action.scope() {
+                        Scope::Anywhere => self.perform(action),
+                        // While the prompt has focus, its key bindings do it.
+                        Scope::Prompt => Task::none(),
+                        // The prompt's bindings did it (and Escape may have
+                        // unfocused it since, so asking would be too late).
+                        Scope::PromptOrNothing if status == event::Status::Captured => Task::none(),
+                        Scope::PromptOrNothing => focused().then(move |focused| match focused {
+                            None => Task::done(Message::ActionUnfocused(action)),
+                            Some(_) => Task::none(),
+                        }),
+                    },
+                    None => Task::none(),
+                }
+            }
             Message::Action(action) => self.perform(action),
             // Escape focuses the prompt, also restoring the line if a
             // candidate is picked; listed candidates stay.
@@ -1457,7 +1463,7 @@ fn key_message(event: Event, status: event::Status) -> Option<Message> {
         Some(text) if !command && !text.chars().any(char::is_control) => {
             (status == event::Status::Ignored).then(|| Message::Typed(text.into()))
         }
-        _ => Some(Message::Key(key, modifiers)),
+        _ => Some(Message::Key(key, modifiers, status)),
     }
 }
 

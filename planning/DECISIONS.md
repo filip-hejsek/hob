@@ -1110,7 +1110,10 @@ Works like a terminal: a scrollback with the prompt below it.
   has focus too (e.g. after a click on the scrollback): it focuses the
   prompt again (restoring the line if a candidate is picked, keeping
   listed candidates); otherwise, Escape hides listed candidates (none
-  picked), and only then unfocuses the prompt. The prompt's key
+  picked), and only then unfocuses the prompt, so Escape toggles focus
+  between the prompt and nothing. The shell's key subscription skips keys
+  a widget captured (the prompt's bindings did them): after Escape
+  unfocused the prompt, it would find nothing focused and focus it again. The prompt's key
   bindings pass Escape to the shell, which decides when it's done: the
   bindings are built at the last view, so keys pressed before the next one
   would see a stale state.
