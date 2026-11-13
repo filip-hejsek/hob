@@ -298,3 +298,14 @@ applied to exactly the span. Seen with the default font (Adwaita Sans);
 likely in cosmic-text's font selection per word.
 
 **Workaround:** matching chars are only underlined.
+
+## The same cursor for disabled text inputs and editors
+
+**Needed for:** a frozen island's text areas and text fields showing the
+same mouse cursor.
+
+A disabled `text_input` shows `Interaction::Idle`, but a disabled
+`text_editor` shows `Interaction::NotAllowed`.
+
+**Workaround:** `TextArea` (kettle-ui-iced) returns `Idle` itself when
+disabled, instead of asking the editor.

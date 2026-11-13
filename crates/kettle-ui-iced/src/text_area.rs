@@ -240,6 +240,15 @@ impl Widget<Message, Theme, Renderer> for TextArea<'_> {
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
+        // iced's editor shows NotAllowed when disabled; its text_input
+        // shows Idle, and so do we.
+        if self.on_change.is_none() {
+            return if cursor.is_over(layout.bounds()) {
+                mouse::Interaction::Idle
+            } else {
+                mouse::Interaction::default()
+            };
+        }
         let state = tree.state.downcast_ref::<State>();
         self.editor(&state.content, state.status, renderer)
             .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
