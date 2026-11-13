@@ -1040,6 +1040,15 @@ Works like a terminal: a scrollback with the prompt below it.
   a rule of their own above them; they're in a column that's empty
   without them, so the prompt keeps its place in the widget tree (and its
   focus) when they appear.
+- When the window is too short for everything, its height goes first to
+  one line of the prompt, then one line of candidates, then three lines of
+  the scrollback (each only as far as it needs it); the rest is shared
+  equally among those that need more (our own `Panes` widget). The
+  candidates then scroll, showing whole rows, and keep the picked one in
+  view (our own `Follow` widget, which scrolls while it's laid out, like
+  `Sticky`); what they don't take of their share goes to the scrollback.
+  The equal sharing is tentative. Rejected: a plain column, where the
+  candidates took all the room and left none for the prompt.
 - Tab again, while candidates are listed, picks one, a bit like zsh's menu
   completion: the picked one has a box of the primary colour (no border)
   and is filled in to the prompt as a finished word (quote closed), but

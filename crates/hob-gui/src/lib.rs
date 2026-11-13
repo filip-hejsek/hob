@@ -73,14 +73,18 @@ use kettle_ui_iced::{Island, spacing, view_frozen};
 use nucleo_matcher::pattern::{Atom, AtomKind, CaseMatching, Normalization};
 use nucleo_matcher::{Matcher, Utf32Str};
 
+use follow::follow;
 use keyed::keyed;
 use keys::{Action, Binding, Scope};
+use panes::{Min, panes};
 use prompt::{BOLD, prompt};
 use selectable::selectable;
 use sticky::sticky;
 
+mod follow;
 mod keyed;
 mod keys;
+mod panes;
 mod prompt;
 mod selectable;
 mod sticky;
@@ -198,6 +202,9 @@ fn window_settings(app_id: &str) -> iced::window::Settings {
 
 const PROMPT: &str = "prompt";
 const SCROLLBACK: &str = "scrollback";
+
+/// The id of the picked completion candidate, kept in view.
+const PICKED: &str = "picked";
 
 struct Shell {
     /// Runs commands; without one, the shell is a read-only preview.
@@ -1174,19 +1181,50 @@ impl Shell {
         let pad = padding::vertical(spacing()).horizontal(2.0 * spacing());
         // The candidates, between rules, above the prompt's rule. Always a
         // column, empty without them, so the prompt keeps its place in the
-        // tree, and so its state (focus), when they appear.
+        // tree, and so its state (focus), when they appear. They scroll if
+        // there's no room for all of them, keeping the picked one in view.
         let offer = self.offer.as_ref().map(|offer| {
             column([
                 rule::horizontal(1).into(),
-                container(view_offer(offer)).padding(pad).into(),
+                container(follow(view_offer(offer), Id::new(PICKED), spacing()))
+                    .padding(pad)
+                    .into(),
             ])
         });
-        column([
-            scrollback.into(),
-            offer.unwrap_or_else(|| column([])).into(),
+        let prompt = column([
             rule::horizontal(1).into(),
             container(prompt).padding(pad).into(),
-        ])
+        ]);
+        // When the window is short: first a line of the prompt, then a line
+        // of candidates, then a few lines of the scrollback; the rest is
+        // shared.
+        let rule_and_pad = 1.0 + 2.0 * spacing();
+        panes(
+            [
+                (
+                    scrollback.into(),
+                    Min {
+                        pixels: 4.0 * spacing(),
+                        lines: 3.0,
+                    },
+                ),
+                (
+                    offer.unwrap_or_else(|| column([])).into(),
+                    Min {
+                        pixels: rule_and_pad,
+                        lines: 1.0,
+                    },
+                ),
+                (
+                    prompt.into(),
+                    Min {
+                        pixels: rule_and_pad + 2.0 * prompt::TOP,
+                        lines: 1.0,
+                    },
+                ),
+            ],
+            [2, 1, 0],
+        )
         .into()
     }
 }
@@ -1519,10 +1557,14 @@ fn view_offer(offer: &Offer) -> Element<'_, Message> {
             }
             false => container::Style::default(),
         };
-        container(highlighted(&choice.shown, &m.positions))
+        let candidate = container(highlighted(&choice.shown, &m.positions))
             .padding(padding::horizontal(spacing() / 2.0))
-            .style(style)
-            .into()
+            .style(style);
+        match picked == Some(i) {
+            // Kept in view.
+            true => candidate.id(Id::new(PICKED)).into(),
+            false => candidate.into(),
+        }
     });
     row(candidates).spacing(spacing()).wrap().into()
 }

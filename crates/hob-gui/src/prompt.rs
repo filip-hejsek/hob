@@ -31,7 +31,7 @@ use crate::selectable::boxless;
 
 /// The editor's padding above and below its text, for the `>` to line up
 /// with it.
-const TOP: f32 = 5.0;
+pub(crate) const TOP: f32 = 5.0;
 
 /// How many rows the prompt shows before it scrolls.
 const MAX_ROWS: f32 = 10.0;
@@ -89,6 +89,8 @@ struct State {
     width: f32,
     rows: Paragraph,
     cursor: Option<Position>,
+    /// The height it was laid out to.
+    height: f32,
 }
 
 impl<Message> Prompt<'_, Message> {
@@ -162,10 +164,13 @@ impl<Message> Widget<Message, Theme, Renderer> for Prompt<'_, Message> {
                 shaping: Shaping::Advanced,
                 wrapping: WRAPPING,
             });
-        } else if state.cursor == Some(self.content.cursor().position) {
+        } else if state.cursor == Some(self.content.cursor().position)
+            && state.height == node.size().height
+        {
             // Nothing moved; the wheel may have scrolled the prompt.
             return node;
         }
+        state.height = node.size().height;
         let cursor = self.content.cursor().position;
         state.cursor = Some(cursor);
         if let Some((top, height)) = cursor_row(&state.rows, cursor) {
@@ -289,9 +294,9 @@ fn cursor_row(rows: &Paragraph, cursor: Position) -> Option<(f32, f32)> {
 
 /// Scrolls the scrollable so that `top..bottom` of its content is shown,
 /// or as much of it as there is.
-struct Reveal {
-    top: f32,
-    bottom: f32,
+pub(crate) struct Reveal {
+    pub(crate) top: f32,
+    pub(crate) bottom: f32,
 }
 
 impl Reveal {
