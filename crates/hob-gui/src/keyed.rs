@@ -5,6 +5,7 @@
 //! `keyed_column` only handles a single run of children added or removed;
 //! this one handles any change.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::mem;
@@ -44,6 +45,17 @@ impl<K, Message> Keyed<'_, K, Message> {
 /// Marks state taken by no widget, so iced creates a new one.
 struct Placeholder;
 
+/// A [`Keyed`]'s state: its keys, and how its children moved in the last
+/// diff.
+pub(crate) struct KeyedState {
+    /// The keys, a `Vec<K>`. Not generic, so others can read
+    /// [`moved`](Self::moved) without knowing the key type.
+    keys: Box<dyn Any>,
+    /// For each child before the last diff, its index after it, or `None`
+    /// if it's gone. `None` if the keys didn't change.
+    pub(crate) moved: Option<Vec<Option<usize>>>,
+}
+
 impl<K, Message> Widget<Message, Theme, Renderer> for Keyed<'_, K, Message>
 where
     K: Copy + Eq + Hash + 'static,
@@ -57,11 +69,14 @@ where
     }
 
     fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<Vec<K>>()
+        tree::Tag::of::<KeyedState>()
     }
 
     fn state(&self) -> tree::State {
-        tree::State::new(self.keys.clone())
+        tree::State::new(KeyedState {
+            keys: Box::new(self.keys.clone()),
+            moved: None,
+        })
     }
 
     fn children(&self) -> Vec<Tree> {
@@ -69,20 +84,39 @@ where
     }
 
     fn diff(&self, tree: &mut Tree) {
-        let keys = tree.state.downcast_mut::<Vec<K>>();
-        if *keys != self.keys {
-            let mut old: HashMap<K, Tree> =
-                keys.drain(..).zip(mem::take(&mut tree.children)).collect();
-            tree.children = (self.keys.iter())
-                .map(|key| {
-                    old.remove(key).unwrap_or_else(|| Tree {
+        let state = tree.state.downcast_mut::<KeyedState>();
+        state.moved = None;
+        // Another key type only if another keyed column took this place.
+        let keys = match state.keys.downcast_mut::<Vec<K>>() {
+            Some(keys) => mem::take(keys),
+            None => Vec::new(),
+        };
+        if keys != self.keys {
+            // Equal keys go in order, so each queue holds the old indices of
+            // one key.
+            let mut old: HashMap<K, Vec<(usize, Tree)>> = HashMap::new();
+            for (i, (key, child)) in keys.iter().zip(mem::take(&mut tree.children)).enumerate() {
+                old.entry(*key).or_default().push((i, child));
+            }
+            for queue in old.values_mut() {
+                queue.reverse();
+            }
+            let mut moved = vec![None; keys.len()];
+            tree.children = (self.keys.iter().enumerate())
+                .map(|(i, key)| match old.get_mut(key).and_then(Vec::pop) {
+                    Some((j, child)) => {
+                        moved[j] = Some(i);
+                        child
+                    }
+                    None => Tree {
                         tag: tree::Tag::of::<Placeholder>(),
                         ..Tree::empty()
-                    })
+                    },
                 })
                 .collect();
-            keys.clone_from(&self.keys);
+            state.moved = Some(moved);
         }
+        state.keys = Box::new(self.keys.clone());
         // Now that the children line up, the column diffs them one by one.
         self.column.diff(tree);
     }

@@ -911,26 +911,34 @@ Works like a terminal: a scrollback with the prompt below it.
   to their own block.
 - Live islands are shown inline and freeze in place once submitted or
   cancelled. There are no tabs.
-- What the scrollback shows doesn't move when its content changes, except
-  that it sticks to the bottom while it's scrolled there (new output pushes
-  it up). Content that gets shorter leaves empty space at the bottom
-  instead of pulling what's shown down; the space goes as the view moves
-  up. A view that gets shorter (e.g. when completion candidates appear)
-  keeps that space only down to its new bottom, so it doesn't push short
-  content out of sight. A change of the view's width drops the space: the
-  content reflows, so what's shown moves anyway, and space kept below
-  content that reflowed shorter would just be left empty. Starting a
-  command, or clearing, scrolls to the bottom and drops the space. Our own `Sticky` widget sets the offset while
-  laying out, before drawing. Rejected: iced's `anchor_bottom`, which moves
-  what's shown by whatever is added below it, even out of sight; and fixing
-  the offset from `on_scroll`, a frame late, so content would jump.
+- What the scrollback shows doesn't move when its content changes or
+  reflows: the view's top is anchored to the innermost widget there, by
+  its path in the layout (`Keyed` columns say where their children moved,
+  so trimming blocks before it doesn't break the path; if the widget itself
+  is gone, the next one's top is shown). Inside a widget that reflows to
+  another height (a paragraph), the top moves proportionally, by whole
+  lines of the default text. While scrolled to the bottom, the view also
+  keeps the content's bottom in sight (new output pushes it up). Content
+  that gets shorter leaves empty space at the bottom instead of pulling
+  what's shown down; the space goes as the view moves up, and only reaches
+  down to the view's bottom (so a view that gets shorter, e.g. when
+  completion candidates appear, doesn't push short content out of sight).
+  A width change may shrink that space but not grow it, so content that
+  reflows shorter at the bottom doesn't leave empty space. Starting a
+  command, or clearing, scrolls to the bottom and drops the space. Our own
+  `Sticky` widget sets the offset while laying out, before drawing.
+  Rejected: keeping the offset in pixels, which moves what's shown when
+  content above it reflows or is trimmed; iced's `anchor_bottom`, which
+  moves what's shown by whatever is added below it, even out of sight; and
+  fixing the offset from `on_scroll`, a frame late, so content would jump.
 - The scrollback is a keyed column (our own `Keyed` widget), keyed by block
   id, and so is each block's output, keyed by entry index. So a live island
   keeps its widget state (focus, cursor) when `clear` removes blocks before
   it, or the log level hides records before it. Notices and notes share
-  a key: they're plain text. Rejected: iced's `keyed_column`, which only
-  handles one run of children added or removed (see ICED_WISHLIST.md),
-  while `clear` can remove blocks on both sides of a running one.
+  a key: they're plain text, and equal keys keep their order. Rejected:
+  iced's `keyed_column`, which only handles one run of children added or
+  removed (see ICED_WISHLIST.md), while `clear` can remove blocks on both
+  sides of a running one.
 - A line with an unknown command is still added, with the error.
 - The session (history and scrollback) is saved as versioned JSON after every
   change to the scrollback and on window close, and restored on start. Live
