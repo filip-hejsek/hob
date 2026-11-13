@@ -1023,8 +1023,11 @@ Works like a terminal: a scrollback with the prompt below it.
   (iced's `find_focused` gives no answer when nothing is focused).
 - The prompt has history (Up/Down; the line being typed is kept as a draft)
   and Tab completion (see hob-core): unambiguous part completed, the
-  candidates listed below the prompt if there are several. Both live in
-  hob-core.
+  candidates listed if there are several. Both live in hob-core. The
+  candidates go above the rule between the scrollback and the prompt, with
+  a rule of their own above them; they're in a column that's empty
+  without them, so the prompt keeps its place in the widget tree (and its
+  focus) when they appear.
 - Tab again, while candidates are listed, picks one, a bit like zsh's menu
   completion: the picked one has a box of the primary colour (no border)
   and is filled in to the prompt as a finished word (quote closed), but

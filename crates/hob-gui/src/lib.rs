@@ -219,7 +219,7 @@ struct Shell {
     /// The prompt's text and cursor.
     prompt: Content,
     history: History,
-    /// The candidates Tab found, if there are several; shown below the
+    /// The candidates Tab found, if there are several; shown above the
     /// prompt.
     offer: Option<Offer>,
     /// The key bindings.
@@ -1171,21 +1171,21 @@ impl Shell {
                 .key_binding(move |key| prompt_binding(bindings, key))
         });
 
+        let pad = padding::vertical(spacing()).horizontal(2.0 * spacing());
+        // The candidates, between rules, above the prompt's rule. Always a
+        // column, empty without them, so the prompt keeps its place in the
+        // tree, and so its state (focus), when they appear.
+        let offer = self.offer.as_ref().map(|offer| {
+            column([
+                rule::horizontal(1).into(),
+                container(view_offer(offer)).padding(pad).into(),
+            ])
+        });
         column([
             scrollback.into(),
+            offer.unwrap_or_else(|| column([])).into(),
             rule::horizontal(1).into(),
-            container(
-                // The prompt stays the first child, so it keeps its state
-                // (focus) when the candidates appear.
-                column(
-                    [prompt.into()]
-                        .into_iter()
-                        .chain(self.offer.as_ref().map(view_offer)),
-                )
-                .spacing(spacing()),
-            )
-            .padding(padding::vertical(spacing()).horizontal(2.0 * spacing()))
-            .into(),
+            container(prompt).padding(pad).into(),
         ])
         .into()
     }
