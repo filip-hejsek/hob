@@ -505,6 +505,10 @@ fn escape_after_searching_restores_the_line_and_the_list() {
     assert_eq!(shell.prompt.text(), "look ");
     assert_eq!(listed(&shell).0.len(), 6);
     assert_eq!(listed(&shell).1, None);
+    // Escape again hides the candidates, keeping the line.
+    act(&mut shell, Action::CancelPick);
+    assert!(shell.offer.is_none());
+    assert_eq!(shell.prompt.text(), "look ");
     // Letters are typed again.
     type_into(&mut shell, "b");
     assert_eq!(shell.prompt.text(), "look b");

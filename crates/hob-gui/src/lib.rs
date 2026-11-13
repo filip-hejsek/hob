@@ -260,8 +260,9 @@ enum Item {
 /// picked candidate is filled in to the prompt, and Tab and Shift+Tab pick
 /// another. While picking, letters and digits search the candidates (fuzzy,
 /// best match first, picked), and Backspace takes them back. Escape, or
-/// Backspace without a query, restores the line from before. Anything else that changes the line ends
-/// the offer, taking the candidate: its delimiter (`/` after a directory)
+/// Backspace without a query, restores the line from before; Escape again
+/// hides the candidates. Anything else that changes the line ends the
+/// offer, taking the candidate: its delimiter (`/` after a directory)
 /// goes on as completing it alone would, Space finishes it, Shift+Space
 /// leaves it bare (all three then cycle its endings, see [`Taken`]), and
 /// other text goes after it bare (quote still open).
@@ -966,11 +967,14 @@ impl Shell {
             }
             Action::CancelPick => {
                 let Some(offer) = self.offer.as_mut() else {
-                    // Escape unfocuses the prompt, unless a candidate is picked.
+                    // Escape unfocuses the prompt, unless candidates are
+                    // listed.
                     return operate(focusable::unfocus());
                 };
                 let Some(before) = offer.before.take() else {
-                    return operate(focusable::unfocus());
+                    // Listed but none picked: it hides them first.
+                    self.offer = None;
+                    return Task::none();
                 };
                 offer.query.clear();
                 offer.picked = None;
@@ -1577,8 +1581,8 @@ fn prompt_binding(bindings: &[Binding], key: KeyPress) -> Option<text_editor::Bi
     }
     let custom = |action| Some(text_editor::Binding::Custom(Message::Action(action)));
     match keys::lookup(bindings, key.key.clone(), key.modifiers) {
-        // Escape is decided when it's done (it unfocuses, unless a candidate
-        // is picked), since keys pressed before the next view would see a
+        // Escape is decided when it's done (it unfocuses, unless candidates
+        // are listed), since keys pressed before the next view would see a
         // stale state here.
         Some(
             action @ (Action::HistoryBack

@@ -1061,7 +1061,7 @@ Works like a terminal: a scrollback with the prompt below it.
   before its terminator (`cd 'my dir|'`), where typed text goes. Tab and
   Shift+Tab pick the next and previous, wrapping (Shift+Tab first picks
   the last). Escape restores the line from before picking, and keeps the
-  list. Anything else that changes the line ends it, taking the
+  list; Escape again hides it. Anything else that changes the line ends it, taking the
   candidate: its delimiter gives the line with it (`cd 'my dir/`), Space
   finishes it with a space (`cd 'my dir' `), Shift+Space leaves it bare
   (`cd 'my dir`), and other typed or pasted text goes after it bare
@@ -1096,7 +1096,8 @@ Works like a terminal: a scrollback with the prompt below it.
   grapheme segmentation, so positions are char indices. hob-core gives the parts
   of each candidate's line (`Choice`). Escape works while nothing
   has focus too (e.g. after a click on the scrollback), and focuses the
-  prompt again; otherwise, Escape unfocuses the prompt. The prompt's key
+  prompt again; otherwise, Escape hides listed candidates (none picked),
+  and only then unfocuses the prompt. The prompt's key
   bindings pass Escape to the shell, which decides when it's done: the
   bindings are built at the last view, so keys pressed before the next one
   would see a stale state.
