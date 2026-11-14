@@ -28,13 +28,16 @@ fn rest(requests: BlockingStream<Requests>) -> Vec<String> {
 }
 
 /// Waits for the command to show an island, and answers it with `answer`.
-fn answer(requests: &mut BlockingStream<Requests>, answer: impl FnOnce(&mut Island) -> Outcome) {
+fn answer(
+    requests: &mut BlockingStream<Requests>,
+    answer: impl FnOnce(&mut Island) -> Option<Outcome>,
+) {
     let Some(Request::Show(show)) = requests.next() else {
         panic!("expected Show");
     };
     let (builder, reply) = show.into_parts();
     match Island::new(builder) {
-        Ok(mut island) => reply.send(answer(&mut island)),
+        Ok(mut island) => reply.send(answer(&mut island).expect("the island should be answered")),
         Err(e) => reply.fail(e),
     }
 }

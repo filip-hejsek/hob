@@ -250,7 +250,7 @@ impl<W: Write> Server<W> {
                 field,
                 line,
             } => self.act(island, |i| i.pick(&field, &line).map(|()| None)),
-            Call::Press { island, label } => self.act(island, |i| i.press(&label).map(Some)),
+            Call::Press { island, label } => self.act(island, |i| i.press(&label)),
         }
     }
 

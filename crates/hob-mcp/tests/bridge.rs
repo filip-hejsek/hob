@@ -27,6 +27,10 @@ const TESTS: &[(&str, fn())] = &[
         "fill_presses_the_submit_button",
         fill_presses_the_submit_button,
     ),
+    (
+        "action_buttons_keep_the_island_open",
+        action_buttons_keep_the_island_open,
+    ),
     ("waits_for_commands", waits_for_commands),
     ("shows_changed_islands", shows_changed_islands),
     ("sends_images", sends_images),
@@ -133,8 +137,9 @@ fn interpreter() -> Interpreter {
             checkbox("loud", "Loud"),
             label(state("greeting")),
             label(state("error")),
-            submit_button("OK"),
+            row([submit_button("OK"), action_button("example", "Example")]),
         ]));
+        builder.action("example", |_, c| c.set_text("name", "Ada"));
         builder.derive("greeting", |f| format!("Hi, {}!", f.text("name")).into());
         builder.validate("error", |f| {
             f.text("name").is_empty().then(|| "Enter a name".into())
@@ -306,6 +311,22 @@ fn fill_presses_the_submit_button() {
     assert!(text.contains("island #4 has no submit button"), "{text}");
     let (text, _) = tool(&mut bridge, "press", json!({"island": 4, "label": "A"}));
     assert!(text.contains("[3] chose a"), "{text}");
+}
+
+fn action_buttons_keep_the_island_open() {
+    let mut bridge = bridge();
+    tool(&mut bridge, "run", json!({"line": "ask"}));
+    let (text, error) = tool(
+        &mut bridge,
+        "press",
+        json!({"island": 2, "label": "Example"}),
+    );
+    assert!(!error, "{text}");
+    assert!(text.contains(r#"text_field name: "Ada""#), "{text}");
+    assert!(text.contains(r#"label "Hi, Ada!""#), "{text}");
+    assert!(text.ends_with("[1] is waiting for island #2.\n"), "{text}");
+    let (text, _) = tool(&mut bridge, "press", json!({"island": 2, "label": "OK"}));
+    assert!(text.contains("[1] got Ada false"), "{text}");
 }
 
 fn waits_for_commands() {

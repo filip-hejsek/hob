@@ -34,7 +34,8 @@ const FRUITS: &[&str] = &[
 pub enum Demo {
     /// A simple form: a name and a checkbox.
     Contact,
-    /// Search-as-you-type over a list of fruit, with suggestions.
+    /// Search-as-you-type over a list of fruit, with suggestions, and an
+    /// action button.
     FruitSearch,
 }
 
@@ -97,8 +98,20 @@ fn fruit_search() -> IslandBuilder {
         text_field("fruit", "Start typing…"),
         suggestions("matches", "fruit"),
         when("no_matches", label("No matching fruit")),
-        row([submit_button("Choose"), cancel_button("Cancel")]),
+        row([
+            submit_button("Choose"),
+            action_button("next", "Next fruit [Alt+n]"),
+            cancel_button("Cancel"),
+        ]),
     ]));
+
+    // Keeps the island open, and puts the next fruit (in alphabetical
+    // order, after what's typed) into the field.
+    builder.action("next", |i, changes| {
+        let typed = i.text("fruit").to_lowercase();
+        let next = FRUITS.iter().find(|&&f| f > typed.as_str());
+        changes.set_text("fruit", *next.unwrap_or(&FRUITS[0]));
+    });
 
     // Pretend this search is slow, to show that typing stays responsive.
     builder.derive("matches", |f| {

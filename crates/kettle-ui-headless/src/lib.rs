@@ -191,10 +191,12 @@ impl Island {
     }
 
     /// Presses the button labelled `label`, and returns how the user finished
-    /// with the island. Like in other backends, the island stays usable.
-    /// A submit button submits only if the validators pass; otherwise this
-    /// returns [`ActionError::Invalid`].
-    pub fn press(&mut self, label: &str) -> Result<Outcome, ActionError> {
+    /// with the island: `None` for an
+    /// [`action_button`](kettle_ui::widget::action_button), whose action has
+    /// run when this returns. Like in other backends, the island stays
+    /// usable. A submit button submits only if the validators pass;
+    /// otherwise this returns [`ActionError::Invalid`].
+    pub fn press(&mut self, label: &str) -> Result<Option<Outcome>, ActionError> {
         let mut actions = Vec::new();
         find(&self.model, self.model.root(), &mut |w| {
             if let Kind::Button {
@@ -215,7 +217,7 @@ impl Island {
                 first.clone()
             }
         };
-        Ok(match action {
+        Ok(Some(match action {
             Action::Submit => {
                 let jobs = self.model.submit();
                 self.settle(jobs);
@@ -231,7 +233,12 @@ impl Island {
             }
             Action::Cancel => Outcome::Cancelled,
             Action::Press(id) => Outcome::Pressed(id, self.model.fields().clone()),
-        })
+            Action::Run(id) => {
+                let jobs = self.model.run_action(&id);
+                self.settle(jobs);
+                return Ok(None);
+            }
+        }))
     }
 
     /// Applies the [`StateHandle`](kettle_ui::StateHandle) updates that have
@@ -412,7 +419,7 @@ fn render(model: &impl Contents, widget: &Widget, depth: usize, out: &mut String
             match action {
                 Action::Submit => write!(out, " (submit)")?,
                 Action::Cancel => write!(out, " (cancel)")?,
-                Action::Press(_) => {}
+                Action::Press(_) | Action::Run(_) => {}
             }
             if *danger {
                 write!(out, " (danger)")?;
@@ -569,7 +576,7 @@ mod tests {
         ])))
         .unwrap();
         island.type_text("t", "x").unwrap();
-        let Ok(Outcome::Pressed(id, fields)) = island.press("Delete") else {
+        let Ok(Some(Outcome::Pressed(id, fields))) = island.press("Delete") else {
             panic!("not pressed");
         };
         assert_eq!(&*id, "del");
@@ -586,7 +593,10 @@ mod tests {
         builder.validate("error", |i| i.text("t").is_empty().then(|| "Empty".into()));
         let mut island = Island::new(builder).unwrap();
         assert!(island.to_string().contains("label \"\"\n"));
-        assert!(matches!(island.press("Other"), Ok(Outcome::Pressed(..))));
+        assert!(matches!(
+            island.press("Other"),
+            Ok(Some(Outcome::Pressed(..)))
+        ));
 
         let error = island.press("OK").unwrap_err();
         assert_eq!(error, ActionError::Invalid(vec!["Empty".into()]));
@@ -595,7 +605,7 @@ mod tests {
 
         island.type_text("t", "x").unwrap();
         assert!(island.to_string().contains("label \"\"\n"));
-        let Ok(Outcome::Submitted(fields)) = island.press("OK") else {
+        let Ok(Some(Outcome::Submitted(fields))) = island.press("OK") else {
             panic!("not submitted");
         };
         assert_eq!(fields.text("t"), "x");

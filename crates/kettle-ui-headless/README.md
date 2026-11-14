@@ -21,7 +21,7 @@ let builder = IslandBuilder::new(column([
 ]));
 let mut island = Island::new(builder).unwrap();
 island.type_text("name", "Ada").unwrap();
-let Outcome::Submitted(fields) = island.press("OK").unwrap() else {
+let Some(Outcome::Submitted(fields)) = island.press("OK").unwrap() else {
     panic!("not submitted");
 };
 assert_eq!(fields.text("name"), "Ada");

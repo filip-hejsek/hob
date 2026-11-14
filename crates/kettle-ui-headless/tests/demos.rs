@@ -27,14 +27,17 @@ fn contact() {
 "#
     );
 
-    let Outcome::Submitted(fields) = island.press("Submit").unwrap() else {
+    let Some(Outcome::Submitted(fields)) = island.press("Submit").unwrap() else {
         panic!("expected a submission");
     };
     assert_eq!(
         Demo::Contact.summary(&fields),
         r#"name "Ada", subscribe true, message "Hi!\nBye.""#
     );
-    assert!(matches!(island.press("Cancel"), Ok(Outcome::Cancelled)));
+    assert!(matches!(
+        island.press("Cancel"),
+        Ok(Some(Outcome::Cancelled))
+    ));
 }
 
 #[test]
@@ -68,7 +71,21 @@ fn fruit_search() {
     - "pineapple"
   row
     button "Choose" (submit)
+    button "Next fruit" [Alt+n]
     button "Cancel" (cancel)
 "#
     );
+
+    // The action button keeps the island open.
+    assert!(island.press("Next fruit").unwrap().is_none());
+    assert_eq!(island.fields().text("fruit"), "apple");
+    assert_eq!(
+        island.state("matches"),
+        Some(&Value::List(vec!["apple".into(), "pineapple".into()]))
+    );
+    island.press("Next fruit").unwrap();
+    assert_eq!(island.fields().text("fruit"), "apricot");
+    island.type_text("fruit", "zzz").unwrap();
+    island.press("Next fruit").unwrap();
+    assert_eq!(island.fields().text("fruit"), "apple");
 }

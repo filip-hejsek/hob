@@ -113,6 +113,7 @@ enum Msg {
     Submit,
     Cancel,
     Press(Arc<str>),
+    Run(Arc<str>),
 }
 
 impl Island {
@@ -151,6 +152,7 @@ impl Island {
             Msg::Derived(result) => self.model.finish(result),
             // Submitted below, once the validators pass.
             Msg::Submit => self.model.submit(),
+            Msg::Run(id) => self.model.run_action(&id),
             Msg::Cancel => return (Task::none(), Some(Outcome::Cancelled)),
             Msg::Press(id) => {
                 let fields = self.model.fields().clone();
@@ -507,7 +509,7 @@ impl Shown {
                 match action {
                     Action::Submit => self.submit = true,
                     Action::Cancel => self.cancel = true,
-                    Action::Press(_) => {}
+                    Action::Press(_) | Action::Run(_) => {}
                 }
                 if let Some(key) = key {
                     self.keys.push((*key, action.clone()));
@@ -524,6 +526,7 @@ fn action_msg(action: Action) -> Msg {
         Action::Submit => Msg::Submit,
         Action::Cancel => Msg::Cancel,
         Action::Press(id) => Msg::Press(id),
+        Action::Run(id) => Msg::Run(id),
     }
 }
 
@@ -601,8 +604,8 @@ mod tests {
     use iced_test::instruction::{Expectation, Interaction, Key, Keyboard, Mouse, Target};
     use iced_test::{Instruction, simulator};
     use kettle_ui::widget::{
-        cancel_button, checkbox, column, label, row, state, submit_button, text_area, text_field,
-        when,
+        action_button, cancel_button, checkbox, column, label, row, state, submit_button,
+        text_area, text_field, when,
     };
 
     use super::*;
@@ -920,6 +923,37 @@ mod tests {
                 // Validated in the background, so the submit waits for it.
                 press(Key::Enter),
                 expect(r#"outcome: Some("submitted \"1\" \"\"")"#),
+            ],
+        );
+    }
+
+    #[test]
+    fn action_buttons_change_fields_and_keep_the_island_open() {
+        let make = || {
+            let mut builder = IslandBuilder::new(column([
+                text_field("a", "A"),
+                row([submit_button("OK"), action_button("double", "Double")]),
+            ]));
+            builder.set_text("a", "ab");
+            builder.action("double", |i, c| c.set_text("a", i.text("a").repeat(2)));
+            Island::new(builder).unwrap()
+        };
+        check(
+            program_with_task(make, Focus::Field("a")),
+            &[
+                expect("focused: Some(true)"),
+                Instruction::Interact(Interaction::Mouse(Mouse::Click {
+                    button: mouse::Button::Left,
+                    target: Some(Target::Text("Double".into())),
+                })),
+                // Run in the background.
+                expect("abab"),
+                expect("outcome: None"),
+                Instruction::Interact(Interaction::Mouse(Mouse::Click {
+                    button: mouse::Button::Left,
+                    target: Some(Target::Text("OK".into())),
+                })),
+                expect(r#"outcome: Some("submitted \"abab\" \"\"")"#),
             ],
         );
     }

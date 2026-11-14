@@ -5,6 +5,7 @@
 //! the UI thread, and delivers [`StateUpdate`]s from [`Updates`]. When the
 //! user presses a submit button, it calls [`Model::submit`], then
 //! [`Model::take_submitted`] after that and after every [`Model::finish`].
+//! When the user presses an action button, it calls [`Model::run_action`].
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -17,7 +18,10 @@ use futures_channel::mpsc;
 use futures_core::Stream;
 
 use crate::widget::Widget;
-use crate::{Contents, DeriveFn, DeriveSpec, Field, Fields, FrozenIsland, Value, misuse, strict};
+use crate::{
+    ActionFn, ActionSpec, Contents, DeriveFn, DeriveSpec, Field, Fields, FrozenIsland, Value,
+    misuse, strict,
+};
 
 /// What [`IslandBuilder::build`](crate::IslandBuilder::build) produces.
 pub struct Built {
@@ -39,6 +43,9 @@ pub struct Model {
     state: HashMap<String, Slot>,
     /// In dependency order: each comes after the derived state it depends on.
     derived: Vec<Derived>,
+    actions: Vec<ActionSlot>,
+    /// The named state with an initial value, which actions may set.
+    settable: Arc<HashSet<String>>,
     /// Whether the user has tried to submit, so validation errors are shown.
     errors_shown: bool,
     /// Whether a submit waits for validators to be up to date.
@@ -76,6 +83,19 @@ struct Derived {
     error: String,
 }
 
+struct ActionSlot {
+    id: String,
+    run: ActionFn,
+    /// The named state the action may read.
+    deps: Vec<String>,
+    /// The indices of the derived state among `deps`.
+    derived_deps: Vec<usize>,
+    /// Presses that haven't started running it yet.
+    pending: usize,
+    /// Whether it's running.
+    running: bool,
+}
+
 /// What a computation read, and the values it saw.
 #[derive(Clone, Debug)]
 struct Reads {
@@ -99,13 +119,16 @@ pub enum Outcome {
 }
 
 impl Model {
-    /// `derived` must be in dependency order, with all dependencies existing.
+    /// `derived` must be in dependency order, with all dependencies existing,
+    /// and so must the dependencies of `actions`.
     pub(crate) fn new(
         root: Widget,
         fields: Fields,
         state: HashMap<String, Value>,
         derived: Vec<DeriveSpec>,
+        actions: Vec<ActionSpec>,
     ) -> (Self, Vec<Job>) {
+        let settable = Arc::new(state.keys().cloned().collect());
         let mut state: HashMap<String, Slot> = state
             .into_iter()
             .map(|(name, value)| {
@@ -121,6 +144,23 @@ impl Model {
             .enumerate()
             .map(|(i, spec)| (spec.name.clone(), i))
             .collect();
+        let derived_deps = |deps: &[String]| -> Vec<usize> {
+            (deps.iter())
+                .filter_map(|d| index.get(d))
+                .copied()
+                .collect()
+        };
+        let actions = actions
+            .into_iter()
+            .map(|spec| ActionSlot {
+                derived_deps: derived_deps(&spec.deps),
+                id: spec.id,
+                run: spec.run,
+                deps: spec.deps,
+                pending: 0,
+                running: false,
+            })
+            .collect();
         let derived = derived
             .into_iter()
             .map(|spec| {
@@ -131,12 +171,7 @@ impl Model {
                 };
                 state.insert(spec.name.clone(), slot);
                 Derived {
-                    derived_deps: spec
-                        .deps
-                        .iter()
-                        .filter_map(|d| index.get(d))
-                        .copied()
-                        .collect(),
+                    derived_deps: derived_deps(&spec.deps),
                     name: spec.name,
                     compute: spec.compute,
                     deps: spec.deps,
@@ -153,6 +188,8 @@ impl Model {
             fields,
             state,
             derived,
+            actions,
+            settable,
             errors_shown: false,
             submit_pending: false,
         };
@@ -277,6 +314,29 @@ impl Model {
             .collect()
     }
 
+    /// Runs the action with this id, as an
+    /// [`action_button`](crate::widget::action_button) does. Returns the
+    /// job that runs it, unless it has to wait: until it's done running
+    /// for an earlier press, or until the derived state it reads is up to
+    /// date. Its changes are applied when the job
+    /// [finishes](Model::finish).
+    ///
+    /// An unknown id panics in [strict mode](crate#strict-mode); otherwise
+    /// it logs a warning and does nothing.
+    #[track_caller]
+    pub fn run_action(&mut self, id: &str) -> Vec<Job> {
+        match self.actions.iter_mut().find(|a| a.id == id) {
+            Some(action) => {
+                action.pending += 1;
+                self.schedule()
+            }
+            None => {
+                misuse(strict(), format!("no action {id:?}"), "ignoring the press");
+                Vec::new()
+            }
+        }
+    }
+
     /// Applies an update sent through a [`StateHandle`](crate::StateHandle).
     /// Returns the jobs that recompute derived state.
     pub fn apply(&mut self, StateUpdate { name, value }: StateUpdate) -> Vec<Job> {
@@ -291,8 +351,30 @@ impl Model {
     /// started, and the derived state that depends on it.
     ///
     /// The result is stored even if it's outdated, since it's still newer
-    /// than the value it replaces.
+    /// than the value it replaces. An action's changes are applied the same
+    /// way, even if the user has changed the fields since it started; a
+    /// change of a field drops a pending submit, as when the user changes
+    /// it.
     pub fn finish(&mut self, result: JobResult) -> Vec<Job> {
+        let result = match result.0 {
+            Finished::Derived(result) => result,
+            Finished::Action { index, changes } => {
+                self.actions[index].running = false;
+                for (id, value) in changes.fields {
+                    // Changes checked the id and kind against the same tree.
+                    if let Some(field) = self.fields.0.get_mut(&id)
+                        && *field != value
+                    {
+                        *field = value;
+                        self.submit_pending = false;
+                    }
+                }
+                for (name, value) in changes.state {
+                    self.store(name, value);
+                }
+                return self.schedule();
+            }
+        };
         let derived = &mut self.derived[result.index];
         derived.running = false;
         derived.reads = Some(result.reads);
@@ -338,7 +420,28 @@ impl Model {
             let derived = &mut self.derived[index];
             derived.outdated = stale || waiting || derived.running;
         }
+        for index in 0..self.actions.len() {
+            let action = &self.actions[index];
+            let waiting = (action.derived_deps.iter()).any(|&d| self.derived[d].outdated);
+            if action.pending > 0 && !action.running && !waiting {
+                jobs.push(self.start_action(index));
+            }
+        }
         jobs
+    }
+
+    fn start_action(&mut self, index: usize) -> Job {
+        let action = &mut self.actions[index];
+        action.pending -= 1;
+        action.running = true;
+        Job(Work::Action {
+            index,
+            run: action.run.clone(),
+            fields: self.fields.clone(),
+            state: snapshot(&self.state, &action.deps),
+            settable: self.settable.clone(),
+            strict: strict(),
+        })
     }
 
     /// Whether anything the last computation read has changed since.
@@ -360,18 +463,21 @@ impl Model {
     fn start(&mut self, index: usize) -> Job {
         let derived = &mut self.derived[index];
         derived.running = true;
-        Job {
+        Job(Work::Derive {
             index,
             compute: derived.compute.clone(),
             fields: self.fields.clone(),
-            state: derived
-                .deps
-                .iter()
-                .map(|name| (name.clone(), self.state[name].clone()))
-                .collect(),
+            state: snapshot(&self.state, &derived.deps),
             strict: strict(),
-        }
+        })
     }
+}
+
+/// The named state in `deps`, for a job.
+fn snapshot(state: &HashMap<String, Slot>, deps: &[String]) -> HashMap<String, Slot> {
+    (deps.iter())
+        .map(|name| (name.clone(), state[name].clone()))
+        .collect()
 }
 
 impl Contents for Model {
@@ -392,47 +498,176 @@ impl Contents for Model {
     }
 }
 
-/// Computes one derived value from a snapshot of its inputs. It may be slow,
-/// so run it off the UI thread, and pass the result to [`Model::finish`].
+/// Computes one derived value, or runs an action, from a snapshot of its
+/// inputs. It may be slow, so run it off the UI thread, and pass the result
+/// to [`Model::finish`].
 ///
 /// Every job must be run and finished: until it is, its derived value won't be
-/// computed again.
-pub struct Job {
-    index: usize,
-    compute: DeriveFn,
-    fields: Fields,
-    /// The named state the computation may read.
-    state: HashMap<String, Slot>,
-    strict: bool,
+/// computed again, or its action run again.
+pub struct Job(Work);
+
+enum Work {
+    Derive {
+        index: usize,
+        compute: DeriveFn,
+        fields: Fields,
+        /// The named state the computation may read.
+        state: HashMap<String, Slot>,
+        strict: bool,
+    },
+    Action {
+        index: usize,
+        run: ActionFn,
+        fields: Fields,
+        /// The named state the action may read.
+        state: HashMap<String, Slot>,
+        settable: Arc<HashSet<String>>,
+        strict: bool,
+    },
 }
 
 impl Job {
     /// Does the computation. Call it off the UI thread.
     ///
-    /// If the computation panics, the derived value keeps its old value until
-    /// one of the inputs it read before panicking changes.
+    /// If a computation panics, the derived value keeps its old value until
+    /// one of the inputs it read before panicking changes. If an action
+    /// panics, none of its changes are applied.
     pub fn run(self) -> JobResult {
-        let inputs = Inputs::new(&self.fields, &self.state, self.strict);
-        let value = panic::catch_unwind(AssertUnwindSafe(|| (self.compute)(&inputs))).ok();
-        JobResult {
-            index: self.index,
-            value,
-            reads: inputs.into_reads(),
-        }
+        JobResult(match self.0 {
+            Work::Derive {
+                index,
+                compute,
+                fields,
+                state,
+                strict,
+            } => {
+                let inputs = Inputs::new(&fields, &state, strict);
+                let value = panic::catch_unwind(AssertUnwindSafe(|| compute(&inputs))).ok();
+                Finished::Derived(Derivation {
+                    index,
+                    value,
+                    reads: inputs.into_reads(),
+                })
+            }
+            Work::Action {
+                index,
+                run,
+                fields,
+                state,
+                settable,
+                strict,
+            } => {
+                let inputs = Inputs::new(&fields, &state, strict);
+                let mut changes = Changes {
+                    fields: &fields,
+                    settable: &settable,
+                    strict,
+                    changed: Changed::default(),
+                };
+                let ran = panic::catch_unwind(AssertUnwindSafe(|| run(&inputs, &mut changes)));
+                Finished::Action {
+                    index,
+                    changes: ran.map(|()| changes.changed).unwrap_or_default(),
+                }
+            }
+        })
     }
 }
 
 /// The result of a [`Job`].
 #[derive(Clone, Debug)]
-pub struct JobResult {
+pub struct JobResult(Finished);
+
+#[derive(Clone, Debug)]
+enum Finished {
+    Derived(Derivation),
+    Action { index: usize, changes: Changed },
+}
+
+#[derive(Clone, Debug)]
+struct Derivation {
     index: usize,
     /// `None` if the computation panicked.
     value: Option<Value>,
     reads: Reads,
 }
 
-/// What a derived value is computed from: a snapshot of the field values and
-/// of the named state it declared as dependencies. Everything read through it
+/// What an action changes: fields and named state, in the order set.
+#[derive(Clone, Debug, Default)]
+struct Changed {
+    fields: Vec<(Arc<str>, Field)>,
+    state: Vec<(String, Value)>,
+}
+
+/// The changes an action ([`IslandBuilder::action`](crate::IslandBuilder::action))
+/// makes, applied once it finishes. Setting something twice keeps the last
+/// value.
+pub struct Changes<'a> {
+    /// The snapshot the action reads, to check ids against.
+    fields: &'a Fields,
+    settable: &'a HashSet<String>,
+    strict: bool,
+    changed: Changed,
+}
+
+impl Changes<'_> {
+    /// Sets the contents of the text field or text area `id`. If there's no
+    /// such field, this panics in [strict mode](crate#strict-mode), or prints
+    /// a warning and does nothing.
+    #[track_caller]
+    pub fn set_text(&mut self, id: &str, text: impl Into<String>) {
+        self.set_field(id, Field::Text(text.into()));
+    }
+
+    /// Checks or unchecks the checkbox `id`. If there's no such checkbox,
+    /// this panics in [strict mode](crate#strict-mode), or prints a warning
+    /// and does nothing.
+    #[track_caller]
+    pub fn set_checked(&mut self, id: &str, checked: bool) {
+        self.set_field(id, Field::Bool(checked));
+    }
+
+    /// Sets named state. As with a [`StateHandle`](crate::StateHandle), it
+    /// must have an initial value
+    /// ([`IslandBuilder::set_state`](crate::IslandBuilder::set_state));
+    /// otherwise this panics in [strict mode](crate#strict-mode), or prints
+    /// a warning and does nothing.
+    #[track_caller]
+    pub fn set_state(&mut self, name: &str, value: impl Into<Value>) {
+        if !self.settable.contains(name) {
+            misuse(
+                self.strict,
+                format!(
+                    "named state {name:?} has no initial value, so an action can't set it \
+                     (give it one with IslandBuilder::set_state)"
+                ),
+                "ignoring the change",
+            );
+            return;
+        }
+        self.changed.state.push((name.to_owned(), value.into()));
+    }
+
+    #[track_caller]
+    fn set_field(&mut self, id: &str, value: Field) {
+        match self.fields.0.get_key_value(id) {
+            Some((id, field))
+                if std::mem::discriminant(field) == std::mem::discriminant(&value) =>
+            {
+                self.changed.fields.push((id.clone(), value));
+            }
+            _ => misuse(
+                self.strict,
+                format!("no form element {id:?} of this kind"),
+                "ignoring the change",
+            ),
+        }
+    }
+}
+
+/// What a derived value is computed from, or what an action reads: a
+/// snapshot of the field values and of the named state it declared as
+/// dependencies. Everything read through it
 /// is recorded, so the value is recomputed only when that changes.
 pub struct Inputs<'a> {
     fields: &'a Fields,
@@ -467,7 +702,8 @@ impl<'a> Inputs<'a> {
 
     /// The value of named state; `None` if it isn't computed yet. The name
     /// must be declared as a dependency
-    /// ([`IslandBuilder::derive_with_state`](crate::IslandBuilder::derive_with_state));
+    /// ([`IslandBuilder::derive_with_state`](crate::IslandBuilder::derive_with_state)
+    /// or [`action_with_state`](crate::IslandBuilder::action_with_state));
     /// otherwise this panics in [strict mode](crate#strict-mode), or prints a
     /// warning and returns `None`.
     #[track_caller]
@@ -482,7 +718,8 @@ impl<'a> Inputs<'a> {
                     self.strict,
                     format!(
                         "named state {name:?} isn't a declared dependency of this derived \
-                         state (declare it with IslandBuilder::derive_with_state)"
+                         state or action (declare it with IslandBuilder::derive_with_state, \
+                         validate_with_state or action_with_state)"
                     ),
                     "returning None",
                 );
@@ -858,6 +1095,142 @@ mod tests {
         let jobs = model.submit();
         settle(&mut model, jobs);
         assert_eq!(model.freeze().state("err"), Some(&"Enter a name".into()));
+    }
+
+    #[test]
+    fn actions_change_fields_and_state() {
+        let mut b = IslandBuilder::new(column([
+            text_field("name", ""),
+            checkbox("c", ""),
+            label(state("n")),
+            label(state("shout")),
+            action_button("up", "Uppercase"),
+        ]));
+        b.set_state("n", 0.0);
+        b.derive("shout", |i| format!("{}!", i.text("name")).into());
+        b.action_with_state("up", &["n"], |i, c| {
+            c.set_text("name", i.text("name").to_uppercase());
+            c.set_checked("c", !i.checked("c"));
+            let Some(Value::Number(n)) = i.state("n") else {
+                panic!("n is a number");
+            };
+            c.set_state("n", n + 1.0);
+        });
+        let (mut model, jobs) = build(b);
+        settle(&mut model, jobs);
+        let jobs = model.set_text("name", "ada".into());
+        settle(&mut model, jobs);
+
+        let jobs = model.run_action("up");
+        assert_eq!(jobs.len(), 1);
+        settle(&mut model, jobs);
+        assert_eq!(model.fields().text("name"), "ADA");
+        assert!(model.fields().checked("c"));
+        assert_eq!(text(&model, "n"), "1");
+        // Derived state follows the changed fields.
+        assert_eq!(text(&model, "shout"), "ADA!");
+    }
+
+    #[test]
+    fn presses_while_an_action_runs_wait_for_it() {
+        let (count, inc) = counter();
+        let mut b = IslandBuilder::new(column([text_field("t", ""), action_button("a", "A")]));
+        b.action("a", move |i, c| {
+            inc();
+            c.set_text("t", format!("{}x", i.text("t")));
+        });
+        let (mut model, jobs) = build(b);
+        settle(&mut model, jobs);
+
+        let mut jobs = model.run_action("a");
+        assert!(model.run_action("a").is_empty());
+        assert!(model.run_action("a").is_empty());
+        let job = jobs.pop().unwrap();
+        // Each press runs it once, from the fields the last run left.
+        settle(&mut model, vec![job]);
+        assert_eq!(model.fields().text("t"), "xxx");
+        assert_eq!(count.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn actions_wait_for_the_derived_state_they_read() {
+        let mut b = IslandBuilder::new(column([text_field("t", ""), action_button("a", "A")]));
+        b.derive("len", |i| (i.text("t").len() as f64).into());
+        b.action_with_state("a", &["len"], |i, c| {
+            c.set_text("t", i.state("len").unwrap().to_string());
+        });
+        let (mut model, jobs) = build(b);
+        settle(&mut model, jobs);
+
+        let mut jobs = model.set_text("t", "abc".into());
+        assert!(model.run_action("a").is_empty(), "waits for len");
+        let job = jobs.pop().unwrap();
+        let jobs = model.finish(job.run());
+        settle(&mut model, jobs);
+        assert_eq!(model.fields().text("t"), "3");
+    }
+
+    #[test]
+    fn an_action_changing_a_field_drops_a_pending_submit() {
+        let mut b = name_required();
+        b.action("fill", |_, c| c.set_text("name", "Ada"));
+        let (mut model, jobs) = build(b);
+        settle(&mut model, jobs);
+
+        let jobs = model.set_text("name", "Bob".into());
+        let action = model.run_action("fill").pop().unwrap();
+        model.submit();
+        settle(&mut model, vec![action]);
+        settle(&mut model, jobs);
+        assert!(model.take_submitted().is_none());
+        assert_eq!(model.fields().text("name"), "Ada");
+    }
+
+    #[test]
+    fn a_panicking_action_changes_nothing() {
+        let mut b = IslandBuilder::new(column([text_field("t", ""), action_button("a", "A")]));
+        b.action("a", |_, c| {
+            c.set_text("t", "changed");
+            panic!("test panic");
+        });
+        let (mut model, jobs) = build(b);
+        settle(&mut model, jobs);
+        let jobs = model.run_action("a");
+        settle(&mut model, jobs);
+        assert_eq!(model.fields().text("t"), "");
+        // It can run again.
+        assert_eq!(model.run_action("a").len(), 1);
+    }
+
+    fn changes<'a>(fields: &'a Fields, settable: &'a HashSet<String>, strict: bool) -> Changes<'a> {
+        Changes {
+            fields,
+            settable,
+            strict,
+            changed: Changed::default(),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "has no initial value")]
+    fn actions_cannot_set_derived_state_in_strict_mode() {
+        let (fields, settable) = (Fields::default(), HashSet::new());
+        changes(&fields, &settable, true).set_state("derived", "x");
+    }
+
+    #[test]
+    fn actions_ignore_unknown_fields_and_state_otherwise() {
+        let ui = IslandBuilder::new(column([checkbox("c", "")]));
+        let (fields, _) = ui.check().unwrap();
+        let settable = HashSet::from(["s".to_owned()]);
+        let mut c = changes(&fields, &settable, false);
+        c.set_text("c", "not a text field");
+        c.set_checked("nope", true);
+        c.set_state("derived", "x");
+        c.set_checked("c", true);
+        c.set_state("s", "x");
+        assert_eq!(c.changed.fields, [("c".into(), Field::Bool(true))]);
+        assert_eq!(c.changed.state, [("s".to_owned(), "x".into())]);
     }
 
     #[test]

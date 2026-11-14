@@ -37,13 +37,16 @@ fn run(interpreter: &Interpreter, line: &str) -> Vec<String> {
 }
 
 /// Waits for the command to show an island, and answers it with `answer`.
-fn answer(requests: &mut BlockingStream<Requests>, answer: impl FnOnce(&mut Island) -> Outcome) {
+fn answer(
+    requests: &mut BlockingStream<Requests>,
+    answer: impl FnOnce(&mut Island) -> Option<Outcome>,
+) {
     let Some(Request::Show(show)) = requests.next() else {
         panic!("expected Show");
     };
     let (builder, reply) = show.into_parts();
     let mut island = Island::new(builder).unwrap();
-    reply.send(answer(&mut island));
+    reply.send(answer(&mut island).expect("the island should be answered"));
 }
 
 /// Runs `line`, which shows an island, and answers it with `answer`; returns
@@ -51,7 +54,7 @@ fn answer(requests: &mut BlockingStream<Requests>, answer: impl FnOnce(&mut Isla
 fn run_answering(
     interpreter: &Interpreter,
     line: &str,
-    answer_with: impl FnOnce(&mut Island) -> Outcome,
+    answer_with: impl FnOnce(&mut Island) -> Option<Outcome>,
 ) -> Vec<String> {
     let mut requests = start(interpreter, line);
     answer(&mut requests, answer_with);

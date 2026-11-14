@@ -401,7 +401,11 @@ impl Harness {
 
     /// Like [`Harness::run`], but `answer` acts on the islands shown (each
     /// is in the output, as it was shown).
-    fn run_with(&self, line: &str, mut answer: impl FnMut(&mut Island) -> Outcome) -> Vec<String> {
+    fn run_with(
+        &self,
+        line: &str,
+        mut answer: impl FnMut(&mut Island) -> Option<Outcome>,
+    ) -> Vec<String> {
         let requests = self.interpreter.run(line).unwrap();
         let requests = futures_executor::block_on_stream(requests);
         let output = requests.map(|request| match request {
@@ -412,7 +416,7 @@ impl Harness {
                 let (builder, reply) = show.into_parts();
                 let mut island = Island::new(builder).unwrap();
                 let shown = island.to_string();
-                reply.send(answer(&mut island));
+                reply.send(answer(&mut island).expect("the island should be answered"));
                 shown
             }
             _ => panic!("unexpected request"),

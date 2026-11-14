@@ -234,6 +234,39 @@ conditional reads must be over-declared.
   changed island with the error, and hob-mcp shows it, so an agent sees
   the errors even if the island doesn't display them.
 
+### Actions
+
+- `action_button(id, label)` runs the action registered with
+  `IslandBuilder::action(id, f)` (or `action_with_state`), and keeps the
+  island open. In the tree it's a button with `Action::Run(id)`
+  (`{"run": id}` in JSON), so it has a key and looks like other buttons;
+  Enter never presses it. `build` rejects an action button
+  without its action (`UnknownAction`) and two actions with one id
+  (`DuplicateAction`). Rejected: a closure in the tree (the tree is
+  serialized), and reusing `button` ids with a handler (a plain button
+  finishes the island).
+- An action reads its inputs like derived state (`Inputs`: the fields,
+  and the named state it declares), and makes its changes through
+  `Changes`: text fields, checkboxes, and named state with an initial
+  value (like a `StateHandle`, so derived state stays derived). Changes
+  to anything else are misuse (panic in strict mode, else a warning).
+- It runs as a `Job`, off the UI thread, like derived state, so it may be
+  slow. It starts once the derived state it declares is up to date.
+  Changes are applied when it finishes, even if the user changed the
+  fields meanwhile (last write wins, as with derived state shown while
+  outdated). A panicking action changes nothing.
+- Each press runs it once: presses while it runs are counted and run in
+  turn, each seeing what the previous one left. Rejected: dropping them
+  (clicks on a "+1" button would be lost).
+- A submit doesn't wait for running actions. A field change from an action
+  drops a pending submit, like the user's own change, since the user
+  didn't submit that value.
+- kettle-ui-headless runs it synchronously; `Island::press` returns
+  `Ok(None)` for an action button (the island stays open), so its return
+  type is `Result<Option<Outcome>, ActionError>`. The outline shows it as
+  a plain button.
+- The fruit-search demo has one ("Next fruit").
+
 ### Frozen islands
 
 A `FrozenIsland` has fixed fields and state. It's created with

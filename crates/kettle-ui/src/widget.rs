@@ -5,7 +5,7 @@
 //! - display: [`label`] (with [`state`]), [`progress`], [`list`], [`image()`]
 //! - form elements: [`text_field`], [`text_area`], [`checkbox`], [`suggestions`]
 //! - buttons: [`submit_button`], [`cancel_button`], [`button`],
-//!   [`button_danger`] (with [`ButtonLabel`])
+//!   [`button_danger`], [`action_button`] (with [`ButtonLabel`])
 //!
 //! Backends read the tree through [`Widget::kind`], and leave out the gaps
 //! around widgets that have nothing to show (see [`is_visible`]).
@@ -101,7 +101,8 @@ pub enum Kind {
         /// The id of the text field a clicked line goes into.
         field: Arc<str>,
     },
-    /// [`submit_button`], [`cancel_button`], [`button`] or [`button_danger`]
+    /// [`submit_button`], [`cancel_button`], [`button`], [`button_danger`]
+    /// or [`action_button`]
     Button {
         /// Shown on the button.
         label: String,
@@ -143,6 +144,8 @@ pub enum Action {
     Cancel,
     /// [`button`], with its id.
     Press(Arc<str>),
+    /// [`action_button`], with the action's id.
+    Run(Arc<str>),
 }
 
 /// Text shown by a [`label`]: either fixed, or bound to named state.
@@ -418,6 +421,14 @@ pub fn button(id: &str, label: impl Into<ButtonLabel>) -> Widget {
 /// Like [`button`], but red, for a dangerous action such as deleting.
 pub fn button_danger(id: &str, label: impl Into<ButtonLabel>) -> Widget {
     make_button(label.into(), Action::Press(id.into()), true)
+}
+
+/// Runs the action with this id
+/// ([`IslandBuilder::action`](crate::IslandBuilder::action)), which may
+/// change the fields and named state; the island stays open. Enter never
+/// presses it, only its key.
+pub fn action_button(id: &str, label: impl Into<ButtonLabel>) -> Widget {
+    make_button(label.into(), Action::Run(id.into()), false)
 }
 
 fn make_button(label: ButtonLabel, action: Action, danger: bool) -> Widget {

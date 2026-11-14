@@ -12,7 +12,8 @@ An island's widget tree is fixed once built. Fields have values, which the
 host gets when the user submits; labels, lists and other widgets can show
 *named state*, set from outside or derived from the fields as the user
 types (computed on a background thread, so it may be slow, like a
-search). Validators check the fields before submitting.
+search). Validators check the fields before submitting. Action buttons
+run an action that can change the fields, keeping the island open.
 
 ```rust
 use kettle_ui::IslandBuilder;

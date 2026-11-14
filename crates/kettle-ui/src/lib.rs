@@ -20,6 +20,10 @@
 //! - *Validators* ([`IslandBuilder::validate`]) check the fields before a
 //!   submit button submits them. Each is derived state holding an error
 //!   message, shown only once the user tries to submit.
+//! - *Actions* ([`IslandBuilder::action`]) run when the user presses an
+//!   [`action_button`](widget::action_button), which keeps the island open.
+//!   Like derived state, they read the fields (and declared named state);
+//!   they can change fields and named state.
 //! - Mistakes in the tree (such as referencing named state that doesn't
 //!   exist) are reported by [`IslandBuilder::build`].
 //! - A [`FrozenIsland`] can't change: its fields and state are fixed. It's
@@ -66,7 +70,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::image::{Image, ImageData, ImageError, ImageFormat, ImageKey, Rgba};
 pub use frozen::FrozenIsland;
-pub use model::{Built, Inputs, Job, JobResult, Model, Outcome, StateUpdate, Updates};
+pub use model::{Built, Changes, Inputs, Job, JobResult, Model, Outcome, StateUpdate, Updates};
 
 use widget::{Kind, Text, Widget};
 
@@ -103,6 +107,11 @@ pub enum Error {
     /// A button has a key without Alt, but the island has text fields,
     /// which take typed letters.
     KeyWithTextField(char),
+    /// An [`action_button`](widget::action_button) has an id that no
+    /// [`IslandBuilder::action`] has.
+    UnknownAction(String),
+    /// Several [`IslandBuilder::action`]s have this id.
+    DuplicateAction(String),
 }
 
 impl fmt::Display for Error {
@@ -132,6 +141,8 @@ impl fmt::Display for Error {
                 "a button has the key {key}, but in an island with text fields, \
                  button keys need Alt"
             ),
+            Error::UnknownAction(id) => write!(f, "no action with id {id:?}"),
+            Error::DuplicateAction(id) => write!(f, "several actions have the id {id:?}"),
         }
     }
 }
@@ -284,6 +295,7 @@ pub trait Contents {
 }
 
 type DeriveFn = Arc<dyn Fn(&Inputs<'_>) -> Value + Send + Sync>;
+type ActionFn = Arc<dyn Fn(&Inputs<'_>, &mut Changes<'_>) + Send + Sync>;
 
 /// Derived state, as configured on the builder.
 struct DeriveSpec {
@@ -295,6 +307,14 @@ struct DeriveSpec {
     validator: bool,
 }
 
+/// An action, as configured on the builder.
+struct ActionSpec {
+    id: String,
+    /// The named state it may read.
+    deps: Vec<String>,
+    run: ActionFn,
+}
+
 /// Configures an island; create it with [`IslandBuilder::new`], then hand it
 /// to a backend (which calls [`IslandBuilder::build`]).
 pub struct IslandBuilder {
@@ -303,6 +323,7 @@ pub struct IslandBuilder {
     /// Initial field values, by id.
     initial: Vec<(String, Field)>,
     derived: Vec<DeriveSpec>,
+    actions: Vec<ActionSpec>,
     /// Names that have an initial value, shared with every [`StateHandle`].
     settable: Arc<RwLock<HashSet<String>>>,
     sender: mpsc::UnboundedSender<StateUpdate>,
@@ -318,6 +339,7 @@ impl IslandBuilder {
             state: HashMap::new(),
             initial: Vec::new(),
             derived: Vec::new(),
+            actions: Vec::new(),
             settable: Arc::default(),
             sender,
             receiver,
@@ -410,6 +432,40 @@ impl IslandBuilder {
         });
     }
 
+    /// Adds an action: what an [`action_button`](widget::action_button)
+    /// with this id does. Pressing it keeps the island open.
+    ///
+    /// It runs on a background thread, like derived state
+    /// ([`derive`](IslandBuilder::derive)), with a snapshot of the fields.
+    /// What it sets through [`Changes`] is applied once it finishes: text
+    /// fields, checkboxes, and named state with an initial value
+    /// ([`set_state`](IslandBuilder::set_state)). Each press runs it once, in
+    /// turn; a press while it runs waits for it to finish.
+    pub fn action(
+        &mut self,
+        id: &str,
+        run: impl Fn(&Inputs<'_>, &mut Changes<'_>) + Send + Sync + 'static,
+    ) {
+        self.action_with_state(id, &[], run);
+    }
+
+    /// Like [`action`](IslandBuilder::action), but it may also read the
+    /// named state in `state`, as in
+    /// [`derive_with_state`](IslandBuilder::derive_with_state). It waits
+    /// until the derived state among it is up to date.
+    pub fn action_with_state(
+        &mut self,
+        id: &str,
+        state: &[&str],
+        run: impl Fn(&Inputs<'_>, &mut Changes<'_>) + Send + Sync + 'static,
+    ) {
+        self.actions.push(ActionSpec {
+            id: id.to_owned(),
+            deps: state.iter().map(|&s| s.to_owned()).collect(),
+            run: Arc::new(run),
+        });
+    }
+
     /// A handle for setting named state from other threads while the island
     /// is open. Only state with an initial value
     /// ([`IslandBuilder::set_state`]) can be set this way.
@@ -427,7 +483,7 @@ impl IslandBuilder {
         let (fields, order) = self.check()?;
         let mut derived: Vec<_> = self.derived.into_iter().map(Some).collect();
         let derived = order.iter().map(|&i| derived[i].take().unwrap()).collect();
-        let (model, jobs) = Model::new(self.root, fields, self.state, derived);
+        let (model, jobs) = Model::new(self.root, fields, self.state, derived, self.actions);
         Ok(Built {
             model,
             jobs,
@@ -458,6 +514,14 @@ impl IslandBuilder {
             let derived_earlier = self.derived[..i].iter().any(|d| d.name == spec.name);
             if derived_earlier || self.state.contains_key(&spec.name) {
                 return Err(Error::ConflictingState(spec.name.clone()));
+            }
+            if let Some(dep) = spec.deps.iter().find(|d| !self.has_state(d)) {
+                return Err(Error::UnknownState(dep.clone()));
+            }
+        }
+        for (i, spec) in self.actions.iter().enumerate() {
+            if self.actions[..i].iter().any(|a| a.id == spec.id) {
+                return Err(Error::DuplicateAction(spec.id.clone()));
             }
             if let Some(dep) = spec.deps.iter().find(|d| !self.has_state(d)) {
                 return Err(Error::UnknownState(dep.clone()));
@@ -536,6 +600,15 @@ impl IslandBuilder {
             | Kind::Progress { state }
             | Kind::List { state }
             | Kind::Image { state } => state,
+            Kind::Button {
+                action: widget::Action::Run(id),
+                ..
+            } => {
+                return match self.actions.iter().any(|a| *a.id == **id) {
+                    true => Ok(()),
+                    false => Err(Error::UnknownAction(id.to_string())),
+                };
+            }
             Kind::Suggestions { state, field } => {
                 match fields.0.get(field) {
                     None => return Err(Error::UnknownField(field.to_string())),
@@ -906,6 +979,30 @@ mod tests {
         assert_eq!(frozen.fields().text("name"), "Ada");
         assert_eq!(frozen.state("hi"), Some(&"Hi, Ada!".into()));
         assert!(!frozen.is_outdated("hi"));
+    }
+
+    #[test]
+    fn action_buttons_need_their_action() {
+        let ui = IslandBuilder::new(action_button("a", "A"));
+        assert!(matches!(check(&ui), Err(Error::UnknownAction(n)) if n == "a"));
+
+        let mut ui = IslandBuilder::new(action_button("a", "A"));
+        ui.action("a", |_, _| {});
+        ui.action("a", |_, _| {});
+        assert!(matches!(check(&ui), Err(Error::DuplicateAction(n)) if n == "a"));
+
+        let mut ui = IslandBuilder::new(action_button("a", "A"));
+        ui.action_with_state("a", &["nope"], |_, _| {});
+        assert!(matches!(check(&ui), Err(Error::UnknownState(n)) if n == "nope"));
+    }
+
+    #[test]
+    fn action_buttons_in_json() {
+        let json = serde_json::to_string(&action_button("a", "A [Alt+a]")).unwrap();
+        assert_eq!(
+            json,
+            r#"{"button":{"label":"A","key":"Alt+a","action":{"run":"a"}}}"#
+        );
     }
 
     #[test]

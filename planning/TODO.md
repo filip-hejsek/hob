@@ -19,6 +19,13 @@ come later.
   strict mode, where reading undeclared state panics on purpose but is
   currently caught like any other panic).
 
+### Actions
+
+- Nothing shows that an action is running (it may be slow); backends could
+  disable its button or mark it, like outdated values.
+- The outline doesn't tell an agent that a button runs an action and keeps
+  the island open; maybe mark it (e.g. `(action)`).
+
 ### Frozen islands
 
 - Should buttons of a frozen island be shown at all?
