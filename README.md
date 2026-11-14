@@ -80,7 +80,8 @@ names the last one (or `-n ID`). `todo` offers a few things to do now:
 TODO notes to work on, and unnamed notes to name. A note is a TODO note
 if it's tagged `todo`: its title (or, without a title, its text) starts
 with the word "todo", which is then taken out (`note todo: call Ada`). Picking a TODO note makes it active, until
-`done` (which also takes an ID). `notes` lists the notes; `notes show`,
+`done` (which also takes an ID). `notes` lists the notes, and `notes
+browse` shows them one at a time, with Previous and Next buttons; `notes show`,
 `edit`, `delete` and `reopen` act on one, given as `3` or `#3`. `notes
 categories` defines categories; a note's are checked in the `notes edit`
 island, and `notes list -c NAME` lists the notes in one.

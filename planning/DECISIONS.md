@@ -265,7 +265,7 @@ conditional reads must be over-declared.
   `Ok(None)` for an action button (the island stays open), so its return
   type is `Result<Option<Outcome>, ActionError>`. The outline shows it as
   a plain button.
-- The fruit-search demo has one ("Next fruit").
+- The fruit-search demo has one ("Next fruit"), and `notes browse` two.
 
 ### Frozen islands
 
@@ -713,6 +713,19 @@ from the notes whenever `todo` runs.
 - `notes show` prints a `Categories: a, b` line after the details when the
   note has any; `notes list` adds a column with them when a note listed
   has any, and `-c/--category NAME` lists only the notes in one.
+- `notes browse [--all] [--todo] [-c NAME] [ID]` shows the notes `list`
+  would (same flags), one at a time in an island: "Note 2 of 5", the
+  heading and details as `notes show` prints them, the categories line,
+  the text. It starts with the newest, or note ID (an error if the flags
+  leave it out). Action buttons "Previous [p]" and "Next [n]" move by id
+  and wrap around; "Close" (cancel) prints nothing, since closing is all
+  there is to do. Each press reads the notes again (the connection is
+  kept, behind a mutex, for the actions), so notes added, changed or
+  deleted meanwhile are seen; from a deleted note it moves to its
+  neighbor, and with none left it says "No notes left.". A database
+  error in an action is shown in the island, since an action can't fail.
+  Rejected: reading the notes once (the island stays open a while), and
+  ends that don't wrap (buttons can't be disabled).
 
 Rejected:
 

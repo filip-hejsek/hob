@@ -129,7 +129,8 @@ fn every_command_has_a_usage_line() {
     assert_eq!(usage("done"), "usage: done [ID]");
     assert_eq!(
         usage("notes"),
-        "usage: notes [list [--all] [--todo] [-c NAME] | show ID | edit ID | delete [-y] ID \
+        "usage: notes [list [--all] [--todo] [-c NAME] \
+         | browse [--all] [--todo] [-c NAME] [ID] | show ID | edit ID | delete [-y] ID \
          | reopen ID | categories [list | add NAME... | rename NAME NEW | delete [-y] NAME]]"
     );
 }
@@ -605,6 +606,89 @@ fn notes_delete_asks_first() {
     assert_eq!(run(&hob, "notes"), ["No notes."]);
     // Ids aren't reused.
     assert_eq!(run(&hob, "note c"), ["Saved note #3."]);
+}
+
+/// The note a `notes browse` island shows: its position, heading and text
+/// labels, joined with " | ".
+fn browsed(island: &Island) -> String {
+    let outline = island.to_string();
+    let labels: Vec<_> = (outline.lines())
+        .filter_map(|line| line.trim().strip_prefix("label "))
+        .map(|text| text.trim_matches('"'))
+        .collect();
+    // Position, heading, details, [categories,] text.
+    let text = labels[labels.len() - 1];
+    format!("{} | {} | {text}", labels[0], labels[1])
+}
+
+#[test]
+fn notes_browse() {
+    let (hob, _dir) = setup();
+    run(&hob, "note todo: a");
+    run(&hob, "note b");
+    run(&hob, "title second");
+    run(&hob, "note c");
+    run(&hob, "done 1");
+    let output = run_answering(&hob, "notes browse", |island| {
+        // The newest first; the done note is left out.
+        assert_eq!(browsed(island), "Note 2 of 2 | #3 | c");
+        let outline = island.to_string();
+        assert!(outline.contains(r#"button "Next" [n]"#), "{outline}");
+        assert!(island.press("Next").unwrap().is_none());
+        // Past the end, it wraps around.
+        assert_eq!(browsed(island), "Note 1 of 2 | #2: second | b");
+        island.press("Previous").unwrap();
+        assert_eq!(browsed(island), "Note 2 of 2 | #3 | c");
+        island.press("Previous").unwrap();
+        assert_eq!(browsed(island), "Note 1 of 2 | #2: second | b");
+        // The buttons read the notes again.
+        run(&hob, "note d");
+        run(&hob, "notes delete -y 3");
+        island.press("Next").unwrap();
+        assert_eq!(browsed(island), "Note 2 of 2 | #4 | d");
+        run(&hob, "notes delete -y 2");
+        run(&hob, "notes delete -y 4");
+        island.press("Next").unwrap();
+        assert_eq!(browsed(island), "No notes left. |  | ");
+        island.press("Close").unwrap()
+    });
+    // Closing says nothing.
+    assert!(output.is_empty(), "{output:?}");
+
+    assert_eq!(run(&hob, "notes browse"), ["No notes."]);
+    run(&hob, "note x");
+    let output = run_answering(&hob, "notes browse --all 1", |island| {
+        assert_eq!(browsed(island), "Note 1 of 2 | #1 | a");
+        let outline = island.to_string();
+        assert!(outline.contains(r#"label "done, created "#), "{outline}");
+        island.press("Close").unwrap()
+    });
+    assert!(output.is_empty(), "{output:?}");
+    assert_eq!(
+        run(&hob, "notes browse 1"),
+        ["error: note #1 isn't among the notes browsed"]
+    );
+    assert_eq!(run(&hob, "notes browse 9"), ["error: there's no note #9"]);
+}
+
+#[test]
+fn notes_browse_shows_categories() {
+    let (hob, _dir) = setup();
+    run(&hob, "notes categories add Home Work");
+    run(&hob, "note a");
+    run_answering(&hob, "notes edit 1", |island| {
+        island.set_checked("category-2", true).unwrap();
+        island.press("Save").unwrap()
+    });
+    run(&hob, "note b");
+    run_answering(&hob, "notes browse -c work", |island| {
+        assert_eq!(browsed(island), "Note 1 of 1 | #1 | a");
+        let outline = island.to_string();
+        assert!(outline.contains(r#"label "Categories: Work""#), "{outline}");
+        island.press("Next").unwrap();
+        assert_eq!(browsed(island), "Note 1 of 1 | #1 | a");
+        island.press("Close").unwrap()
+    });
 }
 
 #[test]

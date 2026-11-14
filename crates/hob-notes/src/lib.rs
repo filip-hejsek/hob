@@ -2,13 +2,14 @@
 //! `notes`.
 //!
 //! Notes are kept in an SQLite database. `note` takes one, `title` names
-//! one, and `notes` lists, shows, edits, deletes or reopens them, and
-//! manages the categories notes can be in. A note can have a tag, written
+//! one, and `notes` lists, browses, shows, edits, deletes or reopens
+//! them, and manages the categories notes can be in. A note can have a tag, written
 //! as the first word of its title (or text); `todo` makes it a TODO note.
 //! TODO items aren't stored: `todo` makes them from the notes each time
 //! (TODO notes to work on, unnamed notes to name), and offers a few; `done`
 //! finishes the one picked.
 
+mod browse;
 mod db;
 mod tag;
 mod todo;
@@ -81,20 +82,28 @@ pub fn register(interpreter: &mut Interpreter, path: Option<PathBuf>) {
         id().optional(),
         move |ctx, args| done(ctx, args, o()?),
     );
+    let filter = || {
+        Spec::new()
+            .flag("all", "Also the notes that are done")
+            .flag("todo", "Only TODO notes")
+            .option(
+                "category",
+                "NAME",
+                Kind::Text,
+                "Only notes in category NAME",
+            )
+            .short('c')
+    };
     let spec = Spec::new()
         .subcommand(
             "list",
             "List the notes, oldest first (the default)",
-            Spec::new()
-                .flag("all", "Also list the notes that are done")
-                .flag("todo", "List only TODO notes")
-                .option(
-                    "category",
-                    "NAME",
-                    Kind::Text,
-                    "List only notes in category NAME",
-                )
-                .short('c'),
+            filter(),
+        )
+        .subcommand(
+            "browse",
+            "Show the notes one at a time, from the newest, or from note ID",
+            filter().arg("ID", Kind::Text).optional(),
         )
         .subcommand("show", "Show a note in full", id())
         .subcommand("edit", "Edit a note's title, text and categories", id())
@@ -313,16 +322,14 @@ fn done(ctx: &mut Context, args: &Matches, mut db: Db) -> CommandResult {
 /// `notes` and its subcommands.
 fn notes(ctx: &mut Context, args: &Matches, mut db: Db) -> CommandResult {
     let Some((subcommand, args)) = args.subcommand() else {
-        return list(ctx, &db, Filter::default());
+        return list(ctx, &db, &Filter::default());
     };
     let id = match subcommand {
-        "list" => {
-            let filter = Filter {
-                all: args.flag("all"),
-                todo: args.flag("todo"),
-                category: args.value("category"),
-            };
-            return list(ctx, &db, filter);
+        "list" => return list(ctx, &db, &Filter::new(&db, args)?),
+        "browse" => {
+            let filter = Filter::new(&db, args)?;
+            let id = args.value("ID").map(parse_id).transpose()?;
+            return browse::browse(ctx, db, filter, id);
         }
         "categories" => return categories(ctx, args, &mut db),
         _ => parse_id(args.value("ID").expect("ID is required"))?,
@@ -339,33 +346,46 @@ fn notes(ctx: &mut Context, args: &Matches, mut db: Db) -> CommandResult {
     }
 }
 
-/// Which notes `notes list` shows.
+/// Which notes `notes list` and `notes browse` show.
 #[derive(Default)]
-struct Filter<'a> {
+struct Filter {
     /// Done ones too.
     all: bool,
     /// Only TODO notes.
     todo: bool,
-    /// Only those in this category.
-    category: Option<&'a str>,
+    /// Only those in the category with this name, as stored.
+    category: Option<String>,
+}
+
+impl Filter {
+    /// The filter given by `--all`, `--todo` and `--category`; the category
+    /// must exist.
+    fn new(db: &Db, args: &Matches) -> Result<Self, db::Error> {
+        let category = match args.value("category") {
+            Some(name) => Some(existing_category(db, name)?.name),
+            None => None,
+        };
+        Ok(Filter {
+            all: args.flag("all"),
+            todo: args.flag("todo"),
+            category,
+        })
+    }
+
+    /// The notes it lets through, oldest first.
+    fn notes(&self, db: &Db) -> rusqlite::Result<Vec<Note>> {
+        Ok((db.all()?.into_iter())
+            .filter(|note| self.all || note.status != Status::Done)
+            .filter(|note| !self.todo || note.is_todo())
+            .filter(|note| (self.category.as_ref()).is_none_or(|c| note.categories.contains(c)))
+            .collect())
+    }
 }
 
 /// Lists the notes in a table, as `filter` says. Their categories get a
 /// column if any note listed has one.
-fn list(ctx: &mut Context, db: &Db, filter: Filter) -> CommandResult {
-    let category = match filter.category {
-        Some(name) => Some(existing_category(db, name)?.name),
-        None => None,
-    };
-    let notes: Vec<_> = (db.all()?.into_iter())
-        .filter(|note| filter.all || note.status != Status::Done)
-        .filter(|note| !filter.todo || note.is_todo())
-        .filter(|note| {
-            category
-                .as_ref()
-                .is_none_or(|c| note.categories.contains(c))
-        })
-        .collect();
+fn list(ctx: &mut Context, db: &Db, filter: &Filter) -> CommandResult {
+    let notes = filter.notes(db)?;
     if notes.is_empty() {
         ctx.print("No notes.");
         return Ok(());
@@ -393,16 +413,20 @@ fn list(ctx: &mut Context, db: &Db, filter: Filter) -> CommandResult {
 /// Prints a note in full: a heading, details, its categories if it has
 /// any, then its text.
 fn show(ctx: &mut Context, note: &Note) -> CommandResult {
-    let mut head = match &note.title {
-        Some(title) => format!("#{}: {title}", note.id),
-        None => format!("#{}", note.id),
-    };
-    head = format!("{head}\n{}", details(note));
+    let mut head = format!("{}\n{}", heading(note), details(note));
     if !note.categories.is_empty() {
         head = format!("{head}\nCategories: {}", note.categories.join(", "));
     }
     ctx.print(format!("{head}\n\n{}", note.text));
     Ok(())
+}
+
+/// A note's heading: `#ID: title`, or `#ID` if it's unnamed.
+fn heading(note: &Note) -> String {
+    match &note.title {
+        Some(title) => format!("#{}: {title}", note.id),
+        None => format!("#{}", note.id),
+    }
 }
 
 /// A note's state and dates, e.g. `done, created 2026-01-02 10:00, done
