@@ -46,8 +46,9 @@
 //! after its label show it has focus. In a text field or checkbox (not a
 //! text area), Up and Down move between fields, and Down from the last one
 //! to the island as a whole; Ctrl+Up and Ctrl+Down do that in a text area
-//! too, and in a checkbox skip the checkboxes next to it. Escape cancels
-//! (if there's a cancel button). While the island as a whole has focus,
+//! too, and in a checkbox skip the checkboxes next to it; landing on a
+//! run of checkboxes, they go to the one there that last had focus. Escape
+//! cancels (if there's a cancel button). While the island as a whole has focus,
 //! Enter submits and a button's key (see
 //! [`ButtonKey`]) presses it; a key with Alt
 //! presses it also while one of the island's fields has focus, and
@@ -1328,6 +1329,66 @@ mod tests {
                 r#"Message(TextChanged("a", "1"))"#,
                 r#"Message(TextChanged("a", "12"))"#,
                 "Message(Submit)",
+            ]
+        );
+    }
+
+    #[test]
+    fn ctrl_arrows_return_to_the_last_focused_checkbox() {
+        use iced::keyboard::{Key, key::Named};
+
+        let builder = IslandBuilder::new(column([
+            checkbox("c", "C"),
+            checkbox("d", "D"),
+            checkbox("e", "E"),
+            text_field("a", "A"),
+            checkbox("f", "F"),
+            checkbox("g", "G"),
+            submit_button("OK"),
+        ]));
+        let island = Island::new(builder).unwrap().0;
+        let d = island.field_id("d").unwrap();
+        let a = island.field_id("a").unwrap();
+        let mut ui = simulator(island.view());
+        // Clicking d (which toggles it), then a.
+        ui.click(d).unwrap();
+        ui.click(a).unwrap();
+        ui.typewrite("1");
+        // Back to d, not e (the view isn't rebuilt, so Space checks it
+        // again).
+        ui.simulate(ctrl(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::Space));
+        // Down to e, then a, and back to e.
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.simulate(ctrl(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::Space));
+        // Past the run to a, then to f, the first of a run without one.
+        ui.simulate(ctrl(Named::ArrowDown));
+        ui.typewrite("2");
+        ui.simulate(ctrl(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        // From g to the island as a whole, and back to g.
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.simulate(ctrl(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::Space));
+        // Back up to a, then down to g again.
+        ui.simulate(ctrl(Named::ArrowUp));
+        ui.typewrite("3");
+        ui.simulate(ctrl(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::Space));
+        let messages: Vec<String> = ui.into_messages().map(|m| format!("{m:?}")).collect();
+        assert_eq!(
+            messages,
+            [
+                r#"Message(Toggled("d", true))"#,
+                r#"Message(TextChanged("a", "1"))"#,
+                r#"Message(Toggled("d", true))"#,
+                r#"Message(Toggled("e", true))"#,
+                r#"Message(TextChanged("a", "12"))"#,
+                r#"Message(Toggled("g", true))"#,
+                r#"Message(TextChanged("a", "123"))"#,
+                r#"Message(Toggled("g", true))"#,
             ]
         );
     }

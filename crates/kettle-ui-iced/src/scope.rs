@@ -28,7 +28,8 @@ use crate::Message;
 ///   a whole. Ctrl+Up and Ctrl+Down do the same, also in a text area (where
 ///   Up and Down move between lines); in a checkbox, they skip the
 ///   checkboxes before or after it (Ctrl+Up does nothing if there's no
-///   other field before them).
+///   other field before them). When they land on a run of checkboxes,
+///   they focus the one in it that last had focus, if any.
 /// - Escape, while the island has focus, cancels.
 /// - While the island as a whole has focus, Enter submits, a button's key
 ///   (without Alt) presses it, and Up (if there are fields) focuses the
@@ -76,10 +77,21 @@ pub(crate) enum FieldKind {
     },
 }
 
-/// Whether the island has focus as a whole.
+impl FieldKind {
+    fn is_checkbox(&self) -> bool {
+        matches!(self, FieldKind::Checkbox { .. })
+    }
+}
+
+/// Whether the island has focus as a whole, and which checkboxes had
+/// focus last.
 #[derive(Default)]
 struct State {
     focused: bool,
+    /// The checkbox that last had focus in each run of checkboxes, oldest
+    /// first. Runs can change as fields are shown and hidden, so a run may
+    /// hold more than one; the newest counts.
+    last_checkboxes: Vec<Id>,
 }
 
 impl Focusable for State {
@@ -127,38 +139,76 @@ impl KeyAction {
 }
 
 impl Scope<'_> {
-    /// What pressing `key` (at `physical_key`) with `modifiers` does, if
-    /// anything.
-    fn key_action(
+    /// Which field has focus, if any; if it's a checkbox, remembers it as
+    /// the last one with focus in its run.
+    fn focused_field(
         &mut self,
         tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+    ) -> Option<usize> {
+        if self.fields.is_empty() {
+            return None;
+        }
+        let mut find = FindField {
+            fields: &self.fields,
+            focused: None,
+        };
+        (self.content.as_widget_mut()).operate(&mut tree.children[0], layout, renderer, &mut find);
+        let field = find.focused?;
+        if self.fields[field].kind.is_checkbox() {
+            let run = self.run(field);
+            let state = tree.state.downcast_mut::<State>();
+            let ids = &self.fields[run];
+            state
+                .last_checkboxes
+                .retain(|id| !ids.iter().any(|f| f.id == *id));
+            state.last_checkboxes.push(self.fields[field].id.clone());
+        }
+        Some(field)
+    }
+
+    /// The run of checkboxes that the field at `field` is in (just that
+    /// field if it's not a checkbox).
+    fn run(&self, field: usize) -> std::ops::Range<usize> {
+        let is_checkbox = |f: &Field| f.kind.is_checkbox();
+        let start = self.fields[..field]
+            .iter()
+            .rposition(|f| !is_checkbox(f))
+            .map_or(0, |i| i + 1);
+        let end = self.fields[field + 1..]
+            .iter()
+            .position(|f| !is_checkbox(f))
+            .map_or(self.fields.len(), |i| field + 1 + i);
+        start..end
+    }
+
+    /// Where Ctrl+Up or Ctrl+Down landing on the field at `field` focuses:
+    /// in a run of checkboxes, the one that last had focus.
+    fn land(&self, state: &State, field: usize) -> Focus {
+        let fields = &self.fields[self.run(field)];
+        let last =
+            (state.last_checkboxes.iter().rev()).find(|id| fields.iter().any(|f| f.id == **id));
+        Focus::Field(last.unwrap_or(&self.fields[field].id).clone())
+    }
+
+    /// What pressing `key` (at `physical_key`) with `modifiers` does, if
+    /// anything, while `field` has focus.
+    fn key_action(
+        &mut self,
+        tree: &Tree,
+        field: Option<usize>,
         key: &keyboard::Key,
         physical_key: key::Physical,
         modifiers: keyboard::Modifiers,
-        layout: Layout<'_>,
-        renderer: &Renderer,
     ) -> Option<KeyAction> {
         let plain = modifiers.is_empty();
         let alt = modifiers == keyboard::Modifiers::ALT;
         if !plain && !alt && modifiers != keyboard::Modifiers::COMMAND {
             return None;
         }
-        let whole = tree.state.downcast_ref::<State>().focused;
-        let field = if self.fields.is_empty() {
-            None
-        } else {
-            let mut find = FindField {
-                fields: &self.fields,
-                focused: None,
-            };
-            (self.content.as_widget_mut()).operate(
-                &mut tree.children[0],
-                layout,
-                renderer,
-                &mut find,
-            );
-            find.focused
-        };
+        let state = tree.state.downcast_ref::<State>();
+        let whole = state.focused;
         let kind = field.map(|i| &self.fields[i].kind);
         let checkbox = match kind {
             Some(FieldKind::Checkbox {
@@ -201,7 +251,7 @@ impl Scope<'_> {
                 // From a checkbox, skip the checkboxes after it.
                 let next = self.fields[field + 1..]
                     .iter()
-                    .find(|f| checkbox.is_none() || !matches!(f.kind, FieldKind::Checkbox { .. }));
+                    .find(|f| checkbox.is_none() || !f.kind.is_checkbox());
                 match next {
                     Some(next) => Some(KeyAction::focus(Focus::Field(next.id.clone()))),
                     None => self.submit.clone().map(KeyAction::send),
@@ -217,29 +267,40 @@ impl Scope<'_> {
             keyboard::Key::Named(key::Named::ArrowUp) if !plain && checkbox.is_some() => {
                 let previous = self.fields[..field?]
                     .iter()
-                    .rfind(|f| !matches!(f.kind, FieldKind::Checkbox { .. }))?;
+                    .rfind(|f| !f.kind.is_checkbox())?;
                 Some(KeyAction::focus(Focus::Field(previous.id.clone())))
             }
             keyboard::Key::Named(key::Named::ArrowUp) if arrows_move_focus => {
                 let previous = match field {
-                    _ if whole && !self.click_focus => self.fields.last()?,
-                    Some(field) => self.fields.get(field.checked_sub(1)?)?,
+                    _ if whole && !self.click_focus => self.fields.len().checked_sub(1)?,
+                    Some(field) => field.checked_sub(1)?,
                     None => return None,
                 };
-                Some(KeyAction::focus(Focus::Field(previous.id.clone())))
+                Some(KeyAction::focus(if plain {
+                    Focus::Field(self.fields[previous].id.clone())
+                } else {
+                    self.land(state, previous)
+                }))
             }
             // From a checkbox, Ctrl+Down skips the checkboxes after it.
             keyboard::Key::Named(key::Named::ArrowDown) if !plain && checkbox.is_some() => {
                 let next = self.fields[field? + 1..]
                     .iter()
-                    .find(|f| !matches!(f.kind, FieldKind::Checkbox { .. }));
+                    .find(|f| !f.kind.is_checkbox());
                 Some(KeyAction::focus(match next {
                     Some(next) => Focus::Field(next.id.clone()),
                     None => Focus::Whole,
                 }))
             }
             keyboard::Key::Named(key::Named::ArrowDown) if arrows_move_focus => {
-                Some(KeyAction::focus(next(field?)))
+                let field = field?;
+                Some(KeyAction::focus(
+                    if !plain && field + 1 < self.fields.len() {
+                        self.land(state, field + 1)
+                    } else {
+                        next(field)
+                    },
+                ))
             }
             keyboard::Key::Character(c) if plain && (whole || checkbox.is_some()) => {
                 let mut chars = c.chars().map(|c| c.to_ascii_lowercase());
@@ -376,6 +437,8 @@ impl Widget<Message, Theme, Renderer> for Scope<'_> {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
             | Event::Touch(touch::Event::FingerPressed { .. }) => {
+                // Remembers a checkbox that might lose focus to the click.
+                self.focused_field(tree, child(layout), renderer);
                 let state = tree.state.downcast_mut::<State>();
                 let focused = self.click_focus && cursor.is_over(layout.bounds());
                 if state.focused != focused {
@@ -396,14 +459,9 @@ impl Widget<Message, Theme, Renderer> for Scope<'_> {
                     (keyboard::Key::Named(_), keyboard::Key::Character(_)) => modified_key,
                     _ => key,
                 };
-                if let Some(action) = self.key_action(
-                    tree,
-                    key,
-                    *physical_key,
-                    *modifiers,
-                    child(layout),
-                    renderer,
-                ) {
+                // Before any key moves focus away from it.
+                let field = self.focused_field(tree, child(layout), renderer);
+                if let Some(action) = self.key_action(tree, field, key, *physical_key, *modifiers) {
                     if let Some(message) = action.send {
                         shell.publish(message);
                     }

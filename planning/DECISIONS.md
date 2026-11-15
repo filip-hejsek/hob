@@ -368,7 +368,13 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   they move past the whole run of checkboxes it's in, like Enter: to the
   field before or after the run (after the last one, to the island as a
   whole; before the first, nowhere), as plain Up and Down go through the
-  run one by one.
+  run one by one. Landing on a run, Ctrl+Up and Ctrl+Down focus the
+  checkbox in it that last had focus (plain Up and Down still go to its
+  nearest end), so they move between a run and the fields around it
+  without losing the place in it. The scope remembers that checkbox (by
+  Id, in its widget state) whenever a key is pressed or a click lands
+  while a checkbox has focus, since focus leaves a field only that way;
+  runs are worked out afresh each time, as fields can be shown or hidden.
 - A text area is iced's `text_editor` inside our own widget, which keeps the
   editor's `Content` in its widget state and takes the value as a string,
   like `text_input`. The `Content` is remade only when the value changes
