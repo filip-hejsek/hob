@@ -2,7 +2,8 @@
 //! programmatically (e.g. by an agent).
 //!
 //! An [`Island`] acts like a user would: it types into text fields, toggles
-//! checkboxes, picks suggestions and presses buttons, all by the ids and
+//! checkboxes, selects radio options (by value), picks suggestions and
+//! presses buttons, all by the ids and
 //! labels a user would see. It shows the island as text ([`Island`]
 //! implements [`Display`](fmt::Display)); [`outline`] does the same for a
 //! [`FrozenIsland`].
@@ -56,6 +57,15 @@ pub enum ActionError {
     NoTextField(String),
     /// There is no checkbox with this id.
     NoCheckbox(String),
+    /// There is no radio group with this id.
+    NoRadioGroup(String),
+    /// The radio group has no option with this value.
+    NoOption {
+        /// The radio group's id.
+        field: String,
+        /// The value that was to be selected.
+        value: String,
+    },
     /// No button has this label.
     NoButton(String),
     /// Several buttons that do different things have this label.
@@ -77,6 +87,10 @@ impl fmt::Display for ActionError {
         match self {
             ActionError::NoTextField(id) => write!(f, "no text field with id {id:?}"),
             ActionError::NoCheckbox(id) => write!(f, "no checkbox with id {id:?}"),
+            ActionError::NoRadioGroup(id) => write!(f, "no radio group with id {id:?}"),
+            ActionError::NoOption { field, value } => {
+                write!(f, "radio group {field:?} has no option {value:?}")
+            }
             ActionError::NoButton(label) => write!(f, "no button labelled {label:?}"),
             ActionError::AmbiguousButton(label) => {
                 write!(f, "several different buttons are labelled {label:?}")
@@ -165,6 +179,30 @@ impl Island {
             return Err(ActionError::NoCheckbox(id.to_owned()));
         }
         let jobs = self.model.set_checked(id, checked);
+        self.settle(jobs);
+        Ok(())
+    }
+
+    /// Selects the option with the value `value` in the radio group `id`.
+    pub fn select(&mut self, id: &str, value: &str) -> Result<(), ActionError> {
+        let found = find(
+            &self.model,
+            self.model.root(),
+            &mut |w| matches!(w.kind(), Kind::RadioGroup { id: i, .. } if &**i == id),
+        );
+        let Some(group) = found else {
+            return Err(ActionError::NoRadioGroup(id.to_owned()));
+        };
+        let Kind::RadioGroup { options, .. } = group.kind() else {
+            unreachable!("found a radio group");
+        };
+        if !options.iter().any(|o| *o.value == *value) {
+            return Err(ActionError::NoOption {
+                field: id.to_owned(),
+                value: value.to_owned(),
+            });
+        }
+        let jobs = self.model.set_selected(id, value);
         self.settle(jobs);
         Ok(())
     }
@@ -377,6 +415,23 @@ fn render(model: &impl Contents, widget: &Widget, depth: usize, out: &mut String
             let mark = if fields.checked(id) { 'x' } else { ' ' };
             writeln!(out, "{indent}checkbox {id}: [{mark}] {label:?}")
         }
+        Kind::RadioGroup { id, options } => {
+            writeln!(out, "{indent}radio_group {id}")?;
+            for (i, option) in options.iter().enumerate() {
+                let value = &option.value;
+                let mark = if fields.selected(id) == Some(value) {
+                    'o'
+                } else {
+                    ' '
+                };
+                write!(out, "{indent}  option {value}: ({mark}) {:?}", option.label)?;
+                if let Some(key) = option.shown_key(i) {
+                    write!(out, " [{key}]")?;
+                }
+                writeln!(out)?;
+            }
+            Ok(())
+        }
         Kind::Progress { state } => {
             let value = match model.state(state) {
                 Some(Value::Number(n)) => n.clamp(0.0, 1.0),
@@ -499,6 +554,40 @@ mod tests {
             "table (horizontal borders)\n  row\n    label \"Name\"\n    \
              text_field name: \"Ada\"\n  row\n    checkbox ok: [x] \"OK\"\n"
         );
+    }
+
+    #[test]
+    fn radio_groups_show_their_options_and_keys() {
+        let mut island = Island::new(IslandBuilder::new(column([
+            radio_group(
+                "size",
+                [("s", "Small [s]"), ("m", "Medium"), ("l", "Large")],
+            ),
+            checkbox("c", ""),
+        ])))
+        .unwrap();
+        let outline = |island: &Island| island.to_string();
+        assert_eq!(
+            outline(&island),
+            "column\n  radio_group size\n    option s: ( ) \"Small\" [s]\n    \
+             option m: ( ) \"Medium\" [2]\n    option l: ( ) \"Large\" [3]\n  \
+             checkbox c: [ ] \"\"\n"
+        );
+        island.select("size", "m").unwrap();
+        assert_eq!(island.fields().selected("size"), Some("m"));
+        assert!(outline(&island).contains("option m: (o) \"Medium\" [2]\n"));
+        assert_eq!(
+            island.select("size", "xl"),
+            Err(ActionError::NoOption {
+                field: "size".into(),
+                value: "xl".into()
+            })
+        );
+        assert_eq!(
+            island.select("c", "s"),
+            Err(ActionError::NoRadioGroup("c".into()))
+        );
+        assert_eq!(island.fields().selected("size"), Some("m"));
     }
 
     #[test]

@@ -27,7 +27,9 @@
 //! stay in the iced tree for the same reason.
 //!
 //! In this crate, "text fields" include text areas, unless said otherwise,
-//! and "fields" are text fields and checkboxes: what can have focus.
+//! and "fields" are text fields, checkboxes and the options of radio
+//! groups: what can have focus. Checkboxes next to each other form a run,
+//! and so do the options of a radio group.
 //! The fields of a live island have iced [`Id`]s, made when the island
 //! is created and kept for its whole life, for the host's focus operations
 //! (see [`Island::field_id`] and [`Island::has_focus`]). They are unique, so
@@ -39,15 +41,19 @@
 //! A live island handles some keys itself, while it has focus: Enter in a
 //! field focuses the next shown one, and submits in the last one (if
 //! there's a submit button), while in a text area it starts a new line and
-//! Ctrl+Enter does that instead. In a checkbox, Enter skips the checkboxes
-//! after it, to the next other field or else submitting. Space toggles it, `y` and
-//! `n` check and uncheck it and move on (after the last field, to the
-//! island as a whole; they never submit); a border and a muted `[y/n]`
-//! after its label show it has focus. In a text field or checkbox (not a
-//! text area), Up and Down move between fields, and Down from the last one
-//! to the island as a whole; Ctrl+Up and Ctrl+Down do that in a text area
-//! too, and in a checkbox skip the checkboxes next to it; landing on a
-//! run of checkboxes, they go to the one there that last had focus. Escape
+//! Ctrl+Enter does that instead. In a run, Enter skips the rest of it, to
+//! the next other field or else submitting; it never selects a radio
+//! option. In a checkbox, Space toggles it, `y` and `n` check and uncheck
+//! it and move on (after the last field, to the island as a whole; they
+//! never submit); a border and a muted `[y/n]` after its label show it has
+//! focus. In a radio option, Space selects it, and an option's number or
+//! letter selects that option and focuses it; while one of a group's
+//! options has focus, all of them show their key (the letter, or else the
+//! number). In a field other than a text area, Up and Down move between
+//! fields, and Down from the last one to the island as a whole; Ctrl+Up
+//! and Ctrl+Down do that in a text area too, and in a run skip the rest of
+//! it; landing on a run, they go to its selected radio option, or else the
+//! field there that last had focus. Escape
 //! cancels (if there's a cancel button). While the island as a whole has focus,
 //! Enter submits and a button's key (see
 //! [`ButtonKey`]) presses it; a key with Alt
@@ -57,7 +63,7 @@
 //! [`render_png`] renders an island offscreen, without a window; the
 //! `kettle-render` binary does the same for an island saved as JSON.
 
-mod checkbox;
+mod choice;
 mod grid;
 mod offscreen;
 mod scope;
@@ -71,7 +77,9 @@ use iced::widget::{
     Container, button, column, container, operation, progress_bar, rule, text, text_input,
 };
 use iced::{Element, Padding, Rectangle, Task, task};
-use kettle_ui::widget::{Action, Borders, ButtonKey, Kind, Text, Widget, is_shown, is_visible};
+use kettle_ui::widget::{
+    Action, Borders, ButtonKey, Kind, Text, Widget, is_shown, is_visible, option_digit,
+};
 use kettle_ui::{
     Built, Contents, Error, FrozenIsland, IslandBuilder, Job, JobResult, Model, Outcome,
     StateUpdate, Value,
@@ -110,6 +118,8 @@ pub struct Message(Msg);
 enum Msg {
     TextChanged(Arc<str>, String),
     Toggled(Arc<str>, bool),
+    /// A radio group and the value of the option selected.
+    Selected(Arc<str>, Arc<str>),
     StateSet(StateUpdate),
     Derived(JobResult),
     Submit,
@@ -150,6 +160,7 @@ impl Island {
         let jobs = match message {
             Msg::TextChanged(id, value) => self.model.set_text(&id, value),
             Msg::Toggled(id, value) => self.model.set_checked(&id, value),
+            Msg::Selected(id, value) => self.model.set_selected(&id, &value),
             Msg::StateSet(update) => self.model.apply(update),
             Msg::Derived(result) => self.model.finish(result),
             // Submitted below, once the validators pass.
@@ -185,18 +196,24 @@ impl Island {
         .into()
     }
 
-    /// Focuses the island: its first shown field, or the island as a whole
-    /// if it has no fields. Does nothing if all its fields are hidden.
+    /// Focuses the island: its first shown field (in a radio group, its
+    /// selected option), or the island as a whole if it has no fields. Does
+    /// nothing if all its fields are hidden.
     pub fn focus<T: Send + 'static>(&self) -> Task<T> {
         if self.fields.is_empty() {
             return operation::focus(self.id.clone());
         }
         let mut shown = Shown::default();
         shown.collect(&self.model, self.model.root(), &self.fields);
-        match shown.fields.into_iter().next() {
-            Some(field) => operation::focus(field.id),
-            None => Task::none(),
+        if shown.fields.is_empty() {
+            return Task::none();
         }
+        let first = &shown.fields[scope::run(&shown.fields, 0)];
+        let field = match first[0].kind {
+            scope::FieldKind::RadioOption { .. } => scope::selected_option(first),
+            _ => None,
+        };
+        operation::focus(field.unwrap_or(&first[0]).id.clone())
     }
 
     /// The iced Id of the island as a whole; operations see its bounds as
@@ -205,10 +222,19 @@ impl Island {
         self.id.clone()
     }
 
-    /// The iced Id of field `field` (a text field or checkbox), for focus
-    /// operations. `None` if the island has no field with this id.
+    /// The iced Id of field `field` (a text field, checkbox or radio group),
+    /// for focus operations: for a radio group, the Id of its selected
+    /// option, or else its first. `None` if the island has no field with this
+    /// id.
     pub fn field_id(&self, field: &str) -> Option<Id> {
-        field_id(&self.fields, field).cloned()
+        let selected = self.model.fields().selected(field);
+        let selected = selected.and_then(|value| option_index(self.model.root(), field, value));
+        let mut ids = option_ids(&self.fields, field);
+        match selected {
+            Some(i) => ids.nth(i),
+            None => ids.next(),
+        }
+        .cloned()
     }
 
     /// Whether the island or one of its fields has focus.
@@ -293,7 +319,7 @@ fn render<'a>(
             area.into()
         }
         Kind::Checkbox { id, label } => {
-            let mut checkbox = checkbox::Checkbox::new(
+            let mut checkbox = choice::Choice::checkbox(
                 label,
                 fields.checked(id),
                 interactive.then_some(|b| Message(Msg::Toggled(id.clone(), b))),
@@ -302,6 +328,26 @@ fn render<'a>(
                 checkbox = checkbox.id(widget_id.clone());
             }
             checkbox.into()
+        }
+        Kind::RadioGroup { id, options } => {
+            let mut widget_ids = ids.map(|ids| option_ids(ids, id));
+            let selected = fields.selected(id);
+            let options = (options.iter().enumerate())
+                .map(|(i, option)| {
+                    let mut radio = choice::Choice::radio(
+                        &option.label,
+                        selected == Some(&*option.value),
+                        Message(Msg::Selected(id.clone(), option.value.clone())),
+                        option.shown_key(i),
+                        interactive,
+                    );
+                    if let Some(widget_id) = widget_ids.as_mut().and_then(Iterator::next) {
+                        radio = radio.id(widget_id.clone());
+                    }
+                    radio
+                })
+                .collect();
+            choice::RadioGroup::new(options, spacing()).into()
         }
         Kind::Progress { state } => {
             let value = match contents.state(state) {
@@ -507,6 +553,22 @@ impl Shown {
                 let ids = field_id(ids, id).cloned();
                 (self.fields).extend(ids.map(|id| scope::Field { id, kind }));
             }
+            Kind::RadioGroup { id, options } => {
+                let selected = contents.fields().selected(id);
+                let fields = (options.iter().enumerate()).zip(option_ids(ids, id)).map(
+                    |((i, option), widget_id)| scope::Field {
+                        id: widget_id.clone(),
+                        kind: scope::FieldKind::RadioOption {
+                            group: id.clone(),
+                            selected: selected == Some(&*option.value),
+                            select: Message(Msg::Selected(id.clone(), option.value.clone())),
+                            digit: option_digit(i),
+                            letter: option.key.map(|k| k.char),
+                        },
+                    },
+                );
+                self.fields.extend(fields);
+            }
             Kind::Button { key, action, .. } => {
                 match action {
                     Action::Submit => self.submit = true,
@@ -543,13 +605,40 @@ fn field_ids(widget: &Widget, out: &mut Vec<Arc<str>>) {
         Kind::TextField { id, .. } | Kind::TextArea { id, .. } | Kind::Checkbox { id, .. } => {
             out.push(id.clone());
         }
+        // Each option has an Id of its own.
+        Kind::RadioGroup { id, options } => out.extend(options.iter().map(|_| id.clone())),
         _ => {}
     }
 }
 
-/// The Id of field `field`.
+/// The index of the option with `value` in radio group `field`.
+fn option_index(widget: &Widget, field: &str, value: &str) -> Option<usize> {
+    match widget.kind() {
+        Kind::Column(children) | Kind::Row(children) => {
+            children.iter().find_map(|c| option_index(c, field, value))
+        }
+        Kind::Table { rows, .. } => {
+            (rows.iter().flatten()).find_map(|c| option_index(c, field, value))
+        }
+        Kind::When { child, .. } => option_index(child, field, value),
+        Kind::RadioGroup { id, options } if **id == *field => {
+            options.iter().position(|o| *o.value == *value)
+        }
+        _ => None,
+    }
+}
+
+/// The Id of field `field`; of a radio group, its first option's.
 fn field_id<'a>(ids: &'a FieldIds, field: &str) -> Option<&'a Id> {
-    ids.iter().find(|(f, _)| **f == *field).map(|(_, id)| id)
+    option_ids(ids, field).next()
+}
+
+/// The Ids of the options of radio group `field`, in order (or the Id of
+/// another field).
+fn option_ids<'a>(ids: &'a FieldIds, field: &str) -> impl Iterator<Item = &'a Id> {
+    ids.iter()
+        .filter(move |(f, _)| **f == *field)
+        .map(|(_, id)| id)
 }
 
 /// Finds out whether one of `ids` has focus. Unlike iced's `find_focused`, it
@@ -606,8 +695,8 @@ mod tests {
     use iced_test::instruction::{Expectation, Interaction, Key, Keyboard, Mouse, Target};
     use iced_test::{Instruction, simulator};
     use kettle_ui::widget::{
-        action_button, cancel_button, checkbox, column, label, row, state, submit_button,
-        text_area, text_field, when,
+        action_button, cancel_button, checkbox, column, label, radio_group, row, state,
+        submit_button, text_area, text_field, when,
     };
 
     use super::*;
@@ -683,6 +772,9 @@ mod tests {
                                 );
                                 for c in ["c", "d"].into_iter().filter(|c| fields.checked(c)) {
                                     out += &format!(" {c}");
+                                }
+                                if let Some(value) = fields.selected("r") {
+                                    out += &format!(" r={value}");
                                 }
                                 out
                             }
@@ -1453,6 +1545,131 @@ mod tests {
                 r#"Message(TextChanged("a", "123"))"#,
                 r#"Message(Toggled("g", true))"#,
             ]
+        );
+    }
+
+    #[test]
+    fn radio_options_are_selected_by_space_and_their_keys() {
+        use iced::keyboard::key::{Code, Named};
+        use iced::keyboard::{Key, Modifiers};
+
+        let mut builder = IslandBuilder::new(column([
+            radio_group(
+                "size",
+                [("s", "Small [s]"), ("m", "Medium"), ("l", "Large")],
+            ),
+            checkbox("c", "C"),
+            submit_button("OK"),
+        ]));
+        builder.set_selected("size", "m");
+        let island = Island::new(builder).unwrap().0;
+        // The selected option's.
+        let m = island.field_id("size").unwrap();
+        let c = |s: &str| Key::Character(s.into());
+        let mut ui = simulator(island.view());
+        // Clicking focuses it, and selects it (again).
+        ui.click(m).unwrap();
+        // It's selected (the view isn't rebuilt, so it stays so).
+        ui.tap_key(Key::Named(Named::Space));
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::Space));
+        // Its number, its letter, and the number of one with a letter.
+        ui.typewrite("3");
+        ui.typewrite("s");
+        ui.typewrite("1");
+        // The number row in Czech.
+        ui.simulate(key_events(c("ě"), c("ě"), Code::Digit2, Modifiers::empty()));
+        // Not a key of the group.
+        ui.typewrite("y");
+        ui.typewrite("4");
+        // Enter skips the group, without selecting.
+        ui.tap_key(Key::Named(Named::Enter));
+        ui.tap_key(Key::Named(Named::Space));
+        // Back to the group, where the key focused m.
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::Space));
+        let messages: Vec<String> = ui.into_messages().map(|m| format!("{m:?}")).collect();
+        assert_eq!(
+            messages,
+            [
+                r#"Message(Selected("size", "m"))"#,
+                r#"Message(Selected("size", "s"))"#,
+                r#"Message(Selected("size", "l"))"#,
+                r#"Message(Selected("size", "s"))"#,
+                r#"Message(Selected("size", "s"))"#,
+                r#"Message(Toggled("c", true))"#,
+                r#"Message(Selected("size", "l"))"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn ctrl_arrows_land_on_the_selected_option() {
+        use iced::keyboard::{Key, key::Named};
+
+        let mut builder = IslandBuilder::new(column([
+            checkbox("c", "C"),
+            radio_group("r", [("a", "A"), ("b", "B"), ("c", "C")]),
+            radio_group("s", [("a", "A"), ("b", "B")]),
+            text_field("t", "T"),
+            submit_button("OK"),
+        ]));
+        builder.set_selected("r", "b");
+        let island = Island::new(builder).unwrap().0;
+        let checkbox_id = island.field_id("c").unwrap();
+        let mut ui = simulator(island.view());
+        ui.click(checkbox_id).unwrap();
+        // From the checkbox to b, the selected option; Down from there to c.
+        ui.simulate(ctrl(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::Space));
+        // Past r to s, a group of its own; nothing selected there, so its
+        // first option.
+        ui.simulate(ctrl(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::Space));
+        // Down to b, then past s to t, and back to b, the last one focused.
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.simulate(ctrl(Named::ArrowDown));
+        ui.typewrite("x");
+        ui.simulate(ctrl(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::Space));
+        // Past s, and back to r's selected option, b.
+        ui.simulate(ctrl(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::Space));
+        let messages: Vec<String> = ui.into_messages().map(|m| format!("{m:?}")).collect();
+        assert_eq!(
+            messages,
+            [
+                r#"Message(Toggled("c", true))"#,
+                r#"Message(Selected("r", "c"))"#,
+                r#"Message(Selected("s", "a"))"#,
+                r#"Message(TextChanged("t", "x"))"#,
+                r#"Message(Selected("s", "b"))"#,
+                r#"Message(Selected("r", "a"))"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn island_focus_goes_to_a_radio_group() {
+        fn form() -> Island {
+            let mut builder = IslandBuilder::new(column([
+                radio_group("r", [("a", "A"), ("b", "B"), ("c", "C")]),
+                submit_button("OK"),
+            ]));
+            builder.set_selected("r", "b");
+            Island::new(builder).unwrap().0
+        }
+        check(
+            program(form, Focus::Island),
+            &[
+                expect("focused: Some(true)"),
+                // It's the group that has focus.
+                typewrite("3"),
+                press(Key::Enter),
+                expect(r#"outcome: Some("submitted \"\" \"\" r=c")"#),
+            ],
         );
     }
 

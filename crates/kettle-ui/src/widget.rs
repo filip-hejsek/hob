@@ -3,7 +3,8 @@
 //! Build the (fixed) widget tree with the functions in this module:
 //! - layout: [`column()`], [`row`], [`table`], [`table_horizontal`], [`when`]
 //! - display: [`label`] (with [`state`]), [`progress`], [`list`], [`image()`]
-//! - form elements: [`text_field`], [`text_area`], [`checkbox`], [`suggestions`]
+//! - form elements: [`text_field`], [`text_area`], [`checkbox`],
+//!   [`radio_group`], [`suggestions`]
 //! - buttons: [`submit_button`], [`cancel_button`], [`button`],
 //!   [`button_danger`], [`action_button`] (with [`ButtonLabel`])
 //!
@@ -79,6 +80,13 @@ pub enum Kind {
         /// Shown next to the checkbox.
         label: String,
     },
+    /// [`radio_group`]
+    RadioGroup {
+        /// The field's id in [`Fields`](crate::Fields).
+        id: Arc<str>,
+        /// The options, in the order shown.
+        options: Vec<RadioOption>,
+    },
     /// [`progress`]
     Progress {
         /// The named state shown.
@@ -115,6 +123,35 @@ pub enum Kind {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         danger: bool,
     },
+}
+
+/// One option of a [`radio_group`].
+#[derive(Serialize, Deserialize)]
+pub struct RadioOption {
+    /// What [`Fields::selected`](crate::Fields::selected) gives while it's
+    /// selected.
+    pub value: Arc<str>,
+    /// Shown next to the radio button.
+    pub label: String,
+    /// The letter that selects it, if any, besides its number (see
+    /// [`radio_group`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<ButtonKey>,
+}
+
+impl RadioOption {
+    /// The key shown for the option at `index` in its group: its letter, or
+    /// else its number ([`option_digit`]).
+    pub fn shown_key(&self, index: usize) -> Option<char> {
+        self.key.map(|k| k.char).or_else(|| option_digit(index))
+    }
+}
+
+/// The digit that selects the option at `index` in a [`radio_group`]: `1`
+/// for the first, up to `9`; options after the ninth have none.
+pub fn option_digit(index: usize) -> Option<char> {
+    let number = u32::try_from(index).ok()?.checked_add(1)?;
+    (number <= 9).then(|| char::from_digit(number, 10))?
 }
 
 /// Which borders a [`table`] draws.
@@ -246,6 +283,39 @@ pub fn checkbox(id: &str, label: &str) -> Widget {
     Widget(Kind::Checkbox {
         id: id.into(),
         label: label.to_owned(),
+    })
+}
+
+/// A group of radio buttons, of which at most one is selected: none at
+/// first ([`IslandBuilder::set_selected`](crate::IslandBuilder::set_selected)
+/// selects one). Each option is a value, which
+/// [`Fields::selected`](crate::Fields::selected) gives while it's selected,
+/// and a label; they're shown in a column.
+///
+/// While one of its options has focus, a key selects an option: the first
+/// nine have their number (`1` to `9`), and an option can have a letter
+/// too, given at the end of a fixed label (`"Small [s]"`) or with
+/// [`ButtonLabel::key`]. It must be a lowercase ASCII letter without Alt,
+/// unlike the group's other letters (see
+/// [`IslandBuilder::build`](crate::IslandBuilder::build)).
+pub fn radio_group<V: AsRef<str>, L: Into<ButtonLabel>>(
+    id: &str,
+    options: impl IntoIterator<Item = (V, L)>,
+) -> Widget {
+    let options = options
+        .into_iter()
+        .map(|(value, label)| {
+            let label = label.into();
+            RadioOption {
+                value: value.as_ref().into(),
+                label: label.text,
+                key: label.key,
+            }
+        })
+        .collect();
+    Widget(Kind::RadioGroup {
+        id: id.into(),
+        options,
     })
 }
 
@@ -449,7 +519,8 @@ fn make_button(label: ButtonLabel, action: Action, danger: bool) -> Widget {
 ///
 /// Hidden are: a label with empty text (missing state counts as empty), a
 /// list or suggestions with no items (or whose state isn't a list), an image
-/// whose state isn't an image, a column or row whose children are all
+/// whose state isn't an image, a radio group without options, a column or
+/// row whose children are all
 /// hidden, a table without cells (its borders still show otherwise), and a
 /// [`when`] whose state isn't true or whose child is hidden. Other widgets
 /// are always visible.
@@ -468,6 +539,7 @@ pub fn is_visible(contents: &impl Contents, widget: &Widget) -> bool {
             matches!(contents.state(state), Some(Value::List(items)) if !items.is_empty())
         }
         Kind::Image { state } => matches!(contents.state(state), Some(Value::Image(_))),
+        Kind::RadioGroup { options, .. } => !options.is_empty(),
         Kind::TextField { .. }
         | Kind::TextArea { .. }
         | Kind::Checkbox { .. }
@@ -573,6 +645,8 @@ mod tests {
         assert!(is_visible(&c, &text_field("f", "")));
         assert!(is_visible(&c, &text_area("f", "")));
         assert!(is_visible(&c, &checkbox("c", "")));
+        assert!(is_visible(&c, &radio_group("r", [("a", "A")])));
+        assert!(!is_visible(&c, &radio_group::<&str, &str>("r", [])));
         assert!(is_visible(&c, &progress("missing")));
         assert!(is_visible(&c, &submit_button("")));
     }
@@ -614,6 +688,23 @@ mod tests {
             }
         );
         assert!(serde_json::from_str::<ButtonKey>(r#""yy""#).is_err());
+    }
+
+    #[test]
+    fn radio_options_have_digits_and_letters() {
+        let group = radio_group("r", [("a", "A [x]"), ("b", "B")]);
+        let Kind::RadioGroup { options, .. } = group.kind() else {
+            unreachable!()
+        };
+        assert_eq!(options[0].label, "A");
+        assert_eq!(options[0].shown_key(0), Some('x'));
+        assert_eq!(options[1].shown_key(1), Some('2'));
+        let digits: String = (0..12).filter_map(option_digit).collect();
+        assert_eq!(digits, "123456789");
+        assert_eq!(
+            serde_json::to_string(&group).unwrap(),
+            r#"{"radio_group":{"id":"r","options":[{"value":"a","label":"A","key":"x"},{"value":"b","label":"B"}]}}"#
+        );
     }
 
     #[test]

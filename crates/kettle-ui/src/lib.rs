@@ -10,8 +10,8 @@
 //! - The widget tree is built once and never changes.
 //! - Widgets keep their own interaction state (cursor, focus, scroll), which is
 //!   not accessible from outside.
-//! - Form elements (text fields and areas, checkboxes) have values, which the
-//!   host gets when the user submits the form.
+//! - Form elements (text fields and areas, checkboxes, radio groups) have
+//!   values, which the host gets when the user submits the form.
 //! - Labels, progress bars, lists and images can show *named state*. Named state
 //!   either has an initial value ([`IslandBuilder::set_state`]) and can then be
 //!   updated from outside through a [`StateHandle`], or is *derived*: computed
@@ -100,6 +100,39 @@ pub enum Error {
     /// [`IslandBuilder::set_checked`] targets a form element that isn't a
     /// checkbox.
     NotACheckbox(String),
+    /// [`IslandBuilder::set_selected`] targets a form element that isn't a
+    /// radio group.
+    NotARadioGroup(String),
+    /// [`IslandBuilder::set_selected`] selects a value that isn't one of the
+    /// radio group's options.
+    UnknownOption {
+        /// The radio group's id.
+        field: String,
+        /// The value.
+        value: String,
+    },
+    /// Two options of a radio group have the same value.
+    DuplicateOption {
+        /// The radio group's id.
+        field: String,
+        /// The value.
+        value: String,
+    },
+    /// An option of a radio group has a key that isn't a lowercase ASCII
+    /// letter without Alt.
+    InvalidOptionKey {
+        /// The radio group's id.
+        field: String,
+        /// The key.
+        key: widget::ButtonKey,
+    },
+    /// Two options of a radio group have the same key.
+    DuplicateOptionKey {
+        /// The radio group's id.
+        field: String,
+        /// The key.
+        key: widget::ButtonKey,
+    },
     /// A button's key isn't a lowercase ASCII letter or a digit (maybe with
     /// Alt).
     InvalidKey(widget::ButtonKey),
@@ -133,6 +166,22 @@ impl fmt::Display for Error {
             Error::UnknownField(id) => write!(f, "no form element with id {id:?}"),
             Error::NotATextField(id) => write!(f, "form element {id:?} is not a text field"),
             Error::NotACheckbox(id) => write!(f, "form element {id:?} is not a checkbox"),
+            Error::NotARadioGroup(id) => write!(f, "form element {id:?} is not a radio group"),
+            Error::UnknownOption { field, value } => {
+                write!(f, "radio group {field:?} has no option {value:?}")
+            }
+            Error::DuplicateOption { field, value } => {
+                write!(f, "radio group {field:?} has several options {value:?}")
+            }
+            Error::InvalidOptionKey { field, key } => write!(
+                f,
+                "an option of radio group {field:?} has the key {key}, which isn't \
+                 a lowercase ASCII letter (without Alt)"
+            ),
+            Error::DuplicateOptionKey { field, key } => write!(
+                f,
+                "several options of radio group {field:?} have the key {key}"
+            ),
             Error::InvalidKey(key) => {
                 write!(
                     f,
@@ -242,32 +291,83 @@ impl From<Image> for Value {
     }
 }
 
-/// The values of all form elements, by id.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+/// The values of all form elements, by id. Serialized as a map of plain
+/// strings (text fields, and selected radio options), bools (checkboxes)
+/// and `null`s (radio groups without a selection). Deserializing it needs
+/// the widget tree, so only a [`FrozenIsland`] does.
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(transparent)]
 pub struct Fields(BTreeMap<Arc<str>, Field>);
 
-/// Serialized as a plain string or bool.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
 enum Field {
     Text(String),
     Bool(bool),
+    /// A radio group.
+    Choice {
+        selected: Option<Arc<str>>,
+        /// The values of its options, from the tree.
+        options: Arc<[Arc<str>]>,
+    },
+}
+
+impl Serialize for Field {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Field::Text(s) => s.serialize(serializer),
+            Field::Bool(b) => b.serialize(serializer),
+            Field::Choice { selected, .. } => selected.serialize(serializer),
+        }
+    }
+}
+
+/// A new value for a field, before it's checked against the field.
+#[derive(Clone, Debug)]
+enum Input {
+    Text(String),
+    Bool(bool),
+    Choice(Option<String>),
 }
 
 impl Fields {
-    /// Sets the value of an existing field of the same kind.
-    fn set(&mut self, id: &str, value: Field) -> Result<(), Error> {
-        match (self.0.get_mut(id), &value) {
-            (None, _) => Err(Error::UnknownField(id.to_owned())),
-            (Some(field @ Field::Text(_)), Field::Text(_))
-            | (Some(field @ Field::Bool(_)), Field::Bool(_)) => {
-                *field = value;
-                Ok(())
+    /// The field `id` with the value `input`, if that fits it.
+    fn resolve(&self, id: &str, input: Input) -> Result<(Arc<str>, Field), Error> {
+        let Some((id, field)) = self.0.get_key_value(id) else {
+            return Err(Error::UnknownField(id.to_owned()));
+        };
+        let value = match (field, input) {
+            (Field::Text(_), Input::Text(s)) => Field::Text(s),
+            (Field::Bool(_), Input::Bool(b)) => Field::Bool(b),
+            (Field::Choice { options, .. }, Input::Choice(value)) => {
+                let selected = match value {
+                    None => None,
+                    Some(value) => match options.iter().find(|o| ***o == *value) {
+                        Some(option) => Some(option.clone()),
+                        None => {
+                            return Err(Error::UnknownOption {
+                                field: id.to_string(),
+                                value,
+                            });
+                        }
+                    },
+                };
+                Field::Choice {
+                    selected,
+                    options: options.clone(),
+                }
             }
-            (Some(_), Field::Text(_)) => Err(Error::NotATextField(id.to_owned())),
-            (Some(_), Field::Bool(_)) => Err(Error::NotACheckbox(id.to_owned())),
-        }
+            (_, Input::Text(_)) => return Err(Error::NotATextField(id.to_string())),
+            (_, Input::Bool(_)) => return Err(Error::NotACheckbox(id.to_string())),
+            (_, Input::Choice(_)) => return Err(Error::NotARadioGroup(id.to_string())),
+        };
+        Ok((id.clone(), value))
+    }
+
+    /// Sets the value of an existing field, if it fits.
+    fn set(&mut self, id: &str, input: Input) -> Result<(), Error> {
+        let (id, value) = self.resolve(id, input)?;
+        self.0.insert(id, value);
+        Ok(())
     }
 
     /// The contents of a text field, or `""` if there is no such field.
@@ -281,6 +381,15 @@ impl Fields {
     /// Whether a checkbox is checked, or `false` if there is no such checkbox.
     pub fn checked(&self, id: &str) -> bool {
         matches!(self.0.get(id), Some(Field::Bool(true)))
+    }
+
+    /// The value of the option selected in a radio group, or `None` if none
+    /// is, or there is no such radio group.
+    pub fn selected(&self, id: &str) -> Option<&str> {
+        match self.0.get(id) {
+            Some(Field::Choice { selected, .. }) => selected.as_deref(),
+            _ => None,
+        }
     }
 }
 
@@ -346,7 +455,7 @@ pub struct IslandBuilder {
     root: Widget,
     state: HashMap<String, Value>,
     /// Initial field values, by id.
-    initial: Vec<(String, Field)>,
+    initial: Vec<(String, Input)>,
     derived: Vec<DeriveSpec>,
     actions: Vec<ActionSpec>,
     /// Names that have an initial value, shared with every [`StateHandle`].
@@ -380,12 +489,19 @@ impl IslandBuilder {
     /// Sets the initial contents of a text field (empty by default).
     pub fn set_text(&mut self, id: &str, value: &str) {
         self.initial
-            .push((id.to_owned(), Field::Text(value.to_owned())));
+            .push((id.to_owned(), Input::Text(value.to_owned())));
     }
 
     /// Sets whether a checkbox is initially checked (unchecked by default).
     pub fn set_checked(&mut self, id: &str, checked: bool) {
-        self.initial.push((id.to_owned(), Field::Bool(checked)));
+        self.initial.push((id.to_owned(), Input::Bool(checked)));
+    }
+
+    /// Sets the option initially selected in a radio group, by its value
+    /// (none by default).
+    pub fn set_selected(&mut self, id: &str, value: &str) {
+        self.initial
+            .push((id.to_owned(), Input::Choice(Some(value.to_owned()))));
     }
 
     /// Makes named state a function of the current field values.
@@ -463,7 +579,7 @@ impl IslandBuilder {
     /// It runs on a background thread, like derived state
     /// ([`derive`](IslandBuilder::derive)), with a snapshot of the fields.
     /// What it sets through [`Changes`] is applied once it finishes: text
-    /// fields, checkboxes, and named state with an initial value
+    /// fields, checkboxes, radio groups, and named state with an initial value
     /// ([`set_state`](IslandBuilder::set_state)). Each press runs it once, in
     /// turn; a press while it runs waits for it to finish.
     pub fn action(
@@ -637,8 +753,8 @@ impl IslandBuilder {
             Kind::Suggestions { state, field } => {
                 match fields.0.get(field) {
                     None => return Err(Error::UnknownField(field.to_string())),
-                    Some(Field::Bool(_)) => return Err(Error::NotATextField(field.to_string())),
                     Some(Field::Text(_)) => {}
+                    Some(_) => return Err(Error::NotATextField(field.to_string())),
                 }
                 state
             }
@@ -682,12 +798,44 @@ fn collect_fields(widget: &Widget, fields: &mut Fields) -> Result<(), Error> {
         Kind::When { child, .. } => return collect_fields(child, fields),
         Kind::TextField { id, .. } | Kind::TextArea { id, .. } => (id, Field::Text(String::new())),
         Kind::Checkbox { id, .. } => (id, Field::Bool(false)),
+        Kind::RadioGroup { id, options } => (id, choice(id, options)?),
         _ => return Ok(()),
     };
     match fields.0.insert(id.clone(), value) {
         Some(_) => Err(Error::DuplicateField(id.to_string())),
         None => Ok(()),
     }
+}
+
+/// The value of radio group `id` with nothing selected, after checking its
+/// options' values and keys.
+fn choice(id: &str, options: &[widget::RadioOption]) -> Result<Field, Error> {
+    for (i, option) in options.iter().enumerate() {
+        let earlier = &options[..i];
+        if earlier.iter().any(|o| o.value == option.value) {
+            return Err(Error::DuplicateOption {
+                field: id.to_owned(),
+                value: option.value.to_string(),
+            });
+        }
+        let Some(key) = option.key else { continue };
+        if key.alt || !key.char.is_ascii_lowercase() {
+            return Err(Error::InvalidOptionKey {
+                field: id.to_owned(),
+                key,
+            });
+        }
+        if earlier.iter().any(|o| o.key == Some(key)) {
+            return Err(Error::DuplicateOptionKey {
+                field: id.to_owned(),
+                key,
+            });
+        }
+    }
+    Ok(Field::Choice {
+        selected: None,
+        options: options.iter().map(|o| o.value.clone()).collect(),
+    })
 }
 
 /// Sets named state of an island. Cheap to clone and usable from any thread.
@@ -974,6 +1122,65 @@ mod tests {
         let mut ui = IslandBuilder::new(column([]));
         ui.set_text("nope", "x");
         assert!(matches!(check(&ui), Err(Error::UnknownField(n)) if n == "nope"));
+    }
+
+    #[test]
+    fn radio_groups_select_one_of_their_options() {
+        let group = || radio_group("r", [("a", "A"), ("b", "B")]);
+        let (fields, _) = IslandBuilder::new(group()).check().unwrap();
+        assert_eq!(fields.selected("r"), None);
+
+        let mut ui = IslandBuilder::new(group());
+        ui.set_selected("r", "b");
+        let (fields, _) = ui.check().unwrap();
+        assert_eq!(fields.selected("r"), Some("b"));
+        assert_eq!(fields.text("r"), "");
+        assert!(!fields.checked("r"));
+
+        let mut ui = IslandBuilder::new(group());
+        ui.set_selected("r", "c");
+        assert!(matches!(
+            check(&ui),
+            Err(Error::UnknownOption { field, value }) if field == "r" && value == "c"
+        ));
+
+        let mut ui = IslandBuilder::new(checkbox("c", ""));
+        ui.set_selected("c", "a");
+        assert!(matches!(check(&ui), Err(Error::NotARadioGroup(n)) if n == "c"));
+
+        let mut ui = IslandBuilder::new(group());
+        ui.set_text("r", "a");
+        assert!(matches!(check(&ui), Err(Error::NotATextField(n)) if n == "r"));
+
+        let ui = IslandBuilder::new(column([group(), suggestions("s", "r")]));
+        assert!(matches!(check(&ui), Err(Error::NotATextField(n)) if n == "r"));
+    }
+
+    #[test]
+    fn radio_options_are_checked() {
+        let ui = IslandBuilder::new(radio_group("r", [("a", "A"), ("a", "B")]));
+        assert!(matches!(
+            check(&ui),
+            Err(Error::DuplicateOption { field, value }) if field == "r" && value == "a"
+        ));
+        let ui = IslandBuilder::new(radio_group("r", [("a", "A [x]"), ("b", "B [x]")]));
+        assert!(matches!(
+            check(&ui),
+            Err(Error::DuplicateOptionKey { key, .. }) if key.char == 'x'
+        ));
+        for label in ["A [1]", "A [X]", "A [Alt+x]"] {
+            let ui = IslandBuilder::new(radio_group("r", [("a", label)]));
+            assert!(matches!(check(&ui), Err(Error::InvalidOptionKey { .. })));
+        }
+        // Keys are per group, and may be the same as button keys; letters
+        // are fine with text fields.
+        let ui = IslandBuilder::new(column([
+            text_field("t", ""),
+            radio_group("r", [("a", "A [x]")]),
+            radio_group("s", [("a", "A [x]")]),
+            submit_button("OK [Alt+x]"),
+        ]));
+        assert!(check(&ui).is_ok());
     }
 
     #[test]

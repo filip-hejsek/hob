@@ -1,5 +1,8 @@
 //! [`Scope`]: wraps a live island, and handles its keys.
 
+use std::ops::Range;
+use std::sync::Arc;
+
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Renderer as _};
 use iced::advanced::widget::operation::{Focusable, focusable};
@@ -15,21 +18,24 @@ use kettle_ui::widget::ButtonKey;
 use crate::Message;
 
 /// Wraps the UI of a live island, and handles its keys before its widgets
-/// see them:
+/// see them. Checkboxes next to each other form a run, and so do the options
+/// of a radio group (each option is a field).
 /// - Enter in a text field focuses the next field; in the last, it submits.
 ///   Ctrl+Enter does the same, also in a text area (where Enter starts a new
-///   line). In a checkbox, Enter skips the checkboxes after it: it focuses
-///   the next field that isn't one, or submits if there's none.
+///   line). In a run, Enter skips the rest of it: it focuses the field after
+///   the run, or submits if there's none. It never selects a radio option.
 /// - In a checkbox: Space toggles it; `y` checks it and `n` unchecks it, and
 ///   both move on to the next field, or after the last one to the island as
 ///   a whole.
-/// - In a text field or checkbox (not a text area), Up and Down focus the
-///   previous and next field; Down from the last one focuses the island as
-///   a whole. Ctrl+Up and Ctrl+Down do the same, also in a text area (where
-///   Up and Down move between lines); in a checkbox, they skip the
-///   checkboxes before or after it (Ctrl+Up does nothing if there's no
-///   other field before them). When they land on a run of checkboxes,
-///   they focus the one in it that last had focus, if any.
+/// - In a radio option: Space selects it; an option's number (`1` to `9`)
+///   or letter selects it and focuses it.
+/// - In a text field, checkbox or radio option (not a text area), Up and
+///   Down focus the previous and next field; Down from the last one focuses
+///   the island as a whole. Ctrl+Up and Ctrl+Down do the same, also in a
+///   text area (where Up and Down move between lines); in a run, they skip
+///   the rest of it (Ctrl+Up does nothing if there's no field before it).
+///   When they land on a run, they focus its selected radio option, or else
+///   the field in it that last had focus, if any.
 /// - Escape, while the island has focus, cancels.
 /// - While the island as a whole has focus, Enter submits, a button's key
 ///   (without Alt) presses it, and Up (if there are fields) focuses the
@@ -57,7 +63,8 @@ pub(crate) struct Scope<'a> {
     pub cancel: Option<Message>,
 }
 
-/// A shown field: a text field or area, or a checkbox.
+/// A shown field: a text field or area, a checkbox, or an option of a radio
+/// group.
 pub(crate) struct Field {
     pub id: Id,
     pub kind: FieldKind,
@@ -75,23 +82,73 @@ pub(crate) enum FieldKind {
         /// What unchecking it sends.
         uncheck: Message,
     },
+    RadioOption {
+        /// The radio group's id.
+        group: Arc<str>,
+        selected: bool,
+        /// What selecting it sends.
+        select: Message,
+        /// The digit that selects it, if any.
+        digit: Option<char>,
+        /// The letter that selects it, if any.
+        letter: Option<char>,
+    },
 }
 
 impl FieldKind {
-    fn is_checkbox(&self) -> bool {
-        matches!(self, FieldKind::Checkbox { .. })
+    /// Whether this field and `other` are in the same run, if next to each
+    /// other: both checkboxes, or options of the same radio group.
+    fn same_run(&self, other: &FieldKind) -> bool {
+        match (self, other) {
+            (FieldKind::Checkbox { .. }, FieldKind::Checkbox { .. }) => true,
+            (FieldKind::RadioOption { group: a, .. }, FieldKind::RadioOption { group: b, .. }) => {
+                a == b
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether it's a checkbox or a radio option, whose runs are
+    /// remembered.
+    fn is_choice(&self) -> bool {
+        matches!(
+            self,
+            FieldKind::Checkbox { .. } | FieldKind::RadioOption { .. }
+        )
     }
 }
 
-/// Whether the island has focus as a whole, and which checkboxes had
-/// focus last.
+/// The run of fields that the field at `field` is in (just that field if
+/// it's a text field).
+pub(crate) fn run(fields: &[Field], field: usize) -> Range<usize> {
+    let kind = &fields[field].kind;
+    let start = fields[..field]
+        .iter()
+        .rposition(|f| !f.kind.same_run(kind))
+        .map_or(0, |i| i + 1);
+    let end = fields[field + 1..]
+        .iter()
+        .position(|f| !f.kind.same_run(kind))
+        .map_or(fields.len(), |i| field + 1 + i);
+    start..end
+}
+
+/// The selected radio option in `fields`, if any.
+pub(crate) fn selected_option(fields: &[Field]) -> Option<&Field> {
+    fields
+        .iter()
+        .find(|f| matches!(f.kind, FieldKind::RadioOption { selected: true, .. }))
+}
+
+/// Whether the island has focus as a whole, and which checkboxes and radio
+/// options had focus last.
 #[derive(Default)]
 struct State {
     focused: bool,
-    /// The checkbox that last had focus in each run of checkboxes, oldest
-    /// first. Runs can change as fields are shown and hidden, so a run may
-    /// hold more than one; the newest counts.
-    last_checkboxes: Vec<Id>,
+    /// The field that last had focus in each run, oldest first. Runs can
+    /// change as fields are shown and hidden, so a run may hold more than
+    /// one; the newest counts.
+    last_in_runs: Vec<Id>,
 }
 
 impl Focusable for State {
@@ -139,8 +196,8 @@ impl KeyAction {
 }
 
 impl Scope<'_> {
-    /// Which field has focus, if any; if it's a checkbox, remembers it as
-    /// the last one with focus in its run.
+    /// Which field has focus, if any; if it's in a run, remembers it as the
+    /// last one with focus there.
     fn focused_field(
         &mut self,
         tree: &mut Tree,
@@ -156,40 +213,30 @@ impl Scope<'_> {
         };
         (self.content.as_widget_mut()).operate(&mut tree.children[0], layout, renderer, &mut find);
         let field = find.focused?;
-        if self.fields[field].kind.is_checkbox() {
-            let run = self.run(field);
+        if self.fields[field].kind.is_choice() {
             let state = tree.state.downcast_mut::<State>();
-            let ids = &self.fields[run];
+            let ids = &self.fields[run(&self.fields, field)];
             state
-                .last_checkboxes
+                .last_in_runs
                 .retain(|id| !ids.iter().any(|f| f.id == *id));
-            state.last_checkboxes.push(self.fields[field].id.clone());
+            state.last_in_runs.push(self.fields[field].id.clone());
         }
         Some(field)
     }
 
-    /// The run of checkboxes that the field at `field` is in (just that
-    /// field if it's not a checkbox).
-    fn run(&self, field: usize) -> std::ops::Range<usize> {
-        let is_checkbox = |f: &Field| f.kind.is_checkbox();
-        let start = self.fields[..field]
-            .iter()
-            .rposition(|f| !is_checkbox(f))
-            .map_or(0, |i| i + 1);
-        let end = self.fields[field + 1..]
-            .iter()
-            .position(|f| !is_checkbox(f))
-            .map_or(self.fields.len(), |i| field + 1 + i);
-        start..end
-    }
-
     /// Where Ctrl+Up or Ctrl+Down landing on the field at `field` focuses:
-    /// in a run of checkboxes, the one that last had focus.
+    /// in a run, its selected radio option, or else the field that last had
+    /// focus there.
     fn land(&self, state: &State, field: usize) -> Focus {
-        let fields = &self.fields[self.run(field)];
-        let last =
-            (state.last_checkboxes.iter().rev()).find(|id| fields.iter().any(|f| f.id == **id));
-        Focus::Field(last.unwrap_or(&self.fields[field].id).clone())
+        let fields = &self.fields[run(&self.fields, field)];
+        let last = || {
+            let mut last = state.last_in_runs.iter().rev();
+            last.find(|id| fields.iter().any(|f| f.id == **id))
+        };
+        let id = (selected_option(fields).map(|f| &f.id))
+            .or_else(last)
+            .unwrap_or(&self.fields[field].id);
+        Focus::Field(id.clone())
     }
 
     /// What pressing `key` (at `physical_key`, a button key's `digit` if
@@ -224,6 +271,7 @@ impl Scope<'_> {
             }) => Some((*checked, check, uncheck)),
             _ => None,
         };
+        let in_radio_group = matches!(kind, Some(FieldKind::RadioOption { .. }));
         // There, Up and Down move between lines, and Ctrl+Up and Ctrl+Down
         // between fields.
         let in_text_area = matches!(kind, Some(FieldKind::TextArea));
@@ -257,27 +305,34 @@ impl Scope<'_> {
                 if plain && in_text_area {
                     return None;
                 }
-                // From a checkbox, skip the checkboxes after it.
-                let next = self.fields[field + 1..]
-                    .iter()
-                    .find(|f| checkbox.is_none() || !f.kind.is_checkbox());
-                match next {
+                // Skip the rest of the run.
+                match self.fields.get(run(&self.fields, field).end) {
                     Some(next) => Some(KeyAction::focus(Focus::Field(next.id.clone()))),
                     None => self.submit.clone().map(KeyAction::send),
                 }
             }
-            keyboard::Key::Named(key::Named::Space) if plain => {
-                let (checked, check, uncheck) = checkbox?;
-                Some(KeyAction::send(
-                    if checked { uncheck } else { check }.clone(),
-                ))
-            }
-            // From a checkbox, Ctrl+Up skips the checkboxes before it.
-            keyboard::Key::Named(key::Named::ArrowUp) if !plain && checkbox.is_some() => {
-                let previous = self.fields[..field?]
-                    .iter()
-                    .rfind(|f| !f.kind.is_checkbox())?;
-                Some(KeyAction::focus(Focus::Field(previous.id.clone())))
+            keyboard::Key::Named(key::Named::Space) if plain => match kind? {
+                FieldKind::Checkbox {
+                    checked,
+                    check,
+                    uncheck,
+                } => Some(KeyAction::send(
+                    if *checked { uncheck } else { check }.clone(),
+                )),
+                FieldKind::RadioOption {
+                    selected, select, ..
+                } => Some(KeyAction {
+                    send: (!selected).then(|| select.clone()),
+                    focus: None,
+                }),
+                _ => None,
+            },
+            // In a run, Ctrl+Up skips the rest of it.
+            keyboard::Key::Named(key::Named::ArrowUp)
+                if !plain && (checkbox.is_some() || in_radio_group) =>
+            {
+                let previous = run(&self.fields, field?).start.checked_sub(1)?;
+                Some(KeyAction::focus(self.land(state, previous)))
             }
             keyboard::Key::Named(key::Named::ArrowUp) if arrows_move_focus => {
                 let previous = match field {
@@ -291,14 +346,15 @@ impl Scope<'_> {
                     self.land(state, previous)
                 }))
             }
-            // From a checkbox, Ctrl+Down skips the checkboxes after it.
-            keyboard::Key::Named(key::Named::ArrowDown) if !plain && checkbox.is_some() => {
-                let next = self.fields[field? + 1..]
-                    .iter()
-                    .find(|f| !f.kind.is_checkbox());
-                Some(KeyAction::focus(match next {
-                    Some(next) => Focus::Field(next.id.clone()),
-                    None => Focus::Whole,
+            // In a run, Ctrl+Down skips the rest of it.
+            keyboard::Key::Named(key::Named::ArrowDown)
+                if !plain && (checkbox.is_some() || in_radio_group) =>
+            {
+                let next = run(&self.fields, field?).end;
+                Some(KeyAction::focus(if next < self.fields.len() {
+                    self.land(state, next)
+                } else {
+                    Focus::Whole
                 }))
             }
             keyboard::Key::Named(key::Named::ArrowDown) if arrows_move_focus => {
@@ -311,11 +367,33 @@ impl Scope<'_> {
                     },
                 ))
             }
-            keyboard::Key::Character(c) if plain && (whole || checkbox.is_some()) => {
-                let mut chars = c.chars().map(|c| c.to_ascii_lowercase());
-                let (Some(c), None) = (chars.next(), chars.next()) else {
-                    return None;
+            keyboard::Key::Character(_) if plain && in_radio_group => {
+                let c = match digit {
+                    Some(digit) => digit,
+                    None => single_char(key)?,
                 };
+                let option =
+                    self.fields[run(&self.fields, field?)]
+                        .iter()
+                        .find(|f| match &f.kind {
+                            FieldKind::RadioOption { digit, letter, .. } => {
+                                *digit == Some(c) || *letter == Some(c)
+                            }
+                            _ => false,
+                        })?;
+                let FieldKind::RadioOption {
+                    selected, select, ..
+                } = &option.kind
+                else {
+                    unreachable!("a radio group has only radio options");
+                };
+                Some(KeyAction {
+                    send: (!selected).then(|| select.clone()),
+                    focus: Some(Focus::Field(option.id.clone())),
+                })
+            }
+            keyboard::Key::Character(_) if plain && (whole || checkbox.is_some()) => {
+                let c = single_char(key)?;
                 if let Some((checked, check, uncheck)) = checkbox {
                     let (message, value) = match c {
                         'y' => (check, true),
@@ -340,6 +418,18 @@ impl Scope<'_> {
     fn press(&self, key: ButtonKey) -> Option<KeyAction> {
         let (_, message) = self.keys.iter().find(|(k, _)| *k == key)?;
         Some(KeyAction::send(message.clone()))
+    }
+}
+
+/// The character `key` types, lowercased, if it's a single one.
+fn single_char(key: &keyboard::Key) -> Option<char> {
+    let keyboard::Key::Character(s) = key.as_ref() else {
+        return None;
+    };
+    let mut chars = s.chars().map(|c| c.to_ascii_lowercase());
+    match (chars.next(), chars.next()) {
+        (Some(c), None) => Some(c),
+        _ => None,
     }
 }
 

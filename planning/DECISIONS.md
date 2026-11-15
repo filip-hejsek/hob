@@ -74,6 +74,33 @@ Known bugs are in BUGS.md.
   field's (`Fields::text`, `set_text`), so it counts as a text field
   everywhere: suggestions can target it. Headless clients see `text_area`
   in the outline, with the value on one line (Debug-escaped).
+- `radio_group(id, options)` is one widget with all its options, each a
+  value and a label, shown in a column. Its value is the selected
+  option's value (`Fields::selected`, `set_selected`), none by default so
+  the island doesn't choose for the user (a validator can require a
+  choice); the user can't unselect. In `Fields` it's `Field::Choice` with
+  the option values, so setting it checks the value everywhere; saved as
+  a string or `null` (a string is told apart from a text field's by the
+  tree, so `Fields` alone no longer deserializes). `build` rejects
+  duplicate values. Rejected: separate `radio(group, value, label)`
+  widgets as in iced (free layout, but several widgets per field id, and
+  the group couldn't be checked or outlined in one place); the first
+  option selected by default.
+- An option's first nine have their number as key (`1`–`9`, from the
+  index), and an option can also have a letter, from its label like a
+  button's (`"Small [s]"`, `ButtonLabel::key`): a plain lowercase letter,
+  unique in the group (`build` rejects digits, Alt and duplicates). They
+  work only while an option of the group has focus, so they can't clash
+  with button keys or other groups, and are allowed with text fields.
+  The key shown (`RadioOption::shown_key`) is the letter, or else the
+  number. Headless clients see:
+  ```
+  radio_group size
+    option s: ( ) "Small" [s]
+    option m: (o) "Medium" [2]
+  ```
+  Rejected: `radio size: "m"` (reads as a radio's size, doesn't say it's a
+  group, and quotes the value unlike the options).
 - Parts of the tree are hidden with `when(state, widget)`, shown only while
   the named state is `Value::Bool(true)` (missing or another type hides
   it). Showing and hiding doesn't change the tree's shape, and a hidden
@@ -385,6 +412,24 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   Id, in its widget state) whenever a key is pressed or a click lands
   while a checkbox has focus, since focus leaves a field only that way;
   runs are worked out afresh each time, as fields can be shown or hidden.
+- Each option of a radio group is a field, with its own Id (in a
+  `Choice`, the checkbox wrapper generalized, around iced's `radio`), and
+  the group's options are a run of their own, like checkboxes: Enter and
+  Ctrl+Up/Down skip it, Up and Down go through it one by one without
+  selecting (so moving past a group never changes it), and landing on it
+  focuses the selected option (else the last focused). Enter never
+  selects, not even when nothing is selected yet: Down into a group lands
+  on its first option, so Enter through a form would quietly pick it,
+  undoing "none by default". Space selects the focused option; an
+  option's number or letter selects it and focuses it (digits by physical
+  key, as for buttons). While any option has focus, every option shows
+  its key as a muted hint (`[s]`, `[2]`), with its space always kept, as
+  for a checkbox's `[y/n]`; an option without a key has none. A
+  `RadioGroup` widget lays out the options, so it can tell whether any
+  has focus. `Island::field_id` and `Island::focus` give the selected
+  option, or else the first. iced's radio has no disabled state, so a
+  frozen one ignores events itself and gets a style like a disabled
+  checkbox's.
 - A text area is iced's `text_editor` inside our own widget, which keeps the
   editor's `Content` in its widget state and takes the value as a string,
   like `text_input`. The `Content` is remade only when the value changes

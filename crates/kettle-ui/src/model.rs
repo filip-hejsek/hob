@@ -19,8 +19,8 @@ use futures_core::Stream;
 
 use crate::widget::Widget;
 use crate::{
-    ActionFn, ActionSpec, Contents, DeriveFn, DeriveSpec, Field, Fields, FrozenIsland, Value,
-    misuse, strict,
+    ActionFn, ActionSpec, Contents, DeriveFn, DeriveSpec, Field, Fields, FrozenIsland, Input,
+    Value, misuse, strict,
 };
 
 /// What [`IslandBuilder::build`](crate::IslandBuilder::build) produces.
@@ -236,31 +236,34 @@ impl Model {
     /// derived state.
     #[track_caller]
     pub fn set_text(&mut self, id: &str, value: String) -> Vec<Job> {
-        self.set_field(id, Field::Text(value))
+        self.set_field(id, Input::Text(value))
     }
 
     /// Checks or unchecks a checkbox. Returns the jobs that recompute derived
     /// state.
     #[track_caller]
     pub fn set_checked(&mut self, id: &str, value: bool) -> Vec<Job> {
-        self.set_field(id, Field::Bool(value))
+        self.set_field(id, Input::Bool(value))
+    }
+
+    /// Selects an option of a radio group, by its value. Returns the jobs
+    /// that recompute derived state.
+    #[track_caller]
+    pub fn set_selected(&mut self, id: &str, value: &str) -> Vec<Job> {
+        self.set_field(id, Input::Choice(Some(value.to_owned())))
     }
 
     /// Changes a field. Drops a pending submit (see [`Model::submit`]).
     #[track_caller]
-    fn set_field(&mut self, id: &str, value: Field) -> Vec<Job> {
-        match self.fields.0.get_mut(id) {
-            Some(field) if std::mem::discriminant(field) == std::mem::discriminant(&value) => {
-                *field = value;
+    fn set_field(&mut self, id: &str, input: Input) -> Vec<Job> {
+        match self.fields.resolve(id, input) {
+            Ok((id, value)) => {
+                self.fields.0.insert(id, value);
                 self.submit_pending = false;
                 self.schedule()
             }
-            _ => {
-                misuse(
-                    strict(),
-                    format!("no form element {id:?} of this kind"),
-                    "ignoring the change",
-                );
+            Err(e) => {
+                misuse(strict(), e.to_string(), "ignoring the change");
                 Vec::new()
             }
         }
@@ -616,7 +619,7 @@ impl Changes<'_> {
     /// a warning and does nothing.
     #[track_caller]
     pub fn set_text(&mut self, id: &str, text: impl Into<String>) {
-        self.set_field(id, Field::Text(text.into()));
+        self.set_field(id, Input::Text(text.into()));
     }
 
     /// Checks or unchecks the checkbox `id`. If there's no such checkbox,
@@ -624,7 +627,15 @@ impl Changes<'_> {
     /// and does nothing.
     #[track_caller]
     pub fn set_checked(&mut self, id: &str, checked: bool) {
-        self.set_field(id, Field::Bool(checked));
+        self.set_field(id, Input::Bool(checked));
+    }
+
+    /// Selects the option with the value `value` in the radio group `id`. If
+    /// there's no such radio group or option, this panics in [strict
+    /// mode](crate#strict-mode), or prints a warning and does nothing.
+    #[track_caller]
+    pub fn set_selected(&mut self, id: &str, value: &str) {
+        self.set_field(id, Input::Choice(Some(value.to_owned())));
     }
 
     /// Sets named state. As with a [`StateHandle`](crate::StateHandle), it
@@ -649,18 +660,10 @@ impl Changes<'_> {
     }
 
     #[track_caller]
-    fn set_field(&mut self, id: &str, value: Field) {
-        match self.fields.0.get_key_value(id) {
-            Some((id, field))
-                if std::mem::discriminant(field) == std::mem::discriminant(&value) =>
-            {
-                self.changed.fields.push((id.clone(), value));
-            }
-            _ => misuse(
-                self.strict,
-                format!("no form element {id:?} of this kind"),
-                "ignoring the change",
-            ),
+    fn set_field(&mut self, id: &str, input: Input) {
+        match self.fields.resolve(id, input) {
+            Ok(change) => self.changed.fields.push(change),
+            Err(e) => misuse(self.strict, e.to_string(), "ignoring the change"),
         }
     }
 }
@@ -698,6 +701,13 @@ impl<'a> Inputs<'a> {
     pub fn checked(&self, id: &str) -> bool {
         self.read_field(id);
         self.fields.checked(id)
+    }
+
+    /// The value of the option selected in a radio group, or `None` if none
+    /// is, or there is no such radio group.
+    pub fn selected(&self, id: &str) -> Option<&'a str> {
+        self.read_field(id);
+        self.fields.selected(id)
     }
 
     /// The value of named state; `None` if it isn't computed yet. The name
@@ -1231,6 +1241,38 @@ mod tests {
         c.set_state("s", "x");
         assert_eq!(c.changed.fields, [("c".into(), Field::Bool(true))]);
         assert_eq!(c.changed.state, [("s".to_owned(), "x".into())]);
+    }
+
+    #[test]
+    fn selecting_an_option_recomputes_derived_state() {
+        let mut b = IslandBuilder::new(column([
+            radio_group("size", [("s", "Small"), ("l", "Large")]),
+            label(state("x")),
+            action_button("big", "Big"),
+        ]));
+        b.derive("x", |i| i.selected("size").unwrap_or("none").into());
+        b.action("big", |_, c| c.set_selected("size", "l"));
+        let (mut model, jobs) = build(b);
+        settle(&mut model, jobs);
+        assert_eq!(text(&model, "x"), "none");
+        let jobs = model.set_selected("size", "s");
+        settle(&mut model, jobs);
+        assert_eq!(text(&model, "x"), "s");
+        let jobs = model.run_action("big");
+        settle(&mut model, jobs);
+        assert_eq!(model.fields().selected("size"), Some("l"));
+        assert_eq!(text(&model, "x"), "l");
+    }
+
+    #[test]
+    fn actions_ignore_unknown_options_otherwise() {
+        let ui = IslandBuilder::new(radio_group("r", [("a", "A")]));
+        let (fields, _) = ui.check().unwrap();
+        let settable = HashSet::new();
+        let mut c = changes(&fields, &settable, false);
+        c.set_selected("r", "nope");
+        c.set_checked("r", true);
+        assert_eq!(c.changed.fields, []);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::widget::Widget;
-use crate::{Contents, Error, Fields, Image, Value, collect_fields};
+use crate::{Contents, Error, Field, Fields, Image, Input, Value, collect_fields};
 
 /// An island whose fields and named state can't change, e.g. to show what the
 /// user submitted. Backends show it with all interaction disabled.
@@ -88,9 +88,19 @@ impl FrozenIsland {
 #[derive(Deserialize)]
 struct Unchecked {
     root: Arc<Widget>,
-    fields: Fields,
+    fields: BTreeMap<String, Saved>,
     state: BTreeMap<String, Value>,
     outdated: BTreeSet<String>,
+}
+
+/// A saved field value; which kind of field it's for depends on the tree.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Saved {
+    Text(String),
+    Bool(bool),
+    /// A radio group without a selection.
+    Null(()),
 }
 
 impl TryFrom<Unchecked> for FrozenIsland {
@@ -99,8 +109,17 @@ impl TryFrom<Unchecked> for FrozenIsland {
     fn try_from(island: Unchecked) -> Result<Self, Error> {
         let mut fields = Fields::default();
         collect_fields(&island.root, &mut fields)?;
-        for (id, value) in island.fields.0 {
-            fields.set(&id, value)?;
+        for (id, saved) in island.fields {
+            let is_choice = matches!(fields.0.get(&*id), Some(Field::Choice { .. }));
+            let input = match saved {
+                Saved::Text(s) if is_choice => Input::Choice(Some(s)),
+                Saved::Null(()) if is_choice => Input::Choice(None),
+                Saved::Text(s) => Input::Text(s),
+                Saved::Bool(b) => Input::Bool(b),
+                // Not a radio group, so `set` reports what it is.
+                Saved::Null(()) => Input::Choice(None),
+            };
+            fields.set(&id, input)?;
         }
         Ok(FrozenIsland::new(
             island.root,
@@ -260,5 +279,30 @@ mod tests {
         json["fields"] = json!({});
         let island: FrozenIsland = serde_json::from_value(json).unwrap();
         assert_eq!(island.fields().text("name"), "");
+    }
+
+    #[test]
+    fn radio_groups_save_the_selected_value_or_null() {
+        let mut b = IslandBuilder::new(column([
+            radio_group("r", [("a", "A"), ("b", "B")]),
+            radio_group("s", [("a", "A")]),
+        ]));
+        b.set_selected("r", "b");
+        let json = serde_json::to_value(b.freeze().unwrap()).unwrap();
+        assert_eq!(json["fields"], json!({"r": "b", "s": null}));
+        let back: FrozenIsland = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(back.fields().selected("r"), Some("b"));
+        assert_eq!(back.fields().selected("s"), None);
+
+        let mut bad = json.clone();
+        bad["fields"]["r"] = json!("c");
+        let error = serde_json::from_value::<FrozenIsland>(bad).err().unwrap();
+        assert!(error.to_string().contains("no option \"c\""), "{error}");
+        let mut bad = json;
+        bad["fields"]["r"] = json!(true);
+        assert!(serde_json::from_value::<FrozenIsland>(bad).is_err());
+        let mut bad = serde_json::to_value(frozen()).unwrap();
+        bad["fields"]["name"] = json!(null);
+        assert!(serde_json::from_value::<FrozenIsland>(bad).is_err());
     }
 }

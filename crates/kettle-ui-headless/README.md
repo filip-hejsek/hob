@@ -3,7 +3,8 @@
 A backend for [kettle-ui](https://crates.io/crates/kettle-ui) islands
 without a GUI, for tests and for driving islands from a program (e.g. an
 agent). An `Island` acts like a user would: it types into fields, toggles
-checkboxes and presses buttons, by the ids and labels a user would see,
+checkboxes, selects radio options and presses buttons, by the ids and
+labels a user would see,
 and shows the island as an outline.
 
 > **Most of the code in this project was written by AI** (Claude), with a
