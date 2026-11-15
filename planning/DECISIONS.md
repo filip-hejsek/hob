@@ -266,6 +266,11 @@ conditional reads must be over-declared.
   type is `Result<Option<Outcome>, ActionError>`. The outline shows it as
   a plain button.
 - The fruit-search demo has one ("Next fruit"), and `notes browse` two.
+- The `SetState` trait (`set_state`) covers `IslandBuilder` and `Changes`,
+  so code that fills in named state serves both the initial values and
+  an action's changes (as in `notes browse`). The inherent methods stay,
+  so callers need no import. `StateHandle` isn't included (its `set`
+  takes `&self` and no one needs it yet).
 
 ### Frozen islands
 

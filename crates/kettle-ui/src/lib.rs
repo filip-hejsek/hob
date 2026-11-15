@@ -294,6 +294,27 @@ pub trait Contents {
     fn is_outdated(&self, name: &str) -> bool;
 }
 
+/// Something that sets named state: an [`IslandBuilder`] (initial values)
+/// or an action's [`Changes`]. Lets code that fills in state serve both.
+pub trait SetState {
+    /// Sets named state; see [`IslandBuilder::set_state`] and
+    /// [`Changes::set_state`].
+    fn set_state(&mut self, name: &str, value: impl Into<Value>);
+}
+
+impl SetState for IslandBuilder {
+    fn set_state(&mut self, name: &str, value: impl Into<Value>) {
+        IslandBuilder::set_state(self, name, value);
+    }
+}
+
+impl SetState for Changes<'_> {
+    #[track_caller]
+    fn set_state(&mut self, name: &str, value: impl Into<Value>) {
+        Changes::set_state(self, name, value);
+    }
+}
+
 type DeriveFn = Arc<dyn Fn(&Inputs<'_>) -> Value + Send + Sync>;
 type ActionFn = Arc<dyn Fn(&Inputs<'_>, &mut Changes<'_>) + Send + Sync>;
 

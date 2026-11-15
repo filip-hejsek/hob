@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use hob_core::{CommandResult, Context};
 use kettle_ui::widget::*;
-use kettle_ui::{IslandBuilder, Value};
+use kettle_ui::{IslandBuilder, SetState, Value};
 
 use crate::db::{Db, Note};
 use crate::{Filter, details, existing, heading};
@@ -54,11 +54,7 @@ pub(crate) fn browse(
             cancel_button("Close"),
         ]),
     ]));
-    show(
-        &mut |name, value| island.set_state(name, value),
-        &notes,
-        index,
-    );
+    show(&mut island, &notes, index);
 
     let db = Arc::new(Mutex::new(db));
     let filter = Arc::new(filter);
@@ -68,13 +64,12 @@ pub(crate) fn browse(
             let Some(&Value::Number(current)) = inputs.state("id") else {
                 unreachable!("id is a number");
             };
-            let mut set = |name: &str, value: Value| changes.set_state(name, value);
             match filter.notes(&db.lock().unwrap()) {
                 Ok(notes) => match neighbor(&notes, current as i64, step) {
-                    Some(index) => show(&mut set, &notes, index),
-                    None => show_message(&mut set, "No notes left."),
+                    Some(index) => show(changes, &notes, index),
+                    None => show_message(changes, "No notes left."),
                 },
-                Err(error) => show_message(&mut set, &format!("error: {error}")),
+                Err(error) => show_message(changes, &format!("error: {error}")),
             }
         });
     }
@@ -97,30 +92,27 @@ fn neighbor(notes: &[Note], from: i64, step: Step) -> Option<usize> {
     })
 }
 
-/// Sets the named state through `set` to show `notes[index]`.
-fn show(set: &mut dyn FnMut(&str, Value), notes: &[Note], index: usize) {
+/// Sets the named state to show `notes[index]`.
+fn show(state: &mut impl SetState, notes: &[Note], index: usize) {
     let note = &notes[index];
-    set("id", (note.id as f64).into());
-    set(
-        "position",
-        format!("Note {} of {}", index + 1, notes.len()).into(),
-    );
-    set("heading", heading(note).into());
-    set("details", details(note).into());
-    set("has_categories", (!note.categories.is_empty()).into());
-    set(
+    state.set_state("id", note.id as f64);
+    state.set_state("position", format!("Note {} of {}", index + 1, notes.len()));
+    state.set_state("heading", heading(note));
+    state.set_state("details", details(note));
+    state.set_state("has_categories", !note.categories.is_empty());
+    state.set_state(
         "categories",
-        format!("Categories: {}", note.categories.join(", ")).into(),
+        format!("Categories: {}", note.categories.join(", ")),
     );
-    set("text", note.text.clone().into());
+    state.set_state("text", note.text.clone());
 }
 
-/// Sets the named state through `set` to show `message` instead of a note,
-/// keeping the id, so the buttons move on from there.
-fn show_message(set: &mut dyn FnMut(&str, Value), message: &str) {
-    set("position", message.into());
+/// Sets the named state to show `message` instead of a note, keeping the
+/// id, so the buttons move on from there.
+fn show_message(state: &mut impl SetState, message: &str) {
+    state.set_state("position", message);
     for name in ["heading", "details", "categories", "text"] {
-        set(name, "".into());
+        state.set_state(name, "");
     }
-    set("has_categories", false.into());
+    state.set_state("has_categories", false);
 }
