@@ -26,6 +26,10 @@ TODO.md.
   the GUI.
 - Derived state is computed on the server thread, so a slow computation
   holds up everything else (see kettle-ui-headless in DECISIONS.md).
+- hob-cli quits at the end of piped input without waiting for commands
+  still running, so their output is lost (and a command may be killed
+  mid-way): `printf 'note x\n' | hob-cli` with a new `HOB_NOTES` file
+  prints nothing, as creating the database takes a moment.
 
 ## hob-mcp
 
