@@ -400,6 +400,33 @@ impl Filter {
             .filter(|note| (self.category.as_ref()).is_none_or(|c| note.categories.contains(c)))
             .collect())
     }
+
+    /// What to say when it lets no notes through: which notes there are
+    /// none of, e.g. `No TODO notes in category "work" that aren't done.`
+    /// Done ones are mentioned only if some would be let through.
+    fn none_message(&self, db: &Db) -> rusqlite::Result<String> {
+        if db.all()?.is_empty() {
+            return Ok("No notes.".to_owned());
+        }
+        let mut message = "No ".to_owned();
+        if self.todo {
+            message.push_str("TODO ");
+        }
+        message.push_str("notes");
+        if let Some(category) = &self.category {
+            message.push_str(&format!(" in category {category:?}"));
+        }
+        let with_done = Filter {
+            all: true,
+            todo: self.todo,
+            category: self.category.clone(),
+        };
+        if !self.all && !with_done.notes(db)?.is_empty() {
+            message.push_str(" that aren't done");
+        }
+        message.push('.');
+        Ok(message)
+    }
 }
 
 /// Lists the notes in a table, as `filter` says. Their categories get a
@@ -407,7 +434,7 @@ impl Filter {
 fn list(ctx: &mut Context, db: &Db, filter: &Filter) -> CommandResult {
     let notes = filter.notes(db)?;
     if notes.is_empty() {
-        ctx.print("No notes.");
+        ctx.print(filter.none_message(db)?);
         return Ok(());
     }
     let with_categories = notes.iter().any(|note| !note.categories.is_empty());

@@ -36,7 +36,7 @@ pub(crate) fn browse(
             }
         },
         None if notes.is_empty() => {
-            ctx.print("No notes.");
+            ctx.print(filter.none_message(&db)?);
             return Ok(());
         }
         None => notes.len() - 1,

@@ -638,7 +638,11 @@ from the notes whenever `todo` runs.
   shows a table (horizontal borders) of the notes, oldest first: `#ID`,
   state (`todo`, `active`, `done`, or empty for a plain note), and the
   title or the start of the text; done notes only with `--all`, and only
-  TODO notes with `--todo`; "No notes." if there's nothing to show.
+  TODO notes with `--todo`. If there's nothing to show, it says "No
+  notes." only when there are none at all; otherwise it says which notes
+  there are none of, so a filter isn't taken for an empty database: e.g.
+  `No TODO notes in category "work" that aren't done.` (the last part only
+  when done notes would match). `notes browse` says the same.
   `notes show ID` prints a heading (`#ID: title`, or `#ID` if unnamed; then
   state, creation time and the time it was done, in local time), then the
   whole text, as plain output. `notes edit [ID]` asks with the title field

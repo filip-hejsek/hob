@@ -487,9 +487,13 @@ fn notes_list_only_done() {
     let (hob, _dir) = setup();
     run(&hob, "note todo x");
     run(&hob, "done 1");
-    assert_eq!(run(&hob, "notes"), ["No notes."]);
-    assert_eq!(run(&hob, "notes list --todo"), ["No notes."]);
+    assert_eq!(run(&hob, "notes"), ["No notes that aren't done."]);
+    assert_eq!(
+        run(&hob, "notes list --todo"),
+        ["No TODO notes that aren't done."]
+    );
     assert_eq!(listed(&hob, "notes list --all"), ["#1 done x"]);
+    assert_eq!(run(&hob, "notes browse"), ["No notes that aren't done."]);
 }
 
 /// Whether `details` is the details line of a note: its state (if any), and
@@ -692,7 +696,7 @@ fn notes_browse() {
     // Closing says nothing.
     assert!(output.is_empty(), "{output:?}");
 
-    assert_eq!(run(&hob, "notes browse"), ["No notes."]);
+    assert_eq!(run(&hob, "notes browse"), ["No notes that aren't done."]);
     run(&hob, "note x");
     let output = run_answering(&hob, "notes browse --all 1", |island| {
         assert_eq!(browsed(island), "Note 1 of 2 | #1 | a");
@@ -1047,6 +1051,11 @@ fn notes_list_by_category() {
     assert_eq!(
         listed(&hob, "notes list --todo -c home"),
         ["#2 todo dishes home"]
+    );
+    run(&hob, "notes categories add empty");
+    assert_eq!(
+        run(&hob, "notes list -c empty"),
+        [r#"No notes in category "empty"."#]
     );
     assert_eq!(
         run(&hob, "notes list -c nope"),
