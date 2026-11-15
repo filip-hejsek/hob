@@ -1043,6 +1043,26 @@ impl Shell {
                 // Escape may have been pressed while nothing had focus.
                 return operation::focus(Id::new(PROMPT));
             }
+            Action::DeleteWordBefore | Action::DeleteToStart | Action::DeleteToEnd => {
+                let position = self.prompt.cursor().position;
+                let line = self.prompt.line(position.line).map(|l| l.text.into_owned());
+                let range = deleted_range(&line.unwrap_or_default(), position.column, action);
+                if range.is_empty() {
+                    return Task::none();
+                }
+                // Deleting the range selected is an edit like any other
+                // (e.g. it takes a picked candidate first).
+                let at = |column| text_editor::Position {
+                    line: position.line,
+                    column,
+                };
+                self.prompt.move_to(text_editor::Cursor {
+                    position: at(range.start),
+                    selection: Some(at(range.end)),
+                });
+                let delete = text_editor::Action::Edit(Edit::Delete);
+                return self.update(Message::PromptEdited(delete));
+            }
             Action::PageUp => return scroll_page(1.0),
             Action::PageDown => return scroll_page(-1.0),
             Action::Clear => {
@@ -1699,24 +1719,31 @@ fn prompt_binding(bindings: &[Binding], key: KeyPress) -> Option<text_editor::Bi
         // Escape is decided when it's done (it unfocuses, unless candidates
         // are listed), since keys pressed before the next view would see a
         // stale state here.
-        Some(
-            action @ (Action::Up
-            | Action::CancelPick
-            | Action::Down
-            | Action::Left
-            | Action::Right
-            | Action::Complete
-            | Action::PickPrevious
-            | Action::TakePick
-            | Action::Exit),
-        ) => custom(action),
+        Some(action) if action.scope() != Scope::Anywhere => custom(action),
         // The shell does it (e.g. PageUp scrolls the scrollback).
-        Some(action) if action.scope() == Scope::Anywhere => None,
+        Some(_) => None,
         _ => match key.key {
             keyboard::Key::Named(keyboard::key::Named::Enter) => (!key.modifiers.shift())
                 .then_some(text_editor::Binding::Custom(Message::PromptSubmitted)),
             _ => text_editor::Binding::from_key_press(key),
         },
+    }
+}
+
+/// The byte range of `line` that a delete `action` removes, with the
+/// cursor at byte `cursor`. Words end at whitespace, as with Ctrl+W in
+/// bash.
+fn deleted_range(line: &str, cursor: usize, action: Action) -> std::ops::Range<usize> {
+    let cursor = cursor.min(line.len());
+    match action {
+        Action::DeleteWordBefore => {
+            let before = line[..cursor].trim_end();
+            let start = before.trim_end_matches(|c: char| !c.is_whitespace()).len();
+            start..cursor
+        }
+        Action::DeleteToStart => 0..cursor,
+        Action::DeleteToEnd => cursor..line.len(),
+        _ => cursor..cursor,
     }
 }
 

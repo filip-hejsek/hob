@@ -190,10 +190,8 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 
 - An icon, for the desktop file (`Icon=`) and the window.
 
-- More prompt shortcuts: Ctrl+W, Ctrl+U and Ctrl+K (delete the word before
-  the cursor, or to the start or end of the line). The prompt is a
-  `text_editor` now, so the shell can read the cursor and edit at it
-  (`Content::perform`).
+- A kill ring for the prompt: Ctrl+Y to paste what Ctrl+W, Ctrl+U or Ctrl+K
+  deleted, as in readline.
 - Multi-line command lines, as a mode the prompt is in only when asked
   (dropped for now; see DECISIONS.md). A sketch, which needs more thought:
   - Normally, Up and Down always browse the history; a recalled

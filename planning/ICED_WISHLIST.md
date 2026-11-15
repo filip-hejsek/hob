@@ -7,7 +7,7 @@ Candidates for upstream issues or PRs.
 ## Reading a text input's cursor and selection
 
 **Needed for:** Tab completion at the cursor in the prompt, and Ctrl+W,
-Ctrl+U and Ctrl+K (hob-gui).
+Ctrl+U and Ctrl+K (hob-gui); the same in islands' text fields.
 
 The app can move the cursor and select text (`operation::move_cursor_to`,
 `select_range`), but can't read where the cursor or selection is: the

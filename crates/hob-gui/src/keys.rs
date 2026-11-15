@@ -28,6 +28,13 @@ pub(crate) enum Action {
     /// Takes the picked candidate bare, or cycles the endings of the one
     /// taken; otherwise types a space.
     TakePick,
+    /// Deletes the word before the cursor (up to whitespace), and the
+    /// whitespace after it.
+    DeleteWordBefore,
+    /// Deletes from the start of the line to the cursor.
+    DeleteToStart,
+    /// Deletes from the cursor to the end of the line.
+    DeleteToEnd,
     /// Scrolls the scrollback up by a page.
     PageUp,
     /// Scrolls the scrollback down by a page.
@@ -59,7 +66,10 @@ impl Action {
             | Action::Right
             | Action::Complete
             | Action::PickPrevious
-            | Action::TakePick => Scope::Prompt,
+            | Action::TakePick
+            | Action::DeleteWordBefore
+            | Action::DeleteToStart
+            | Action::DeleteToEnd => Scope::Prompt,
             // Escape also restores the line after a click elsewhere.
             Action::Exit | Action::CancelPick => Scope::PromptOrNothing,
             Action::PageUp | Action::PageDown | Action::Clear => Scope::Anywhere,
@@ -101,6 +111,9 @@ pub(crate) fn defaults() -> Vec<Binding> {
         named(Named::Escape, Action::CancelPick),
         named(Named::PageUp, Action::PageUp),
         named(Named::PageDown, Action::PageDown),
+        ctrl("w", Action::DeleteWordBefore),
+        ctrl("u", Action::DeleteToStart),
+        ctrl("k", Action::DeleteToEnd),
         ctrl("l", Action::Clear),
         ctrl("d", Action::Exit),
     ]

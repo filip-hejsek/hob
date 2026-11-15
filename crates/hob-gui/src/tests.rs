@@ -709,6 +709,53 @@ fn history_puts_the_cursor_at_the_end() {
 }
 
 #[test]
+fn deleted_ranges() {
+    let word = |line, cursor| deleted_range(line, cursor, Action::DeleteWordBefore);
+    assert_eq!(word("cd foo/bar", 10), 3..10);
+    assert_eq!(word("say  one  ", 10), 5..10);
+    assert_eq!(word("say one", 5), 4..5);
+    assert_eq!(word("say one", 4), 0..4);
+    assert_eq!(word("  ", 2), 0..2);
+    assert_eq!(word("", 0), 0..0);
+    assert_eq!(word("a\u{3000}čaj", 6), 4..6);
+    assert_eq!(deleted_range("say one", 4, Action::DeleteToStart), 0..4);
+    assert_eq!(deleted_range("say one", 4, Action::DeleteToEnd), 4..7);
+}
+
+#[test]
+fn ctrl_w_u_and_k_delete_at_the_cursor() {
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "say one two three");
+    for _ in 0.."three".len() {
+        act(&mut shell, Action::Left);
+    }
+    act(&mut shell, Action::DeleteWordBefore);
+    assert_eq!(shell.prompt.text(), "say one three");
+    type_into(&mut shell, "2 ");
+    assert_eq!(shell.prompt.text(), "say one 2 three");
+    act(&mut shell, Action::DeleteToEnd);
+    assert_eq!(shell.prompt.text(), "say one 2 ");
+    act(&mut shell, Action::Left);
+    act(&mut shell, Action::DeleteToStart);
+    assert_eq!(shell.prompt.text(), " ");
+    // Nothing to delete.
+    act(&mut shell, Action::DeleteToStart);
+    assert_eq!(shell.prompt.text(), " ");
+}
+
+#[test]
+fn ctrl_w_takes_a_picked_candidate_first() {
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "look al");
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    assert_eq!(listed(&shell).1, Some("alpha"));
+    act(&mut shell, Action::DeleteWordBefore);
+    assert!(shell.offer.is_none());
+    assert_eq!(shell.prompt.text(), "look ");
+}
+
+#[test]
 fn prompt_keys() {
     use keyboard::key::{Code, Named, Physical};
     use text_editor::Binding as B;
@@ -776,6 +823,22 @@ fn prompt_keys() {
     assert!(matches!(
         shift_space,
         Some(B::Custom(Message::Action(Action::TakePick)))
+    ));
+    // And the deletes, which need the cursor.
+    let ctrl_w = prompt_binding(
+        &bindings,
+        KeyPress {
+            key: keyboard::Key::Character("w".into()),
+            modified_key: keyboard::Key::Character("w".into()),
+            physical_key: Physical::Code(Code::KeyW),
+            modifiers: Modifiers::CTRL,
+            text: Some("\u{17}".into()),
+            status: text_editor::Status::Focused { is_hovered: false },
+        },
+    );
+    assert!(matches!(
+        ctrl_w,
+        Some(B::Custom(Message::Action(Action::DeleteWordBefore)))
     ));
     // The shell scrolls.
     assert!(key(Named::PageUp, Code::PageUp, none).is_none());

@@ -1080,6 +1080,14 @@ Works like a terminal: a scrollback with the prompt below it.
   (it's a focusable with the island's Id), then a second one scrolls.
   Closing the window still exits without asking.
   Escape only cancels picking a completion candidate (see below).
+  In the prompt, Ctrl+W deletes the word before the cursor (back to
+  whitespace, like bash's Ctrl+W, so a whole path goes at once) and the
+  whitespace after it; Ctrl+U and Ctrl+K delete to the start and end of
+  the line. They're `Binding::Custom`s: the shell reads the cursor from
+  the prompt's `Content`, selects the range (`Content::move_to`), and
+  deletes it as an ordinary Delete edit, so it acts like other edits (it
+  takes a picked candidate, and stops browsing the history). Nothing is
+  kept to paste back (no kill ring yet; see TODO.md).
 - Typing while nothing has focus (e.g. after a click on the scrollback)
   focuses the prompt and adds the text at its end. The shell gets key
   presses through a subscription, after the widgets: printable text
