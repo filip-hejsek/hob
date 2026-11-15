@@ -100,6 +100,7 @@ fn gui_config() -> hob_gui::GuiConfig {
         command_placeholder: "Type a command, or help".to_owned(),
         log_prefix: LOG_PREFIX.to_owned(),
         startup: Vec::new(),
+        config_file: None,
     }
 }
 

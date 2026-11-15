@@ -1,10 +1,13 @@
 //! The shell's key bindings: a table from keys to [`Action`]s, kept apart
-//! from what the actions do, so it can become configurable.
+//! from what the actions do, so the config file can change it (see the
+//! `config` module).
 
 use iced::keyboard::{Key, Modifiers, key::Named};
 
-/// Something a key binding does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Something a key binding does. The config file names it in kebab case
+/// (e.g. `delete-word-before`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum Action {
     /// Picks the candidate above the picked one, while picking; otherwise
     /// the previous line in the history.
@@ -86,12 +89,18 @@ pub(crate) struct Binding {
 }
 
 impl Binding {
-    fn new(key: Key, modifiers: Modifiers, action: Action) -> Self {
+    /// Binds `key` with exactly `modifiers` to `action`.
+    pub(crate) fn new(key: Key, modifiers: Modifiers, action: Action) -> Self {
         Binding {
             key: normalize(key),
             modifiers,
             action,
         }
+    }
+
+    /// Whether it's the binding of `key` with exactly `modifiers`.
+    pub(crate) fn is_for(&self, key: &Key, modifiers: Modifiers) -> bool {
+        self.key == normalize(key.clone()) && self.modifiers == modifiers
     }
 }
 

@@ -24,6 +24,7 @@ let config = GuiConfig {
     command_placeholder: "Type a command, or help".into(),
     log_prefix: "my-app".into(),
     startup: Vec::new(),
+    config_file: None,
 };
 hob_gui::run(interpreter, None, config).unwrap();
 ```

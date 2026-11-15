@@ -30,8 +30,17 @@
 //! in the empty prompt, or while nothing has focus, exits (like `exit`), unless
 //! commands are running: then it says so, and focuses an island waiting for
 //! input. Typing while nothing has focus types into the prompt, and Escape
-//! focuses it. The bindings are a table (see the
-//! `keys` module), to make them configurable later.
+//! focuses it. The bindings are a table (see the `keys` module), which
+//! the config file can change.
+//!
+//! The config file ([`GuiConfig::config_file`]) is TOML, read once at
+//! start, by the shell and the preview. A missing file is fine; one that
+//! can't be read or parsed is reported with a notice (not saved), and
+//! the defaults are used. So far it only has key bindings: in a `[keys]`
+//! table, each key (modifiers first, joined by `+`, e.g. `"Ctrl+Shift+L"`;
+//! named keys like `Tab`, `PageUp` or `F1`) gets an action, named in kebab
+//! case (e.g. `"clear"`, `"delete-word-before"`), or `false` to unbind it.
+//! Other keys keep their default bindings.
 //!
 //! Command lines and output can be selected with the mouse and copied with
 //! Ctrl+C, one printed text or log record at a time.
@@ -77,6 +86,7 @@ use kettle_ui_iced::{Island, spacing, view_frozen};
 use nucleo_matcher::pattern::{Atom, AtomKind, CaseMatching, Normalization};
 use nucleo_matcher::{Matcher, Utf32Str};
 
+use config::Config;
 use follow::follow;
 use keyed::keyed;
 use keys::{Action, Binding, Scope};
@@ -85,6 +95,7 @@ use prompt::{BOLD, prompt};
 use selectable::selectable;
 use sticky::sticky;
 
+mod config;
 mod follow;
 mod keyed;
 mod keys;
@@ -116,6 +127,8 @@ pub struct GuiConfig {
     /// Command lines run on start, in order, as if typed in the prompt (but
     /// not in a preview).
     pub startup: Vec<String>,
+    /// The config file to read on start, if any (see the [crate] docs).
+    pub config_file: Option<PathBuf>,
 }
 
 /// Opens the main window, running commands with `interpreter`, and blocks
@@ -535,6 +548,7 @@ impl Shell {
             reveal: 0,
         };
         shell.restore();
+        shell.load_config();
         let mut tasks = Vec::new();
         if !shell.is_preview() {
             tasks.push(operation::focus(Id::new(PROMPT)));
@@ -619,6 +633,24 @@ impl Shell {
             let message = format!("a session from {other_name} was loaded into {}", self.name);
             let notice = self.notice(Level::Warn, message);
             self.scrollback.push(Item::Notice(notice));
+        }
+    }
+
+    /// Reads the config file, if there is one, and applies it. If it
+    /// can't be read or parsed, says so with an ephemeral notice (shown
+    /// on every start until it's fixed, so not saved), and keeps the
+    /// defaults.
+    fn load_config(&mut self) {
+        let Some(path) = &self.config.config_file else {
+            return;
+        };
+        match Config::load(path) {
+            Ok(config) => config.apply(&mut self.bindings),
+            Err(e) => {
+                let message = format!("Couldn't read the config file, so using the defaults: {e}");
+                let notice = self.notice(Level::Error, message).ephemeral();
+                self.scrollback.push(Item::Notice(notice));
+            }
         }
     }
 

@@ -72,6 +72,22 @@ gets big: past 4 MiB of text (`HOB_SESSION_SIZE`), or 16 MiB of images
 Sizes are in bytes, or with a `K`, `M` or `G` suffix; small values help
 when trying the trimming out. The history keeps 10,000 lines.
 
+The window reads a config file (TOML) on start, from the platform's
+config directory (e.g. `~/.config/hob/config.toml`); set `HOB_CONFIG` to
+use another file. So far it only changes key bindings:
+
+```toml
+[keys]
+"Ctrl+Shift+L" = "clear"   # an action, in kebab case
+"Ctrl+L" = false           # unbinds the key
+```
+
+The actions are those of hob-gui's `keys` module: `up`, `down`, `left`,
+`right`, `complete`, `pick-previous`, `cancel-pick`, `take-pick`,
+`delete-word-before`, `delete-to-start`, `delete-to-end`, `page-up`,
+`page-down`, `clear` and `exit`. Keys not named keep their defaults. If
+the file can't be read, hob says so and uses the defaults.
+
 Notes are kept in the platform's data directory (e.g.
 `~/.local/share/hob/notes.sqlite`); set `HOB_NOTES` to use another file,
 e.g. when trying hob out (also through hob-mcp), so real notes aren't

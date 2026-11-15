@@ -961,6 +961,73 @@ fn ctrl_l_clears_the_scrollback_but_not_running_commands() {
 }
 
 #[test]
+fn config_file_changes_key_bindings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[keys]\n\"Ctrl+L\" = false\n\"Alt+C\" = \"clear\"\n").unwrap();
+    let config = GuiConfig {
+        config_file: Some(path),
+        ..gui_config()
+    };
+    let (shell, _) = Shell::new(
+        Some(Arc::new(interpreter())),
+        None,
+        Limits::default(),
+        Arc::new(config),
+        Level::Info,
+        None,
+    );
+    assert!(shell.scrollback.is_empty());
+    let lookup = |c: &str, modifiers| {
+        keys::lookup(
+            &shell.bindings,
+            keyboard::Key::Character(c.into()),
+            modifiers,
+        )
+    };
+    assert_eq!(lookup("l", Modifiers::CTRL), None);
+    assert_eq!(lookup("c", Modifiers::ALT), Some(Action::Clear));
+    assert_eq!(lookup("d", Modifiers::CTRL), Some(Action::Exit));
+}
+
+#[test]
+fn bad_config_file_is_reported_but_not_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[keys]\n\"Ctrl+L\" = \"clean\"\n").unwrap();
+    let config = GuiConfig {
+        config_file: Some(path.clone()),
+        ..gui_config()
+    };
+    let (shell, _) = Shell::new(
+        Some(Arc::new(interpreter())),
+        None,
+        Limits::default(),
+        Arc::new(config),
+        Level::Info,
+        None,
+    );
+    let [Item::Notice(notice)] = shell.scrollback.as_slice() else {
+        panic!("expected one notice: {:?}", shell.scrollback.len());
+    };
+    assert_eq!(
+        notice.message,
+        format!(
+            "Couldn't read the config file, so using the defaults: {}:2: unknown action `clean`",
+            path.display()
+        )
+    );
+    assert!(notice.ephemeral);
+    // The defaults are kept.
+    let ctrl_l = keys::lookup(
+        &shell.bindings,
+        keyboard::Key::Character("l".into()),
+        Modifiers::CTRL,
+    );
+    assert_eq!(ctrl_l, Some(Action::Clear));
+}
+
+#[test]
 fn ctrl_d_does_not_exit_while_commands_are_running() {
     let (mut shell, _) = Shell::new(
         Some(Arc::new(interpreter())),
@@ -1285,6 +1352,7 @@ fn gui_config() -> GuiConfig {
         command_placeholder: PLACEHOLDER.into(),
         log_prefix: "test".into(),
         startup: Vec::new(),
+        config_file: None,
     }
 }
 

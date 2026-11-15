@@ -940,6 +940,27 @@ Works like a terminal: a scrollback with the prompt below it.
   (each gets a block and joins the history), e.g. hob-mcp-test-client's
   `connect` for a server given as arguments. A preview ignores them.
   `hob_core::quote` turns arguments into words of such a line.
+- The config file is TOML, read once at start (no reloading), by the shell
+  and the preview. hob-gui parses it; the application picks the file
+  (`GuiConfig::config_file`), as with the session: hob uses `HOB_CONFIG`,
+  or `config.toml` in the platform's config directory (`dirs`).
+  hob-mcp-test-client passes none. Rejected: a parameter of `run` and
+  `preview` like the session's, since the file isn't the shell's state.
+  A missing file is an empty config. A bad one (unreadable, bad TOML, an
+  unknown field, key or action) is reported with an ephemeral error
+  notice (and on stderr), as `FILE:LINE: message` from toml's span, and
+  the whole file is ignored: defaults rather than half a config. The
+  notice isn't saved, since it comes again on every start until fixed.
+- So far the config only has `[keys]`: each entry replaces the binding of
+  that key (with exactly those modifiers); others keep their defaults, so
+  a config only lists changes. Keys are written like `Ctrl+Shift+L`
+  (modifiers `Ctrl`, `Shift`, `Alt`, `Super`; a single character, or a
+  named key like `Tab`, `PageUp`, `F1`; case ignored), actions in kebab
+  case (serde on `keys::Action`). `false` unbinds a key. Rejected: a
+  `"none"` action, which could clash with an action's name; and a table
+  per action listing its keys, which makes moving one key between actions
+  two edits. Enter (running the line) isn't an action, so it can't be
+  rebound yet.
 - The program's name, as shown to the user (e.g. in `exit`'s description
   and the note on interrupted commands), belongs to the interpreter
   (`Interpreter::named`; `new` names it hob), since commands need it too,
@@ -1060,8 +1081,8 @@ Works like a terminal: a scrollback with the prompt below it.
   answer. Without other commands, it exits at once, without asking.
   `jobs` prints the same list, one command line per line.
 - Key bindings are a table (the `keys` module) from a key with exact
-  modifiers to a named action, kept apart from what the actions do, so it
-  can become configurable. Letters are compared in lowercase. Keys are
+  modifiers to a named action, kept apart from what the actions do, so the
+  config file can change it. Letters are compared in lowercase. Keys are
   looked up without modifiers (iced's `key`), except a named key the
   modifiers made a character (`modified_key`): without modifiers, Num Lock
   is off too, so the numpad's 2 and 8 would browse the history (islands

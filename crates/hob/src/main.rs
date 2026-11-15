@@ -89,6 +89,7 @@ fn gui_config() -> hob_gui::GuiConfig {
         command_placeholder: "Type a command, or help".into(),
         log_prefix: LOG_PREFIX.to_owned(),
         startup: Vec::new(),
+        config_file: config_path(),
     }
 }
 
@@ -128,4 +129,14 @@ fn session_path() -> Option<PathBuf> {
     }
     let dir = dirs::state_dir().or_else(dirs::data_local_dir)?;
     Some(dir.join("hob").join("session.json"))
+}
+
+#[cfg(feature = "gui")]
+/// The config file: `HOB_CONFIG` if set, otherwise in the platform's config
+/// directory.
+fn config_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("HOB_CONFIG") {
+        return Some(path.into());
+    }
+    Some(dirs::config_dir()?.join("hob").join("config.toml"))
 }

@@ -17,7 +17,9 @@ iced_graphics.workspace = true
 kettle-ui.workspace = true
 kettle-ui-iced.workspace = true
 nucleo-matcher.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 iced_test = "0.14"

@@ -49,6 +49,8 @@ rusqlite = { version = "0.41", default-features = false, features = ["bundled"] 
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 tempfile = "3"
+# Only reading: the config file is written by people.
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 
 [workspace.lints.clippy]
 dbg_macro = "warn"
