@@ -26,7 +26,9 @@ use crate::Message;
 /// - In a text field or checkbox (not a text area), Up and Down focus the
 ///   previous and next field; Down from the last one focuses the island as
 ///   a whole. Ctrl+Up and Ctrl+Down do the same, also in a text area (where
-///   Up and Down move between lines).
+///   Up and Down move between lines); in a checkbox, they skip the
+///   checkboxes before or after it (Ctrl+Up does nothing if there's no
+///   other field before them).
 /// - Escape, while the island has focus, cancels.
 /// - While the island as a whole has focus, Enter submits, a button's key
 ///   (without Alt) presses it, and Up (if there are fields) focuses the
@@ -211,6 +213,13 @@ impl Scope<'_> {
                     if checked { uncheck } else { check }.clone(),
                 ))
             }
+            // From a checkbox, Ctrl+Up skips the checkboxes before it.
+            keyboard::Key::Named(key::Named::ArrowUp) if !plain && checkbox.is_some() => {
+                let previous = self.fields[..field?]
+                    .iter()
+                    .rfind(|f| !matches!(f.kind, FieldKind::Checkbox { .. }))?;
+                Some(KeyAction::focus(Focus::Field(previous.id.clone())))
+            }
             keyboard::Key::Named(key::Named::ArrowUp) if arrows_move_focus => {
                 let previous = match field {
                     _ if whole && !self.click_focus => self.fields.last()?,
@@ -218,6 +227,16 @@ impl Scope<'_> {
                     None => return None,
                 };
                 Some(KeyAction::focus(Focus::Field(previous.id.clone())))
+            }
+            // From a checkbox, Ctrl+Down skips the checkboxes after it.
+            keyboard::Key::Named(key::Named::ArrowDown) if !plain && checkbox.is_some() => {
+                let next = self.fields[field? + 1..]
+                    .iter()
+                    .find(|f| !matches!(f.kind, FieldKind::Checkbox { .. }));
+                Some(KeyAction::focus(match next {
+                    Some(next) => Focus::Field(next.id.clone()),
+                    None => Focus::Whole,
+                }))
             }
             keyboard::Key::Named(key::Named::ArrowDown) if arrows_move_focus => {
                 Some(KeyAction::focus(next(field?)))

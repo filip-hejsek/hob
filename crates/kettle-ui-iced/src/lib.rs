@@ -46,7 +46,7 @@
 //! after its label show it has focus. In a text field or checkbox (not a
 //! text area), Up and Down move between fields, and Down from the last one
 //! to the island as a whole; Ctrl+Up and Ctrl+Down do that in a text area
-//! too. Escape cancels
+//! too, and in a checkbox skip the checkboxes next to it. Escape cancels
 //! (if there's a cancel button). While the island as a whole has focus,
 //! Enter submits and a button's key (see
 //! [`ButtonKey`]) presses it; a key with Alt
@@ -1259,10 +1259,81 @@ mod tests {
         );
     }
 
+    /// Pressing and releasing the named key with Ctrl (Cmd on macOS).
+    fn ctrl(named: iced::keyboard::key::Named) -> [iced::Event; 2] {
+        use iced::keyboard::key::{NativeCode, Physical};
+        use iced::keyboard::{Event, Key, Location, Modifiers};
+
+        let key = Key::Named(named);
+        let physical_key = Physical::Unidentified(NativeCode::Unidentified);
+        [
+            iced::Event::Keyboard(Event::KeyPressed {
+                key: key.clone(),
+                modified_key: key.clone(),
+                physical_key,
+                location: Location::Standard,
+                modifiers: Modifiers::COMMAND,
+                repeat: false,
+                text: None,
+            }),
+            iced::Event::Keyboard(Event::KeyReleased {
+                modified_key: key.clone(),
+                key,
+                physical_key,
+                location: Location::Standard,
+                modifiers: Modifiers::COMMAND,
+            }),
+        ]
+    }
+
+    #[test]
+    fn ctrl_arrows_in_a_checkbox_skip_its_checkboxes() {
+        use iced::keyboard::{Key, key::Named};
+
+        let builder = IslandBuilder::new(column([
+            checkbox("c", "C"),
+            checkbox("d", "D"),
+            text_field("a", "A"),
+            checkbox("e", "E"),
+            checkbox("f", "F"),
+            submit_button("OK"),
+        ]));
+        let island = Island::new(builder).unwrap().0;
+        let d = island.field_id("d").unwrap();
+        let mut ui = simulator(island.view());
+        // Clicking focuses it, and toggles it.
+        ui.click(d).unwrap();
+        // Nothing before c and d, so focus stays on d (the view isn't
+        // rebuilt, so Space checks it again).
+        ui.simulate(ctrl(Named::ArrowUp));
+        ui.tap_key(Key::Named(Named::Space));
+        ui.simulate(ctrl(Named::ArrowDown));
+        ui.typewrite("1");
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        // From f, back past e to a.
+        ui.simulate(ctrl(Named::ArrowUp));
+        ui.typewrite("2");
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        // From e, past f to the island as a whole, where Enter submits.
+        ui.simulate(ctrl(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::Space));
+        ui.tap_key(Key::Named(Named::Enter));
+        let messages: Vec<String> = ui.into_messages().map(|m| format!("{m:?}")).collect();
+        assert_eq!(
+            messages,
+            [
+                r#"Message(Toggled("d", true))"#,
+                r#"Message(Toggled("d", true))"#,
+                r#"Message(TextChanged("a", "1"))"#,
+                r#"Message(TextChanged("a", "12"))"#,
+                "Message(Submit)",
+            ]
+        );
+    }
+
     #[test]
     fn arrows_move_between_text_fields_and_ctrl_arrows_out_of_text_areas() {
-        use iced::keyboard::Location;
-        use iced::keyboard::key::{NativeCode, Physical};
         use iced::keyboard::{Key, key::Named};
 
         fn form() -> Island {
@@ -1290,28 +1361,6 @@ mod tests {
         ui.tap_key(Key::Named(Named::ArrowDown));
         ui.typewrite("y");
         // Ctrl+Up and Ctrl+Down move between fields, there and elsewhere.
-        let ctrl = |named| {
-            let key = Key::Named(named);
-            let modifiers = iced::keyboard::Modifiers::COMMAND;
-            [
-                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key: key.clone(),
-                    modified_key: key.clone(),
-                    physical_key: Physical::Unidentified(NativeCode::Unidentified),
-                    location: Location::Standard,
-                    modifiers,
-                    repeat: false,
-                    text: None,
-                }),
-                iced::Event::Keyboard(iced::keyboard::Event::KeyReleased {
-                    modified_key: key.clone(),
-                    key,
-                    physical_key: Physical::Unidentified(NativeCode::Unidentified),
-                    location: Location::Standard,
-                    modifiers,
-                }),
-            ]
-        };
         ui.simulate(ctrl(Named::ArrowUp));
         ui.typewrite("3");
         ui.simulate(ctrl(Named::ArrowDown));
