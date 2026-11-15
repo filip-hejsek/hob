@@ -1393,7 +1393,18 @@ Works like a terminal: a scrollback with the prompt below it.
   the editor takes key bindings, so the prompt's keys need no
   subscription and no focus check. Long lines wrap (by word, or anywhere
   in a long word), since the editor can't scroll sideways. A recalled
-  line, or any line set by the shell, puts the cursor at its end.
+  line, or any line set by the shell, puts the cursor at its end (except
+  completion's, below).
+- Tab completes the line up to the cursor, as readline does, and the rest
+  stays after it: hob-core needs no cursor, since completing a word only
+  looks at what comes before it. The cursor ends up after the completed
+  part, and a space after a finished word takes the place of one already
+  after the cursor (the cursor moves past it). In the middle of a word,
+  only its part before the cursor is completed (`alph|a` gives
+  `alphaa`), like bash. Moving the cursor drops the listed candidates,
+  since they're for the word that was before it. Rejected for now:
+  completing the whole word around the cursor (zsh without
+  `complete_in_word`), which hob-core would have to split differently.
 - The prompt grows up to ten rows (worked out from the renderer's text
   size). Beyond that, it scrolls, with a scrollbar, so it's clear that not
   all of it is shown. The editor scrolling itself had no scrollbar, and

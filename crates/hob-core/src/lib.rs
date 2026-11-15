@@ -313,7 +313,8 @@ impl Interpreter {
     /// The rest of a `!` line is completed as a shell command: programs on
     /// `PATH`, then paths. Commands without a spec, and other prefix
     /// commands, aren't completed. Aliases are completed like command
-    /// names; after one, the line is completed as its expansion.
+    /// names; after one, the line is completed as its expansion. To
+    /// complete at a cursor, pass the line up to it.
     pub fn complete(&self, line: &str) -> Completion {
         let path = std::env::var_os("PATH");
         let aliases = self.alias_map();

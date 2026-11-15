@@ -512,6 +512,85 @@ fn the_cursor_is_before_the_picked_candidates_terminator() {
 }
 
 #[test]
+fn tab_completes_the_word_before_the_cursor_and_keeps_the_rest() {
+    let (mut shell, _dir) = shell_with_files();
+    let column = |shell: &Shell| shell.prompt.cursor().position.column;
+    // Alone: its space takes the place of the one after the cursor.
+    shell.set_prompt_at("look gam", " beta", false);
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look gamma beta");
+    assert_eq!(column(&shell), "look gamma ".len());
+    // Without a space after the cursor, it adds one.
+    shell.set_prompt_at("look gam", "beta", false);
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look gamma beta");
+    assert_eq!(column(&shell), "look gamma ".len());
+    // As far as it's unambiguous, then picking.
+    shell.set_prompt_at("look al", " beta", false);
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look alpha beta");
+    assert_eq!(column(&shell), "look alpha".len());
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look alphabet beta");
+    assert_eq!(column(&shell), "look alphabet".len());
+    // Escape goes back to the line from before.
+    act(&mut shell, Action::CancelPick);
+    assert_eq!(shell.prompt.text(), "look alpha beta");
+    assert_eq!(column(&shell), "look alpha".len());
+    // Space takes it, Shift+Space cycles its endings.
+    act(&mut shell, Action::PickPrevious);
+    type_into(&mut shell, " ");
+    assert_eq!(shell.prompt.text(), "look alphabet beta");
+    assert_eq!(column(&shell), "look alphabet ".len());
+    act(&mut shell, Action::TakePick);
+    assert_eq!(shell.prompt.text(), "look alphabet beta");
+    assert_eq!(column(&shell), "look alphabet".len());
+    act(&mut shell, Action::TakePick);
+    assert_eq!(shell.prompt.text(), "look alphabet beta");
+    assert_eq!(column(&shell), "look alphabet ".len());
+    // A quote is closed before the rest.
+    shell.set_prompt_at("look 'al", " beta", false);
+    act(&mut shell, Action::Complete);
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look 'alpha' beta");
+    assert_eq!(column(&shell), "look 'alpha".len());
+}
+
+#[test]
+fn spaces_after_the_cursor_stay_unless_a_word_is_finished() {
+    let (mut shell, _dir) = shell_with_files();
+    let column = |shell: &Shell| shell.prompt.cursor().position.column;
+    // Nothing to complete.
+    shell.set_prompt_at("look x", "  beta", false);
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look x  beta");
+    assert_eq!(column(&shell), "look x".len());
+    // Candidates listed, one picked, and Escape back.
+    shell.set_prompt_at("look ", " beta", false);
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look  beta");
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look README beta");
+    act(&mut shell, Action::CancelPick);
+    assert_eq!(shell.prompt.text(), "look  beta");
+    assert_eq!(column(&shell), "look ".len());
+}
+
+#[test]
+fn moving_the_cursor_drops_the_candidates() {
+    let (mut shell, _dir) = shell_with_files();
+    type_into(&mut shell, "look al");
+    act(&mut shell, Action::Complete);
+    assert!(shell.offer.is_some());
+    act(&mut shell, Action::Left);
+    assert!(shell.offer.is_none());
+    // Tab completes what's before the cursor now, as in bash.
+    act(&mut shell, Action::Complete);
+    assert_eq!(shell.prompt.text(), "look alphaa");
+}
+
+#[test]
 fn other_text_goes_after_the_picked_candidate_bare() {
     let (mut shell, _dir) = shell_with_files();
     type_into(&mut shell, "look 'al");

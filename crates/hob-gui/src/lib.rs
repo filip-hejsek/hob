@@ -19,7 +19,8 @@
 //!
 //! The prompt works like a shell's: Enter runs the command line (it has one
 //! line; long lines wrap, and pasted line breaks become spaces). Up and Down
-//! browse the history, and Tab completes command names and arguments. Tab again, while candidates are
+//! browse the history, and Tab completes command names and arguments (the
+//! word before the cursor; the rest of the line stays). Tab again, while candidates are
 //! listed, picks one (Tab and Shift+Tab move on, as do the arrows, as the
 //! candidates are laid out; letters and digits search
 //! the candidates, Escape goes back to the line from before). Taking one
@@ -291,9 +292,14 @@ enum Item {
 /// goes on as completing it alone would, Space finishes it, Shift+Space
 /// leaves it bare (all three then cycle its endings, see [`Taken`]), and
 /// other text goes after it bare (quote still open).
+///
+/// Completion works on the line up to the cursor; the lines here are only
+/// that part, and `rest` (what was after the cursor) stays after them.
 struct Offer {
     /// The candidates, and the line with each filled in.
     choices: Vec<Choice>,
+    /// The text after the cursor.
+    rest: String,
     /// What's been typed to search the candidates while picking.
     query: String,
     /// The candidates matching the query, best first; all of them, in
@@ -301,7 +307,7 @@ struct Offer {
     matches: Vec<Match>,
     /// The match picked, while picking (unless none matches).
     picked: Option<usize>,
-    /// The line from before picking, while picking.
+    /// The line (up to the cursor) from before picking, while picking.
     before: Option<String>,
 }
 
@@ -314,9 +320,10 @@ struct Match {
 }
 
 impl Offer {
-    fn new(choices: Vec<Choice>) -> Self {
+    fn new(choices: Vec<Choice>, rest: String) -> Self {
         let mut offer = Offer {
             choices,
+            rest,
             query: String::new(),
             matches: Vec::new(),
             picked: None,
@@ -398,15 +405,22 @@ impl Offer {
 /// (if it has one), finished with a space, and bare (quote still open).
 struct Taken {
     choice: Choice,
+    /// The text after the cursor, which stays after the endings.
+    rest: String,
     /// Which of its endings the prompt shows.
     ending: usize,
 }
 
 impl Taken {
-    /// The choice taken, if `line` is one of its endings.
-    fn find(choice: Choice, line: &str) -> Option<Self> {
+    /// The choice taken, if `line` (up to the cursor) is one of its
+    /// endings; `rest` is the text after the cursor.
+    fn find(choice: Choice, line: &str, rest: String) -> Option<Self> {
         let ending = Self::endings(&choice).iter().position(|e| e == line)?;
-        Some(Taken { choice, ending })
+        Some(Taken {
+            choice,
+            rest,
+            ending,
+        })
     }
 
     /// The lines with each ending, in the order Shift+Space cycles them.
@@ -417,9 +431,14 @@ impl Taken {
             .collect()
     }
 
-    /// The line with the ending shown.
+    /// The line (up to the cursor) with the ending shown.
     fn line(&self) -> String {
         Self::endings(&self.choice).swap_remove(self.ending)
+    }
+
+    /// Whether the ending shown is finished with a space.
+    fn finished(&self) -> bool {
+        self.line() == self.choice.finished()
     }
 
     /// Moves on to the next ending, and returns its line.
@@ -811,8 +830,9 @@ impl Shell {
                 self.taken = None;
                 if action.is_edit() {
                     self.history.stop_browsing();
-                    let picked = self.offer.take().and_then(|o| o.picked().cloned());
-                    if let Some(choice) = picked {
+                    let picked =
+                        (self.offer.take()).and_then(|o| Some((o.picked().cloned()?, o.rest)));
+                    if let Some((choice, rest)) = picked {
                         let line = match &action {
                             // Its delimiter goes on as completing it alone
                             // would; Space finishes it. Shift+Space then
@@ -823,11 +843,12 @@ impl Shell {
                             A(Edit::Insert(' ')) => Some(choice.finished()),
                             // Other text goes after it bare.
                             A(Edit::Insert(c)) => {
-                                self.set_prompt(&format!("{}{c}", choice.bare));
+                                self.set_prompt_at(&format!("{}{c}", choice.bare), &rest, false);
                                 return Task::none();
                             }
                             A(Edit::Paste(text)) => {
-                                self.set_prompt(&format!("{}{text}", choice.bare));
+                                let line = format!("{}{text}", choice.bare);
+                                self.set_prompt_at(&line, &rest, false);
                                 return Task::none();
                             }
                             // Other edits work at the cursor, before the
@@ -836,15 +857,21 @@ impl Shell {
                         };
                         match line {
                             Some(line) => {
-                                self.set_prompt(&line);
-                                self.taken = Taken::find(choice, &line);
+                                let finished = line == choice.finished();
+                                self.set_prompt_at(&line, &rest, finished);
+                                self.taken = Taken::find(choice, &line, rest);
                             }
                             None => self.prompt.perform(action),
                         }
                         return Task::none();
                     }
                 }
+                let cursor = self.prompt.cursor();
                 self.prompt.perform(action);
+                // The candidates are for the word before the cursor.
+                if self.prompt.cursor() != cursor {
+                    self.offer = None;
+                }
                 Task::none()
             }
             Message::PromptSubmitted => {
@@ -1039,24 +1066,35 @@ impl Shell {
                 let Some(interpreter) = &self.interpreter else {
                     return Task::none();
                 };
-                let completion = interpreter.complete(&self.prompt.text());
+                // The line up to the cursor is completed; the rest stays.
+                let (head, rest) = self.split_prompt();
+                let completion = interpreter.complete(&head);
+                let finished =
+                    (completion.only.as_ref()).is_some_and(|c| c.finished() == completion.line);
                 // Without any completions, a taken one still cycles.
                 if !completion.choices.is_empty() || completion.only.is_some() {
-                    self.taken = (completion.only).and_then(|c| Taken::find(c, &completion.line));
+                    self.taken = (completion.only)
+                        .and_then(|c| Taken::find(c, &completion.line, rest.clone()));
                 }
-                self.offer =
-                    (!completion.choices.is_empty()).then(|| Offer::new(completion.choices));
                 self.history.stop_browsing();
-                Some(completion.line)
+                self.set_prompt_at(&completion.line, &rest, finished);
+                self.offer =
+                    (!completion.choices.is_empty()).then(|| Offer::new(completion.choices, rest));
+                None
             }
             Action::PickPrevious => {
                 self.pick(-1);
                 None
             }
             Action::TakePick => {
-                let text = self.prompt.text();
-                if let Some(taken) = self.taken.as_mut().filter(|t| t.line() == text) {
-                    Some(taken.next())
+                let (head, rest) = self.split_prompt();
+                let taken = (self.taken.as_mut())
+                    .filter(|t| t.line() == head && rest_after(&t.rest, t.finished()) == rest);
+                if let Some(taken) = taken {
+                    let line = taken.next();
+                    let (rest, finished) = (taken.rest.clone(), taken.finished());
+                    self.set_prompt_at(&line, &rest, finished);
+                    None
                 } else if let Some(offer) = self.offer.take_if(|o| o.picking()) {
                     let Some(choice) = offer.picked() else {
                         // The prompt already shows the query typed.
@@ -1064,8 +1102,9 @@ impl Shell {
                     };
                     // Bare; it cycles on from there.
                     let line = choice.bare.clone();
-                    self.taken = Taken::find(choice.clone(), &line);
-                    Some(line)
+                    self.set_prompt_at(&line, &offer.rest, false);
+                    self.taken = Taken::find(choice.clone(), &line, offer.rest);
+                    None
                 } else {
                     let space = text_editor::Action::Edit(Edit::Insert(' '));
                     return self.update(Message::PromptEdited(space));
@@ -1085,7 +1124,8 @@ impl Shell {
                 offer.query.clear();
                 offer.picked = None;
                 offer.search();
-                self.set_prompt(&before);
+                let rest = offer.rest.clone();
+                self.set_prompt_at(&before, &rest, false);
                 // Escape may have been pressed while nothing had focus.
                 return operation::focus(Id::new(PROMPT));
             }
@@ -1133,12 +1173,40 @@ impl Shell {
         (self.prompt).perform(text_editor::Action::Move(Motion::DocumentEnd));
     }
 
+    /// Replaces the prompt's text with `head` and then `rest`, with the
+    /// cursor between them. If `head` ends with a word `finished` with a
+    /// space, see [`rest_after`].
+    fn set_prompt_at(&mut self, head: &str, rest: &str, finished: bool) {
+        let rest = rest_after(rest, finished);
+        self.prompt = Content::with_text(&format!("{head}{rest}"));
+        let line = head.matches('\n').count();
+        let column = head.len() - head.rfind('\n').map_or(0, |i| i + 1);
+        self.prompt.move_to(text_editor::Cursor {
+            position: text_editor::Position { line, column },
+            selection: None,
+        });
+    }
+
+    /// The prompt's text before the cursor, and after it.
+    fn split_prompt(&self) -> (String, String) {
+        let mut text = self.prompt.text();
+        let position = self.prompt.cursor().position;
+        let mut at = 0;
+        for line in text.split('\n').take(position.line) {
+            at += line.len() + 1;
+        }
+        at = (at + position.column).min(text.len());
+        let rest = text.split_off(at);
+        (text, rest)
+    }
+
     /// Shows the offer's line while picking in the prompt.
     fn show_pick(&mut self) {
         let Some((line, back)) = self.offer.as_ref().and_then(Offer::line) else {
             return;
         };
-        self.set_prompt(&line);
+        let rest = (self.offer.as_ref()).map_or_else(String::new, |o| o.rest.clone());
+        self.set_prompt_at(&line, &rest, false);
         for _ in 0..back {
             self.prompt.perform(text_editor::Action::Move(Motion::Left));
         }
@@ -1148,6 +1216,7 @@ impl Shell {
     /// negative), and shows it filled in. If none is picked yet, starts
     /// picking with the first (or, going back, the last).
     fn pick(&mut self, step: isize) {
+        let head = self.split_prompt().0;
         let Some(offer) = self.offer.as_mut() else {
             return;
         };
@@ -1161,7 +1230,7 @@ impl Shell {
             None => 0,
         };
         if offer.before.is_none() {
-            offer.before = Some(self.prompt.text());
+            offer.before = Some(head);
         }
         offer.picked = Some(index);
         self.show_pick();
@@ -1775,6 +1844,17 @@ fn prompt_binding(bindings: &[Binding], key: KeyPress) -> Option<text_editor::Bi
                 .then_some(text_editor::Binding::Custom(Message::PromptSubmitted)),
             _ => text_editor::Binding::from_key_press(key),
         },
+    }
+}
+
+/// What stays of the `rest` of a line, after the cursor, once completion
+/// fills in what's before it: if it `finished` a word with a space, that
+/// takes the place of a space at the start of `rest` (the cursor goes past
+/// it), as in readline.
+fn rest_after(rest: &str, finished: bool) -> &str {
+    match finished {
+        true => rest.strip_prefix(' ').unwrap_or(rest),
+        false => rest,
     }
 }
 

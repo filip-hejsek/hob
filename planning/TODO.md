@@ -218,8 +218,6 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
     (`History::is_private` looks at any whitespace).
 - Ctrl+R history search. Needs a UI design: a bash-style search in the
   prompt line, or a list of matches?
-- Completion works only at the end of the line. The shell can read the
-  cursor now; hob-core's completion would need to take it.
 - Shell completion for `!` could also offer shell builtins (`cd`, `export`,
   ...), variable names after `$`, and paths starting with a variable.
 - Completing a path reads its directory on the UI thread, which could
