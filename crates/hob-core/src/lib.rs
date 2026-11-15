@@ -25,6 +25,9 @@
 //!
 //! [`builtins`] has commands that work with any frontend, such as a log viewer.
 //!
+//! [Aliases](Interpreter::set_aliases) stand for the start of a command
+//! line, like a shell's: with `ll` for `ls -l`, `ll foo` runs `ls -l foo`.
+//!
 //! A frontend (such as `hob-gui`) carries out these [`Request`]s. For its
 //! prompt, there's a [`History`] of entered lines and
 //! [completion](Interpreter::complete), and a [`Session`] to save and
@@ -42,6 +45,7 @@
 //! let requests = interpreter.run("hello world").unwrap();
 //! ```
 
+mod alias;
 pub mod args;
 pub mod builtins;
 mod complete;
@@ -61,11 +65,13 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc as std_mpsc};
 use std::task::{Context as TaskContext, Poll};
 use std::thread;
 
+use alias::Aliases;
 use args::{Matches, Spec};
 use futures_channel::mpsc;
 use futures_core::Stream;
 use kettle_ui::{FrozenIsland, IslandBuilder, Outcome};
 
+pub use alias::{Alias, AliasError};
 pub use complete::{Choice, Completion};
 pub use history::History;
 pub use line::{quote, trim_line_end};
@@ -121,6 +127,8 @@ struct SharedCwd {
 pub struct Interpreter {
     name: String,
     commands: Commands,
+    /// Shared so that a frontend can set them through an `Arc`.
+    aliases: Mutex<Aliases>,
     cwd: Cwd,
 }
 
@@ -144,6 +152,7 @@ impl Interpreter {
         Self {
             name: name.into(),
             commands: Commands::default(),
+            aliases: Mutex::default(),
             cwd: Arc::new(Mutex::new(SharedCwd {
                 path: cwd,
                 started: 0,
@@ -272,16 +281,53 @@ impl Interpreter {
         self.commands.keys().map(String::as_str)
     }
 
+    /// Replaces the aliases with these, for lines run from now on. A line
+    /// whose first word (unquoted) is an alias runs with that word replaced
+    /// by the alias's line. Its first word can be an alias too, but not
+    /// one already replaced, so `ls` can stand for `ls -a`. An alias with
+    /// the name of a command hides it; quoting the name (`'ls'`) runs the
+    /// command. If two aliases have the same name, the last one counts.
+    pub fn set_aliases(&self, aliases: impl IntoIterator<Item = Alias>) {
+        let aliases = aliases.into_iter().map(Alias::into_parts).collect();
+        *self.aliases.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(aliases);
+    }
+
+    /// The aliases, sorted by name.
+    pub fn aliases(&self) -> Vec<Alias> {
+        (self.alias_map().iter())
+            .map(|(name, line)| Alias::new(name, line).expect("checked when set"))
+            .collect()
+    }
+
+    fn alias_map(&self) -> Aliases {
+        self.aliases
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// Completes the word at the end of `line`, like a shell does on Tab:
     /// as far as it's unambiguous, with a space after a finished word. The
     /// first word is a command name; after it, what the command's
     /// [`Spec`] says comes next (options, subcommands, paths, ...).
     /// The rest of a `!` line is completed as a shell command: programs on
     /// `PATH`, then paths. Commands without a spec, and other prefix
-    /// commands, aren't completed.
+    /// commands, aren't completed. Aliases are completed like command
+    /// names; after one, the line is completed as its expansion.
     pub fn complete(&self, line: &str) -> Completion {
         let path = std::env::var_os("PATH");
-        complete::complete(&self.commands, &self.cwd(), path.as_deref(), line)
+        let aliases = self.alias_map();
+        let complete = |line: &str| {
+            complete::complete(&self.commands, &aliases, &self.cwd(), path.as_deref(), line)
+        };
+        match alias::expand(&aliases, line) {
+            // Only once the alias is finished, so it can still be completed
+            // to a longer name.
+            Some(expansion) if expansion.from < line.len() => {
+                expansion.unexpand(complete(&expansion.line), line)
+            }
+            _ => complete(line),
+        }
     }
 
     /// Starts running a command line on a new thread. If it starts with a
@@ -289,11 +335,15 @@ impl Interpreter {
     /// longest matching prefix. Otherwise it's split into words at whitespace,
     /// with quotes and backslashes as in a shell (`'a b'`, `"a b"`, `a\ b`)
     /// and `~` as the home directory; the first is the command name.
+    /// Aliases are expanded first (see [`set_aliases`](Self::set_aliases)).
     ///
     /// Returns the command's requests, which the frontend must carry out. The
     /// stream ends when the command finishes. If the command fails or panics,
     /// its last request is a [`Request::Log`] of the error.
     pub fn run(&self, line: &str) -> Result<Requests, Error> {
+        let aliases = self.alias_map();
+        let expansion = alias::expand(&aliases, line);
+        let line = expansion.as_ref().map_or(line, |e| e.line.as_str());
         let line = line.trim_start();
         let unknown = |name: &str| Error::UnknownCommand {
             name: name.to_owned(),
@@ -334,6 +384,7 @@ impl Interpreter {
         let mut ctx = Context {
             name: name.clone(),
             commands: self.commands.clone(),
+            aliases,
             cwd,
             shared_cwd: self.cwd.clone(),
             number,
@@ -438,6 +489,7 @@ pub struct Context {
     /// The command's name, as the target of its log records.
     name: String,
     commands: Commands,
+    aliases: Aliases,
     /// The command's working directory.
     cwd: PathBuf,
     /// The interpreter's working directory.
@@ -454,16 +506,28 @@ impl Context {
         (self.commands.iter()).map(|(name, command)| (name.as_str(), command.description.as_str()))
     }
 
+    /// The aliases, sorted by name: their names and lines.
+    pub fn aliases(&self) -> impl Iterator<Item = (&str, &str)> {
+        (self.aliases.iter()).map(|(name, line)| (name.as_str(), line.as_str()))
+    }
+
     /// Help for a command (or prefix): its description, and its usage and
     /// options if it declared its arguments ([`Interpreter::register_spec`]).
-    /// `None` if there's no such command.
+    /// For an alias, what it stands for, then the help of a command it
+    /// hides, if any. `None` if there's no such command or alias.
     pub fn help(&self, name: &str) -> Option<String> {
-        let command = self.commands.get(name)?;
-        let summary = format!("{name} — {}", command.description);
-        Some(match &command.run {
-            Run::Parsed(spec, _) => format!("{summary}\n{}", spec.help(name)),
-            _ => summary,
-        })
+        let alias = (self.aliases.get(name)).map(|line| format!("{name} is an alias for {line}"));
+        let command = self.commands.get(name).map(|command| {
+            let summary = format!("{name} — {}", command.description);
+            match &command.run {
+                Run::Parsed(spec, _) => format!("{summary}\n{}", spec.help(name)),
+                _ => summary,
+            }
+        });
+        match (alias, command) {
+            (Some(alias), Some(command)) => Some(format!("{alias}\n{command}")),
+            (alias, command) => alias.or(command),
+        }
     }
 
     /// The working directory: the interpreter's when the command started,
@@ -1093,6 +1157,55 @@ mod tests {
     fn registering_twice_panics() {
         let mut i = interpreter();
         i.register("echo", "Test", |_, _| Ok(()));
+    }
+
+    fn aliased() -> Interpreter {
+        let mut i = prefixed();
+        i.register_spec(
+            "color",
+            "Test",
+            Spec::new().arg("WHEN", args::Kind::Choice(&["always", "never"])),
+            |ctx, args| {
+                ctx.print(args.value("WHEN").unwrap_or_default().to_owned());
+                Ok(())
+            },
+        );
+        let aliases = [
+            ("e", "echo a"),
+            ("echo", "echo x"),
+            ("bang", "!b"),
+            ("c", "color"),
+            ("cc", "c"),
+        ];
+        i.set_aliases(aliases.map(|(name, line)| Alias::new(name, line).unwrap()));
+        i
+    }
+
+    #[test]
+    fn aliases_are_expanded() {
+        let i = aliased();
+        let run = |line| printed(&mut i.run(line).unwrap());
+        assert_eq!(run("e b c"), "x a b c");
+        assert_eq!(run("'echo' b"), "b");
+        assert_eq!(run("bang  c"), "1:b  c");
+        assert_eq!(run("cc never"), "never");
+        assert_eq!(
+            i.aliases().iter().map(Alias::name).collect::<Vec<_>>(),
+            ["bang", "c", "cc", "e", "echo"]
+        );
+        i.set_aliases([]);
+        assert_eq!(run("echo b"), "b");
+    }
+
+    #[test]
+    fn aliases_are_completed() {
+        let i = aliased();
+        assert_eq!(complete(&i, "ec"), completion("echo ", &[]));
+        assert_eq!(complete(&i, "c"), completion("c", &["c", "cc", "color"]));
+        assert_eq!(complete(&i, "cc "), completion("cc ", &["always", "never"]));
+        assert_eq!(complete(&i, " cc  n"), completion(" cc  never ", &[]));
+        let only = i.complete("c a").only.unwrap();
+        assert_eq!(only.bare, "c always");
     }
 }
 

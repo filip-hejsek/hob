@@ -1033,6 +1033,29 @@ fn config_file_changes_key_bindings() {
 }
 
 #[test]
+fn aliases_come_from_the_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[aliases]\ns = \"say hello,\"\n").unwrap();
+    let config = GuiConfig {
+        config_file: Some(path),
+        startup: vec!["s world".into()],
+        ..gui_config()
+    };
+    let program = application(
+        Some(Arc::new(interpreter())),
+        None,
+        Limits::default(),
+        config,
+        Level::Info,
+        None,
+    );
+    let mut shell = Harness::new(program);
+    shell.expect("> s world");
+    shell.expect("hello, world");
+}
+
+#[test]
 fn bad_config_file_is_reported_but_not_saved() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

@@ -1,5 +1,6 @@
 //! The config file: TOML, read once when the shell starts. It has key
-//! bindings, which change the defaults, and prompt settings:
+//! bindings, which change the defaults, prompt settings and command
+//! aliases:
 //!
 //! ```toml
 //! [keys]
@@ -8,6 +9,9 @@
 //!
 //! [prompt]
 //! word-chars = "_-."       # words for Ctrl+W, like zsh's WORDCHARS
+//!
+//! [aliases]
+//! ll = "ls -l"
 //! ```
 
 use std::fmt;
@@ -16,6 +20,8 @@ use std::path::Path;
 use iced::keyboard::{Key, Modifiers, key::Named};
 use serde::Deserialize;
 use serde::de::{self, MapAccess, Visitor};
+
+use hob_core::Alias;
 
 use crate::keys::{Action, Binding};
 
@@ -29,6 +35,9 @@ pub(crate) struct Config {
     /// Settings of the prompt.
     #[serde(default)]
     pub(crate) prompt: Prompt,
+    /// Command aliases, for the interpreter.
+    #[serde(default)]
+    pub(crate) aliases: Aliases,
 }
 
 /// The `[prompt]` table.
@@ -106,6 +115,57 @@ impl<'de> Deserialize<'de> for Keys {
         }
 
         deserializer.deserialize_map(KeysVisitor)
+    }
+}
+
+/// The `[aliases]` table: names and the lines they stand for.
+#[derive(Debug, Default)]
+pub(crate) struct Aliases(pub(crate) Vec<Alias>);
+
+impl<'de> Deserialize<'de> for Aliases {
+    fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct AliasesVisitor;
+
+        impl<'de> Visitor<'de> for AliasesVisitor {
+            type Value = Aliases;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a table of aliases and command lines")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Aliases, A::Error> {
+                let mut aliases = Vec::new();
+                while let Some(AliasName(name)) = map.next_key()? {
+                    let AliasLine(line) = map.next_value()?;
+                    aliases.push(Alias::new(name, line).expect("checked"));
+                }
+                Ok(Aliases(aliases))
+            }
+        }
+
+        deserializer.deserialize_map(AliasesVisitor)
+    }
+}
+
+/// An alias's name, checked.
+struct AliasName(String);
+
+impl<'de> Deserialize<'de> for AliasName {
+    fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Alias::check_name(&name).map_err(de::Error::custom)?;
+        Ok(AliasName(name))
+    }
+}
+
+/// The line an alias stands for, checked.
+struct AliasLine(String);
+
+impl<'de> Deserialize<'de> for AliasLine {
+    fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let line = String::deserialize(deserializer)?;
+        Alias::check_line(&line).map_err(de::Error::custom)?;
+        Ok(AliasLine(line))
     }
 }
 
@@ -292,6 +352,23 @@ mod tests {
             lookup(&bindings, char_key("+"), Modifiers::CTRL),
             Some(Action::Exit)
         );
+    }
+
+    #[test]
+    fn aliases() {
+        let config = Config::parse("[aliases]\nll = \"ls -l\"\n\"g\" = \"git\"\n").unwrap();
+        let aliases: Vec<_> = (config.aliases.0.iter())
+            .map(|a| (a.name(), a.line()))
+            .collect();
+        assert_eq!(aliases, [("g", "git"), ("ll", "ls -l")]);
+        assert!(Config::parse("").unwrap().aliases.0.is_empty());
+        let error =
+            Config::parse("[keys]\n\n[aliases]\nll = \"ls\"\nx = \"echo 'a\"\n").unwrap_err();
+        assert_eq!(error, ":5: missing closing ' in `echo 'a`");
+        let error = Config::parse("[aliases]\n\"a b\" = \"ls\"\n").unwrap_err();
+        assert!(error.starts_with(":2: the alias name `a b`"), "{error}");
+        let error = Config::parse("[aliases]\nll = 1\n").unwrap_err();
+        assert!(error.starts_with(":2: invalid type"), "{error}");
     }
 
     #[test]

@@ -137,6 +137,7 @@ impl fmt::Debug for Completer {
 pub struct CompletionContext<'a> {
     pub(crate) cwd: &'a Path,
     pub(crate) commands: Vec<&'a str>,
+    pub(crate) aliases: Vec<&'a str>,
 }
 
 impl CompletionContext<'_> {
@@ -148,6 +149,11 @@ impl CompletionContext<'_> {
     /// The names (or prefixes) of all commands, sorted.
     pub fn commands(&self) -> &[&str] {
         &self.commands
+    }
+
+    /// The names of all aliases, sorted.
+    pub fn aliases(&self) -> &[&str] {
+        &self.aliases
     }
 }
 

@@ -74,7 +74,8 @@ when trying the trimming out. The history keeps 10,000 lines.
 
 The window reads a config file (TOML) on start, from the platform's
 config directory (e.g. `~/.config/hob/config.toml`); set `HOB_CONFIG` to
-use another file. It changes key bindings, and how far Ctrl+W deletes:
+use another file. It changes key bindings and how far Ctrl+W deletes,
+and sets command aliases:
 
 ```toml
 [keys]
@@ -83,6 +84,11 @@ use another file. It changes key bindings, and how far Ctrl+W deletes:
 
 [prompt]
 word-chars = "*?_-.[]~=&;!#$%^(){}<>"
+
+[aliases]
+ll = "ls -l"
+gs = "git status"
+ls = "ls -a"               # can extend the command of the same name
 ```
 
 The actions are those of hob-gui's `keys` module: `up`, `down`, `left`,
@@ -96,6 +102,13 @@ is anything but whitespace, as in bash, so `cd foo/bar/` loses the whole
 path. With `word-chars`, a word is letters, digits and those chars, like
 with zsh's `WORDCHARS`: the example above is zsh's default without `/`,
 so Ctrl+W deletes one directory at a time.
+
+An alias stands for the start of a command line, as in a shell: `ll foo`
+runs `ls -l foo`. Only the first word is looked up, and only unquoted, so
+`'ls'` runs the command even with an alias of that name. `help` lists the
+aliases after the commands, and Tab completes them, and after one, the
+arguments of what it stands for. The headless frontend doesn't read the
+config file, so it has no aliases.
 
 Notes are kept in the platform's data directory (e.g.
 `~/.local/share/hob/notes.sqlite`); set `HOB_NOTES` to use another file,

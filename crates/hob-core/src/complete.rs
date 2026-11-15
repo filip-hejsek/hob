@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::{env, fs};
 
+use crate::alias::Aliases;
 use crate::args::{CompletionContext, Expect, Kind, Next};
 use crate::line::{self, Partial, Syntax, Word};
 use crate::{Commands, Run, is_prefix, prefixed};
@@ -86,6 +87,7 @@ impl Candidate {
 /// Completes `line`; programs are looked for in `path` (as in `PATH`).
 pub(crate) fn complete(
     commands: &Commands,
+    aliases: &Aliases,
     cwd: &Path,
     path: Option<&OsStr>,
     line: &str,
@@ -115,10 +117,17 @@ pub(crate) fn complete(
     let typed = partial.word.value.as_str();
     let candidates: Vec<Candidate> = match words.split_first() {
         _ if syntax == Syntax::Sh => sh_candidates(cwd, path, &words, typed),
-        None => (commands.keys())
-            .filter(|name| !is_prefix(name) && name.starts_with(typed))
-            .map(|name| Candidate::word(name))
-            .collect(),
+        None => {
+            let mut names: Vec<&String> = (commands.keys().chain(aliases.keys()))
+                .filter(|name| !is_prefix(name) && name.starts_with(typed))
+                .collect();
+            names.sort();
+            names.dedup();
+            names
+                .into_iter()
+                .map(|name| Candidate::word(name))
+                .collect()
+        }
         Some((name, args)) => {
             let Some(Run::Parsed(spec, _)) = commands.get(&name.value).map(|c| &c.run) else {
                 return unchanged;
@@ -130,6 +139,7 @@ pub(crate) fn complete(
             let ctx = CompletionContext {
                 cwd,
                 commands: commands.keys().map(String::as_str).collect(),
+                aliases: aliases.keys().map(String::as_str).collect(),
             };
             candidates(&expect, &ctx, typed)
         }
@@ -642,7 +652,13 @@ mod tests {
         i.register_sh_prefix("!", "Test", |_, _| Ok(()));
         i.register_prefix("@", "Test", |_, _| Ok(()));
         let path = std::env::join_paths(["bin", "sbin"]).unwrap();
-        super::complete(&i.commands, dir.path(), Some(&path), line)
+        super::complete(
+            &i.commands,
+            &Aliases::default(),
+            dir.path(),
+            Some(&path),
+            line,
+        )
     }
 
     /// Like [`sh_filled`], leaving out the filled-in lines.

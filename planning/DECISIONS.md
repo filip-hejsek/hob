@@ -1067,7 +1067,7 @@ Works like a terminal: a scrollback with the prompt below it.
   notice (and on stderr), as `FILE:LINE: message` from toml's span, and
   the whole file is ignored: defaults rather than half a config. The
   notice isn't saved, since it comes again on every start until fixed.
-- So far the config only has `[keys]`: each entry replaces the binding of
+- `[keys]`: each entry replaces the binding of
   that key (with exactly those modifiers); others keep their defaults, so
   a config only lists changes. Keys are written like `Ctrl+Shift+L`
   (modifiers `Ctrl`, `Shift`, `Alt`, `Super`; a single character, or a
@@ -1084,6 +1084,32 @@ Works like a terminal: a scrollback with the prompt below it.
   between named styles (`"bash"`, `"zsh"`), since zsh's own default
   includes `/` and people tune `WORDCHARS` anyway; and a second action
   (like readline's `unix-filename-rubout`), which covers only `/`.
+- `[aliases]` maps names to the start of a command line (`ll = "ls -l"`),
+  like a shell's aliases. Expansion is in hob-core
+  (`Interpreter::set_aliases`, taking checked `Alias`es), so `help`
+  and completion know them; hob-gui only reads the table and sets them.
+  `set_aliases` takes `&self` (aliases sit behind a mutex) since the shell
+  gets the interpreter in an `Arc`. Rejected: registering aliases as
+  commands, which would give them a spec of their own and no way to
+  complete what they stand for.
+- Only an unquoted first word is an alias, so quoting runs the command
+  (`'ls'`), as in bash. The expansion's own first word is looked up again,
+  but never an alias already expanded on that line, so `ls = "ls -a"`
+  works and loops stop. The line can be a prefix command (`"!git"`). An
+  alias may hide a command; `help NAME` then shows both. Rejected: bash's
+  rule that an alias ending in a space expands the next word too.
+- Alias names follow command names (start with a letter or digit) and
+  can't have whitespace, quotes or backslashes, so a word that matches one
+  is known to be unquoted. A line must split cleanly (no open quote,
+  unless it's a prefix line), so the rest of the line can't join its last
+  word. The config's errors point at the bad name or line, since they're
+  checked while deserializing the key and the value
+  (`Alias::check_name`, `check_line`).
+- Completion expands an alias only once it's finished (a space after it),
+  completes the expanded line, and puts the alias back in the results;
+  before that, aliases are completed like command names.
+- Headless hob reads no config file, so it has no aliases: agents and
+  scripts get the same commands everywhere.
 - The program's name, as shown to the user (e.g. in `exit`'s description
   and the note on interrupted commands), belongs to the interpreter
   (`Interpreter::named`; `new` names it hob), since commands need it too,

@@ -4,7 +4,7 @@
 //! - `exit`: exits hob; if other commands are running, asks first, listing
 //!   them.
 //! - `help [COMMAND]`: lists all commands with their descriptions in a table,
-//!   or shows the full help of one.
+//!   then the aliases, or shows the full help of one.
 //! - `jobs`: lists the other commands still running, oldest first.
 //! - `messages [LEVEL]`: lists the log records the frontend has, oldest
 //!   first, from `LEVEL` up (`info` by default, so `messages debug` lists
@@ -35,7 +35,10 @@ pub fn register(interpreter: &mut Interpreter) {
     interpreter.register_spec("clear", "Clear the scrollback", Spec::new(), clear);
     let exit_description = format!("Exit {}", interpreter.name());
     interpreter.register_spec("exit", exit_description, Spec::new(), exit);
-    let commands = Kind::custom(|ctx| ctx.commands().iter().map(|&c| c.to_owned()).collect());
+    let commands = Kind::custom(|ctx| {
+        let names = ctx.commands().iter().chain(ctx.aliases());
+        names.map(|&c| c.to_owned()).collect()
+    });
     interpreter.register_spec(
         "help",
         "List the commands, or describe one",
@@ -205,14 +208,17 @@ fn exit(ctx: &mut Context, _: &Matches) -> CommandResult {
 fn help(ctx: &mut Context, args: &Matches) -> CommandResult {
     match args.value("COMMAND") {
         None => {
-            let rows =
-                (ctx.commands()).map(|(name, description)| [label(name), label(description)]);
+            let commands =
+                (ctx.commands()).map(|(name, description)| (name, description.to_owned()));
+            let aliases = (ctx.aliases()).map(|(name, line)| (name, format!("Alias for {line}")));
+            let rows = (commands.chain(aliases))
+                .map(|(name, description)| [label(name), label(description)]);
             let table = table_horizontal(rows.collect::<Vec<_>>());
             ctx.print_island(IslandBuilder::new(table).freeze()?);
         }
         Some(name) => match ctx.help(name) {
             Some(help) => ctx.print(help),
-            None => return Err(format!("no command {name:?}").into()),
+            None => return Err(format!("no command or alias {name:?}").into()),
         },
     }
     Ok(())
@@ -317,9 +323,24 @@ mod tests {
         running: Vec<String>,
         outcome: Option<Outcome>,
     ) -> Vec<String> {
+        run_on(&interpreter(), line, records, running, outcome)
+    }
+
+    fn interpreter() -> Interpreter {
         let mut interpreter = Interpreter::new();
         register(&mut interpreter);
         register_shell(&mut interpreter);
+        interpreter
+    }
+
+    /// Like [`run_with`], with `interpreter`.
+    fn run_on(
+        interpreter: &Interpreter,
+        line: &str,
+        records: Vec<LogRecord>,
+        running: Vec<String>,
+        outcome: Option<Outcome>,
+    ) -> Vec<String> {
         let mut requests = interpreter.run(line).unwrap();
         let mut records = Some(records);
         let (mut running, mut outcome) = (Some(running), outcome);
@@ -398,7 +419,35 @@ mod tests {
             run("help help", vec![]),
             ["help — List the commands, or describe one\nusage: help [COMMAND]"]
         );
-        assert_eq!(run("help nope", vec![]), [r#"error: no command "nope""#]);
+        assert_eq!(
+            run("help nope", vec![]),
+            [r#"error: no command or alias "nope""#]
+        );
+    }
+
+    #[test]
+    fn help_lists_and_describes_aliases() {
+        let i = interpreter();
+        let aliases = [("q", "exit"), ("clear", "clear")];
+        i.set_aliases(aliases.map(|(name, line)| crate::Alias::new(name, line).unwrap()));
+        let run = |line| run_on(&i, line, vec![], vec![], None);
+        let table = &run("help")[0];
+        assert!(
+            table.ends_with(
+                "\x20 row\n\
+                 \x20   label \"clear\"\n\
+                 \x20   label \"Alias for clear\"\n\
+                 \x20 row\n\
+                 \x20   label \"q\"\n\
+                 \x20   label \"Alias for exit\"\n"
+            ),
+            "{table}"
+        );
+        assert_eq!(run("help q"), ["q is an alias for exit"]);
+        assert_eq!(
+            run("help clear"),
+            ["clear is an alias for clear\nclear — Clear the scrollback\nusage: clear"]
+        );
     }
 
     #[test]

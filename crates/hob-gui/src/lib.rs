@@ -42,7 +42,8 @@
 //! Other keys keep their default bindings. A `[prompt]` table can set
 //! `word-chars`: the chars that, besides letters and digits, make up a word
 //! for Ctrl+W, like zsh's `WORDCHARS` (without it, words end at whitespace,
-//! as in bash).
+//! as in bash). An `[aliases]` table sets the interpreter's aliases
+//! ([`Interpreter::set_aliases`]), e.g. `ll = "ls -l"`.
 //!
 //! Command lines and output can be selected with the mouse and copied with
 //! Ctrl+C, one printed text or log record at a time.
@@ -655,6 +656,9 @@ impl Shell {
             Ok(config) => {
                 config.apply(&mut self.bindings);
                 self.word_chars = config.prompt.word_chars;
+                if let Some(interpreter) = &self.interpreter {
+                    interpreter.set_aliases(config.aliases.0);
+                }
             }
             Err(e) => {
                 let message = format!("Couldn't read the config file, so using the defaults: {e}");
