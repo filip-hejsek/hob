@@ -28,7 +28,8 @@ use crate::Message;
 ///   both move on to the next field, or after the last one to the island as
 ///   a whole.
 /// - In a radio option: Space selects it; an option's number (`1` to `9`)
-///   or letter selects it and focuses it.
+///   or letter selects it and moves on past the group, to the next field or
+///   else the island as a whole.
 /// - In a text field, checkbox or radio option (not a text area), Up and
 ///   Down focus the previous and next field; Down from the last one focuses
 ///   the island as a whole. Ctrl+Up and Ctrl+Down do the same, also in a
@@ -387,9 +388,11 @@ impl Scope<'_> {
                 else {
                     unreachable!("a radio group has only radio options");
                 };
+                // Past the group, like `y` and `n` in a checkbox.
+                let last = run(&self.fields, field?).end - 1;
                 Some(KeyAction {
                     send: (!selected).then(|| select.clone()),
-                    focus: Some(Focus::Field(option.id.clone())),
+                    focus: Some(next(last)),
                 })
             }
             keyboard::Key::Character(_) if plain && (whole || checkbox.is_some()) => {

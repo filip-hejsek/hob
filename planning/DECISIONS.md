@@ -421,8 +421,11 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   selects, not even when nothing is selected yet: Down into a group lands
   on its first option, so Enter through a form would quietly pick it,
   undoing "none by default". Space selects the focused option; an
-  option's number or letter selects it and focuses it (digits by physical
-  key, as for buttons). While any option has focus, every option shows
+  option's number or letter selects it and moves on past the group, like
+  `y`/`n` in a checkbox (to the next field, or after the last one to the
+  island as a whole), since the choice is made (digits by physical key, as
+  for buttons). Rejected: focusing the selected option (tried first;
+  choosing then took an extra Enter to move on). While any option has focus, every option shows
   its key as a muted hint (`[s]`, `[2]`), with its space always kept, as
   for a checkbox's `[y/n]`; an option without a key has none. A
   `RadioGroup` widget lays out the options, so it can tell whether any

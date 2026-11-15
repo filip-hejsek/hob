@@ -47,7 +47,8 @@
 //! it and move on (after the last field, to the island as a whole; they
 //! never submit); a border and a muted `[y/n]` after its label show it has
 //! focus. In a radio option, Space selects it, and an option's number or
-//! letter selects that option and focuses it; while one of a group's
+//! letter selects that option and moves on past the group, like `y` and
+//! `n`; while one of a group's
 //! options has focus, all of them show their key (the letter, or else the
 //! number). In a field other than a text area, Up and Down move between
 //! fields, and Down from the last one to the island as a whole; Ctrl+Up
@@ -1573,19 +1574,24 @@ mod tests {
         ui.tap_key(Key::Named(Named::Space));
         ui.tap_key(Key::Named(Named::ArrowUp));
         ui.tap_key(Key::Named(Named::Space));
-        // Its number, its letter, and the number of one with a letter.
+        // Its number selects it and moves on to c.
         ui.typewrite("3");
+        ui.tap_key(Key::Named(Named::Space));
+        // Back to the group (to l, its last option): its letter, the number
+        // of one with a letter, and the number row in Czech.
+        ui.tap_key(Key::Named(Named::ArrowUp));
         ui.typewrite("s");
+        ui.tap_key(Key::Named(Named::ArrowUp));
         ui.typewrite("1");
-        // The number row in Czech.
-        ui.simulate(key_events(c("ě"), c("ě"), Code::Digit2, Modifiers::empty()));
-        // Not a key of the group.
+        ui.tap_key(Key::Named(Named::ArrowUp));
+        ui.simulate(key_events(c("š"), c("š"), Code::Digit3, Modifiers::empty()));
+        // Not keys of the group: focus stays on l.
+        ui.tap_key(Key::Named(Named::ArrowUp));
         ui.typewrite("y");
         ui.typewrite("4");
         // Enter skips the group, without selecting.
         ui.tap_key(Key::Named(Named::Enter));
         ui.tap_key(Key::Named(Named::Space));
-        // Back to the group, where the key focused m.
         ui.tap_key(Key::Named(Named::ArrowUp));
         ui.tap_key(Key::Named(Named::Space));
         let messages: Vec<String> = ui.into_messages().map(|m| format!("{m:?}")).collect();
@@ -1595,8 +1601,10 @@ mod tests {
                 r#"Message(Selected("size", "m"))"#,
                 r#"Message(Selected("size", "s"))"#,
                 r#"Message(Selected("size", "l"))"#,
+                r#"Message(Toggled("c", true))"#,
                 r#"Message(Selected("size", "s"))"#,
                 r#"Message(Selected("size", "s"))"#,
+                r#"Message(Selected("size", "l"))"#,
                 r#"Message(Toggled("c", true))"#,
                 r#"Message(Selected("size", "l"))"#,
             ]
@@ -1665,7 +1673,8 @@ mod tests {
             program(form, Focus::Island),
             &[
                 expect("focused: Some(true)"),
-                // It's the group that has focus.
+                // It's the group that has focus; the key moves on to the
+                // island as a whole, where Enter submits.
                 typewrite("3"),
                 press(Key::Enter),
                 expect(r#"outcome: Some("submitted \"\" \"\" r=c")"#),
