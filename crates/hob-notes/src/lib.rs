@@ -159,26 +159,37 @@ pub fn register(interpreter: &mut Interpreter, path: Option<PathBuf>) {
 }
 
 /// Saves a note. The database is opened before asking, so a broken one
-/// doesn't lose what the user typed.
+/// doesn't lose what the user typed. A text that's only a tag (`note todo`)
+/// asks for the note, with the tag in the title.
 fn note(ctx: &mut Context, args: &Matches, db: &mut Db) -> CommandResult {
     let words = args.values("TEXT");
-    let (title, text, categories) = if words.is_empty() {
-        let categories = db.categories()?;
-        match ctx.show(note_island(&categories))? {
-            Outcome::Submitted(fields) => (
-                fields.text("title").to_owned(),
-                fields.text("text").to_owned(),
-                checked(&fields, &categories),
-            ),
-            Outcome::Cancelled | Outcome::Pressed(..) => {
-                ctx.print("Not saved.");
+    let mut title = None;
+    if !words.is_empty() {
+        let note = tag::parse("", &words.join(" "));
+        match note.tag {
+            Some(tag) if note.text.is_empty() => title = Some(tag.name()),
+            _ if note.text.is_empty() => return Err("the note is empty".into()),
+            _ => {
+                let id = db.add(None, &note.text, note.tag, &[])?;
+                ctx.print(format!("Saved note #{id}."));
                 return Ok(());
             }
         }
-    } else {
-        (String::new(), words.join(" "), Vec::new())
+    }
+    let categories = db.categories()?;
+    let mut island = note_island(&categories);
+    if let Some(title) = title {
+        island.set_text("title", title);
+    }
+    let fields = match ctx.show(island)? {
+        Outcome::Submitted(fields) => fields,
+        Outcome::Cancelled | Outcome::Pressed(..) => {
+            ctx.print("Not saved.");
+            return Ok(());
+        }
     };
-    let note = tagged(&title, &text)?;
+    let note = tagged(fields.text("title"), fields.text("text"))?;
+    let categories = checked(&fields, &categories);
     let id = db.add(note.title.as_deref(), &note.text, note.tag, &categories)?;
     ctx.print(format!("Saved note #{id}."));
     Ok(())

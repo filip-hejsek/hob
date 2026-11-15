@@ -682,6 +682,10 @@ from the notes whenever `todo` runs.
   the tag only if the new title starts with one, and keeps the old tag
   otherwise (renaming doesn't untag); a title that's only a tag is
   empty, an error.
+- `note TEXT` where the text is only a tag (`note todo`, `note TODO:`)
+  isn't an error: it shows the note island with the tag (as its name,
+  `todo`) in the title, since the user evidently wants to write a note
+  with that tag. Rejected: an error ("the note is empty"), which it was.
 - Version 3 databases are migrated in Rust: notes that were TODO notes by
   the old rule (title or text starting with the word "todo", followed by
   anything but a letter or digit) get the tag, and it's taken out of the

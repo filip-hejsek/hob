@@ -288,8 +288,14 @@ fn a_tag_is_a_word() {
         run(&hob, &format!("note '{text}'"));
     }
     run(&hob, "title -n 1 Todos");
-    // The tag is taken out, so nothing's left.
-    assert_eq!(run(&hob, "note todo:"), ["error: the note is empty"]);
+    // Only a tag asks for the note, with the tag in the title.
+    for line in ["note todo:", "note TODO"] {
+        let output = run_answering(&hob, line, |island| {
+            assert_eq!(island.fields().text("title"), "todo");
+            island.press("Cancel").unwrap()
+        });
+        assert_eq!(output, ["Not saved."]);
+    }
     // An unnamed TODO note is offered only to do, not also to name.
     let output = run_answering(&hob, "todo", |island| {
         assert_eq!(
