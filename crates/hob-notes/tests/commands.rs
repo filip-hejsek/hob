@@ -130,7 +130,7 @@ fn every_command_has_a_usage_line() {
     assert_eq!(
         usage("notes"),
         "usage: notes [list [--all] [--todo] [-c NAME] \
-         | browse [--all] [--todo] [-c NAME] [ID] | show ID | edit ID | delete [-y] ID \
+         | browse [--all] [--todo] [-c NAME] [ID] | show ID | edit [ID] | delete [-y] ID \
          | reopen ID | categories [list | add NAME... | rename NAME NEW | delete [-y] NAME]]"
     );
 }
@@ -578,6 +578,21 @@ fn notes_edit_changes_a_note() {
     assert_eq!(output, ["Not saved."]);
     assert_eq!(shown(&run(&hob, "notes show 1")).2, "first\nreally");
     assert_eq!(run(&hob, "notes edit 2"), ["error: there's no note #2"]);
+}
+
+#[test]
+fn notes_edit_without_an_id_edits_the_last_note() {
+    let (hob, _dir) = setup();
+    assert_eq!(run(&hob, "notes edit"), ["error: there are no notes yet"]);
+    run(&hob, "note first");
+    run(&hob, "note second");
+    let output = run_answering(&hob, "notes edit", |island| {
+        assert_eq!(island.fields().text("text"), "second");
+        island.type_text("text", "changed").unwrap();
+        island.press("Save").unwrap()
+    });
+    assert_eq!(output, ["Saved note #2."]);
+    assert_eq!(shown(&run(&hob, "notes show 2")).2, "changed");
 }
 
 #[test]

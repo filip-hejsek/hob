@@ -159,7 +159,6 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
 - `note TEXT` only prints "Saved note #ID.". It could show the new note:
   maybe all notes (with a limit), or a frozen island, as if the note had
   been entered interactively.
-- `notes edit` without an ID could edit the last note.
 - `notes browse` could offer editing (or marking done) the note shown;
   a plain button ends the island without saying which note was shown, so
   it'd need the id in a field or a way to read named state at the end.

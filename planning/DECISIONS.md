@@ -635,8 +635,9 @@ from the notes whenever `todo` runs.
   TODO notes with `--todo`; "No notes." if there's nothing to show.
   `notes show ID` prints a heading (`#ID: title`, or `#ID` if unnamed; then
   state, creation time and the time it was done, in local time), then the
-  whole text, as plain output. `notes edit ID` asks with the title field
-  and text area filled in; an empty title makes the note unnamed again.
+  whole text, as plain output. `notes edit [ID]` asks with the title field
+  and text area filled in (without an ID, of the last note, like
+  `title`); an empty title makes the note unnamed again.
   `notes delete [-y] ID` asks first (an island describing the note, a
   danger button "Delete" and Cancel) unless `-y`; deleting is for good.
   `notes reopen ID` makes a done or active TODO note open again.

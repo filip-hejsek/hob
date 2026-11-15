@@ -106,7 +106,11 @@ pub fn register(interpreter: &mut Interpreter, path: Option<PathBuf>) {
             filter().arg("ID", Kind::Text).optional(),
         )
         .subcommand("show", "Show a note in full", id())
-        .subcommand("edit", "Edit a note's title, text and categories", id())
+        .subcommand(
+            "edit",
+            "Edit a note's title, text and categories (the last note's by default)",
+            id().optional(),
+        )
         .subcommand(
             "delete",
             "Delete a note, for good",
@@ -332,14 +336,17 @@ fn notes(ctx: &mut Context, args: &Matches, mut db: Db) -> CommandResult {
             return browse::browse(ctx, db, filter, id);
         }
         "categories" => return categories(ctx, args, &mut db),
+        "edit" => {
+            let note = match args.value("ID") {
+                Some(id) => existing(&db, parse_id(id)?)?,
+                None => db.last()?.ok_or("there are no notes yet")?,
+            };
+            return edit(ctx, &mut db, &note);
+        }
         _ => parse_id(args.value("ID").expect("ID is required"))?,
     };
     match subcommand {
         "show" => show(ctx, &existing(&db, id)?),
-        "edit" => {
-            let note = existing(&db, id)?;
-            edit(ctx, &mut db, &note)
-        }
         "delete" => delete(ctx, &mut db, id, args.flag("yes")),
         "reopen" => reopen(ctx, &mut db, id),
         _ => unreachable!("subcommands are declared"),
