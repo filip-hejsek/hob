@@ -142,7 +142,8 @@ fn every_command_has_a_usage_line() {
     assert_eq!(
         usage("notes"),
         "usage: notes [list [--all] [--todo] [-c NAME] \
-         | browse [--all] [--todo] [-c NAME] [ID] | show ID | edit [ID] | delete [-y] ID \
+         | browse [--all] [--todo] [-c NAME] [ID] \
+         | search [--all] [--todo] [-c NAME] [QUERY...] | show ID | edit [ID] | delete [-y] ID \
          | reopen ID | categories [list | add NAME... | rename NAME NEW | delete [-y] NAME]]"
     );
 }
@@ -636,7 +637,10 @@ fn notes_delete_asks_first() {
         let outline = island.to_string();
         assert!(outline.contains(r#"label "Delete #1: a?""#), "{outline}");
         assert!(outline.contains(r#"label "todo, created "#), "{outline}");
-        assert!(outline.contains(r#"button "Delete" [d] (danger)"#), "{outline}");
+        assert!(
+            outline.contains(r#"button "Delete" [d] (danger)"#),
+            "{outline}"
+        );
         island.press("Cancel").unwrap()
     });
     assert_eq!(output, ["Not deleted."]);
@@ -734,6 +738,129 @@ fn notes_browse_shows_categories() {
         assert!(outline.contains(r#"label "Categories: Work""#), "{outline}");
         island.press("Next").unwrap();
         assert_eq!(browsed(island), "Note 1 of 1 | #1 | a");
+        island.press("Close").unwrap()
+    });
+}
+
+/// What a `notes search` island shows: the count, the results, then the
+/// preview's heading and text, joined with " | ".
+fn searched(island: &Island) -> String {
+    let outline = island.to_string();
+    let mut parts = Vec::new();
+    for line in outline.lines().map(str::trim) {
+        if let Some(text) = line.strip_prefix("label ") {
+            parts.push(text.trim_matches('"').to_owned());
+        } else if let Some(item) = line.strip_prefix("- ") {
+            parts.push(item.trim_matches('"').to_owned());
+        }
+    }
+    // Count, results, heading, details, [categories,] text.
+    let text = parts.pop().unwrap();
+    let details = if parts.last().unwrap().starts_with("Categories") {
+        2
+    } else {
+        1
+    };
+    parts.truncate(parts.len() - details);
+    parts.push(text);
+    parts.join(" | ")
+}
+
+#[test]
+fn notes_search() {
+    let (hob, _dir) = setup();
+    assert_eq!(run(&hob, "notes search"), ["No notes."]);
+    run(&hob, "note buy milk");
+    run(&hob, "note todo: call Ada about the milk");
+    run(&hob, "note Milk run");
+    run(&hob, "title errands");
+    run(&hob, "note paint the fence");
+    run(&hob, "title Milk prices");
+    run(&hob, "note Some");
+    run(&hob, "note more");
+    run(&hob, "note notes");
+    let output = run_answering(&hob, "notes search", |island| {
+        // An empty query: the newest notes, at most 5.
+        assert_eq!(
+            searched(island),
+            "7 notes match; the first 5: | #7: notes | #6: more | #5: Some \
+             | #4: Milk prices | #3: errands | #7 | notes"
+        );
+        // Every word, ignoring case; those with them in the title first.
+        island.type_text("query", "MILK").unwrap();
+        assert_eq!(
+            searched(island),
+            "4 notes match | #4: Milk prices | #3: errands | #2: call Ada about the milk \
+             | #1: buy milk | #4: Milk prices | paint the fence"
+        );
+        island.type_text("query", "milk  ada").unwrap();
+        assert_eq!(
+            searched(island),
+            "1 note matches | #2: call Ada about the milk | #2 \
+             | call Ada about the milk"
+        );
+        island.type_text("query", "cheese").unwrap();
+        assert_eq!(searched(island), "No notes match. |  | ");
+        // Each change searches again, seeing notes changed meanwhile.
+        run(&hob, "note cheese");
+        island.type_text("query", "cheese ").unwrap();
+        assert_eq!(
+            searched(island),
+            "1 note matches | #8: cheese | #8 | cheese"
+        );
+        island.press("Close").unwrap()
+    });
+    // Closing says nothing.
+    assert!(output.is_empty(), "{output:?}");
+
+    // Show prints the top match, as `notes show` does.
+    let output = run_answering(&hob, "notes search fence", |island| {
+        assert_eq!(island.fields().text("query"), "fence");
+        island.press("Show").unwrap()
+    });
+    let (heading, _, text) = shown(&output);
+    assert_eq!(
+        (&heading[..], &text[..]),
+        ("#4: Milk prices", "paint the fence")
+    );
+    let output = run_answering(&hob, "notes search fence", |island| {
+        island.type_text("query", "nothing like it").unwrap();
+        island.press("Show").unwrap()
+    });
+    assert_eq!(output, ["No notes match."]);
+
+    // The filters are those of `notes list`.
+    run(&hob, "done 2");
+    run_answering(&hob, "notes search ada", |island| {
+        assert_eq!(searched(island), "No notes match. |  | ");
+        island.press("Close").unwrap()
+    });
+    run_answering(&hob, "notes search --all --todo", |island| {
+        assert_eq!(
+            searched(island),
+            "1 note matches | #2: call Ada about the milk | #2 \
+             | call Ada about the milk"
+        );
+        let outline = island.to_string();
+        assert!(outline.contains(r#"label "done, created "#), "{outline}");
+        island.press("Close").unwrap()
+    });
+    run(&hob, "notes categories add Home");
+    assert_eq!(
+        run(&hob, "notes search -c home"),
+        ["No notes in category \"Home\"."]
+    );
+    run_answering(&hob, "notes edit 1", |island| {
+        island.set_checked("category-1", true).unwrap();
+        island.press("Save").unwrap()
+    });
+    run_answering(&hob, "notes search -c home", |island| {
+        assert_eq!(
+            searched(island),
+            "1 note matches | #1: buy milk | #1 | buy milk"
+        );
+        let outline = island.to_string();
+        assert!(outline.contains(r#"label "Categories: Home""#), "{outline}");
         island.press("Close").unwrap()
     });
 }

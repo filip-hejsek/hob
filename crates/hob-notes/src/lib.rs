@@ -2,7 +2,7 @@
 //! `notes`.
 //!
 //! Notes are kept in an SQLite database. `note` takes one, `title` names
-//! one, and `notes` lists, browses, shows, edits, deletes or reopens
+//! one, and `notes` lists, browses, searches, shows, edits, deletes or reopens
 //! them, and manages the categories notes can be in. A note can have a tag, written
 //! as the first word of its title (or text); `todo` makes it a TODO note.
 //! TODO items aren't stored: `todo` makes them from the notes each time
@@ -11,6 +11,7 @@
 
 mod browse;
 mod db;
+mod search;
 mod tag;
 mod todo;
 
@@ -104,6 +105,11 @@ pub fn register(interpreter: &mut Interpreter, path: Option<PathBuf>) {
             "browse",
             "Show the notes one at a time, from the newest, or from note ID",
             filter().arg("ID", Kind::Text).optional(),
+        )
+        .subcommand(
+            "search",
+            "Search the notes' titles and texts as you type",
+            filter().arg("QUERY", Kind::Text).optional().repeated(),
         )
         .subcommand("show", "Show a note in full", id())
         .subcommand(
@@ -359,6 +365,11 @@ fn notes(ctx: &mut Context, args: &Matches, mut db: Db) -> CommandResult {
             let id = args.value("ID").map(parse_id).transpose()?;
             return browse::browse(ctx, db, filter, id);
         }
+        "search" => {
+            let filter = Filter::new(&db, args)?;
+            let query = args.values("QUERY").join(" ");
+            return search::search(ctx, db, filter, &query);
+        }
         "categories" => return categories(ctx, args, &mut db),
         "edit" => {
             let note = match args.value("ID") {
@@ -377,7 +388,7 @@ fn notes(ctx: &mut Context, args: &Matches, mut db: Db) -> CommandResult {
     }
 }
 
-/// Which notes `notes list` and `notes browse` show.
+/// Which notes `notes list`, `notes browse` and `notes search` show.
 #[derive(Default)]
 struct Filter {
     /// Done ones too.

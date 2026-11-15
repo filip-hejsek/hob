@@ -608,7 +608,7 @@ named like git's so they're familiar; `!git ...` still runs the real one.
 ## Note commands (hob-notes)
 
 `note` is the quick way to write something down, `todo` and `done` the
-way to work, and `notes` (`list`, `show`, `edit`, `delete`, `reopen`,
+way to work, and `notes` (`list`, `browse`, `search`, `show`, `edit`, `delete`, `reopen`,
 `categories`) manages what's stored. Notes are stored; TODO items aren't, they're made
 from the notes whenever `todo` runs.
 
@@ -747,6 +747,26 @@ from the notes whenever `todo` runs.
   error in an action is shown in the island, since an action can't fail.
   Rejected: reading the notes once (the island stays open a while), and
   ends that don't wrap (buttons can't be disabled).
+- `notes search [--all] [--todo] [-c NAME] [QUERY…]` searches the notes
+  `list` would (same flags) in an island: a search box (filled with the
+  query given), a count ("4 notes match", "…; the first 5:"), a list of up
+  to 5 matches (`describe`d), and a preview of the top one as `browse`
+  shows a note. A note matches if every word of the query is in its title
+  or text, ignoring case; those with every word in the title come first,
+  then the newest. An empty query matches all, so it starts with the
+  newest notes. If the flags leave no notes, it says so (as `list` does)
+  without an island.
+- The search is derived state, so it runs off the UI thread as the user
+  types, and each change reads the notes again (as `browse` does). It
+  runs once per change: a hidden derived `found` holds the matches' ids
+  (as text; `Value` has no number list), and the count, list and preview
+  derive from it, reading the few notes they show by id. Rejected: one
+  derive per widget, each searching (the same search six times).
+- "Show" (submit, so Enter in the search box) prints the top match as
+  `notes show` does, searching again with the final query; with no match
+  it says "No notes match.". "Close" prints nothing. Rejected: picking a
+  result other than the top one (a list's lines can't be clicked; that
+  would need buttons per result).
 
 Rejected:
 
