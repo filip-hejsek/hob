@@ -32,7 +32,7 @@ use crate::Message;
 ///   (without Alt) presses it, and Up (if there are fields) focuses the
 ///   last field.
 /// - A button's key with Alt presses it while the island or one of its
-///   fields has focus.
+///   fields has focus, and Alt+Enter submits.
 ///
 /// An island without fields can have focus as a whole: like a text field, it
 /// gets it when clicked or through iced's focus operations (with its own
@@ -180,6 +180,9 @@ impl Scope<'_> {
             keyboard::Key::Character(_) if alt && (whole || field.is_some()) => {
                 let letter = key.to_latin(physical_key)?.to_ascii_lowercase();
                 self.press(ButtonKey { letter, alt: true })
+            }
+            keyboard::Key::Named(key::Named::Enter) if alt && (whole || field.is_some()) => {
+                self.submit.clone().map(KeyAction::send)
             }
             _ if alt => None,
             keyboard::Key::Named(key::Named::Escape) if plain && (whole || field.is_some()) => {

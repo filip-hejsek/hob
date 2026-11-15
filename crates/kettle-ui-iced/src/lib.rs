@@ -50,7 +50,8 @@
 //! (if there's a cancel button). While the island as a whole has focus,
 //! Enter submits and a button's key (see
 //! [`ButtonKey`]) presses it; a key with Alt
-//! presses it also while one of the island's fields has focus.
+//! presses it also while one of the island's fields has focus, and
+//! Alt+Enter submits from any field.
 //!
 //! [`render_png`] renders an island offscreen, without a window; the
 //! `kettle-render` binary does the same for an island saved as JSON.
@@ -1071,9 +1072,8 @@ mod tests {
             ui.click(a).unwrap();
             // Plain letters are typed.
             ui.typewrite("c");
-            // No button has it, and Alt+Enter isn't Enter.
+            // No button has it.
             ui.simulate(alt(Key::Character("x".into()), Code::KeyX));
-            ui.simulate(alt(Named::Enter, Code::Enter));
             ui.simulate(alt(Key::Character("o".into()), Code::KeyO));
             // In another layout, the key at the same place.
             ui.simulate(alt(Key::Character("с".into()), Code::KeyC));
@@ -1089,6 +1089,26 @@ mod tests {
                 "Message(Cancel)",
             ]
         );
+    }
+
+    #[test]
+    fn alt_enter_submits_from_any_field() {
+        use iced::keyboard::{key::Code, key::Named};
+
+        let island = notes();
+        let fields = [island.field_id("a").unwrap(), island.field_id("b").unwrap()];
+        let messages: Vec<String> = {
+            let mut ui = simulator(island.view());
+            // Without focus, nothing.
+            ui.simulate(alt(Named::Enter, Code::Enter));
+            // From the first of two fields, and from a text area.
+            for id in fields {
+                ui.click(id).unwrap();
+                ui.simulate(alt(Named::Enter, Code::Enter));
+            }
+            ui.into_messages().map(|m| format!("{m:?}")).collect()
+        };
+        assert_eq!(messages, ["Message(Submit)", "Message(Submit)"]);
     }
 
     #[test]

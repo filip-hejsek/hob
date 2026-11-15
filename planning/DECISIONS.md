@@ -320,8 +320,9 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   focus, as in iced); a button's key presses it while the island has
   focus as a whole, and a key with Alt while the island or one of its
   fields has focus. Alt keys are matched by `Key::to_latin`, so they work
-  with non-Latin layouts too; Alt with other keys does nothing (Alt+Enter
-  isn't Enter). Rejected: handling these in the host through a subscription; by
+  with non-Latin layouts too. Alt+Enter submits from any field (or the
+  island as a whole), skipping the fields after it, also in a text area;
+  Alt with other keys does nothing. Rejected: handling these in the host through a subscription; by
   then a text input has already handled Escape (it unfocuses), so the host
   can't tell which island had focus.
 - An island without fields can have focus as a whole: the wrapper is
