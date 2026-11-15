@@ -308,15 +308,18 @@ impl ButtonLabel {
         }
     }
 
-    /// Sets the key that presses the button: `letter` alone.
-    pub fn key(mut self, letter: char) -> Self {
-        self.key = Some(ButtonKey { letter, alt: false });
+    /// Sets the key that presses the button: `c` alone.
+    pub fn key(mut self, c: char) -> Self {
+        self.key = Some(ButtonKey {
+            char: c,
+            alt: false,
+        });
         self
     }
 
-    /// Sets the key that presses the button: Alt and `letter`.
-    pub fn alt_key(mut self, letter: char) -> Self {
-        self.key = Some(ButtonKey { letter, alt: true });
+    /// Sets the key that presses the button: Alt and `c`.
+    pub fn alt_key(mut self, c: char) -> Self {
+        self.key = Some(ButtonKey { char: c, alt: true });
         self
     }
 }
@@ -335,14 +338,15 @@ impl From<&'static str> for ButtonLabel {
     }
 }
 
-/// A key that presses a button: a lowercase ASCII letter, alone or with
-/// Alt. The two are separate keys: `y` and Alt+Y can press different
-/// buttons.
+/// A key that presses a button: a lowercase ASCII letter or a digit, alone
+/// or with Alt. The two are separate keys: `y` and Alt+Y can press
+/// different buttons. A digit is pressed with the number row (also in
+/// layouts where typing it needs Shift) or the numpad.
 ///
-/// A letter alone works while the island has focus as a whole: in an
+/// A key alone works while the island has focus as a whole: in an
 /// island without fields, or after its last checkbox; an island with text
-/// fields, which take typed letters, can't have such keys. Alt and the
-/// letter work also while one of the island's fields has focus. Backends
+/// fields, which take typed characters, can't have such keys. Alt and the
+/// key work also while one of the island's fields has focus. Backends
 /// may differ. No two buttons of an island can have the same key (see
 /// [`IslandBuilder::build`](crate::IslandBuilder::build)).
 ///
@@ -350,8 +354,8 @@ impl From<&'static str> for ButtonLabel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
 pub struct ButtonKey {
-    /// The letter.
-    pub letter: char,
+    /// The lowercase ASCII letter or digit.
+    pub char: char,
     /// Whether Alt must be held too.
     pub alt: bool,
 }
@@ -361,12 +365,12 @@ impl fmt::Display for ButtonKey {
         if self.alt {
             f.write_str("Alt+")?;
         }
-        write!(f, "{}", self.letter)
+        write!(f, "{}", self.char)
     }
 }
 
 /// Parses one character, maybe after `Alt+`. Whether it's a lowercase
-/// letter is checked by [`IslandBuilder::build`](crate::IslandBuilder::build).
+/// letter or a digit is checked by [`IslandBuilder::build`](crate::IslandBuilder::build).
 impl FromStr for ButtonKey {
     type Err = String;
 
@@ -377,7 +381,7 @@ impl FromStr for ButtonKey {
         };
         let mut chars = rest.chars();
         match (chars.next(), chars.next()) {
-            (Some(letter), None) => Ok(ButtonKey { letter, alt }),
+            (Some(char), None) => Ok(ButtonKey { char, alt }),
             _ => Err(format!("{s:?} isn't a button key")),
         }
     }
@@ -597,7 +601,7 @@ mod tests {
     #[test]
     fn button_keys_in_json() {
         let alt = ButtonKey {
-            letter: 'y',
+            char: 'y',
             alt: true,
         };
         assert_eq!(serde_json::to_string(&alt).unwrap(), r#""Alt+y""#);
@@ -605,7 +609,7 @@ mod tests {
         assert_eq!(
             plain,
             ButtonKey {
-                letter: 'y',
+                char: 'y',
                 alt: false
             }
         );

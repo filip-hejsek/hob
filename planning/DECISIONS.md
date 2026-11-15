@@ -79,8 +79,8 @@ Known bugs are in BUGS.md.
   it). Showing and hiding doesn't change the tree's shape, and a hidden
   field keeps its value. Rejected: hiding labels by setting them to `""`
   (still works, but implicit and only for labels).
-- Buttons can have a key (`ButtonKey`): a lowercase ASCII letter, alone
-  or with Alt, shown as ` [y]` or ` [Alt+y]` after the label, like in
+- Buttons can have a key (`ButtonKey`): a lowercase ASCII letter or a
+  digit, alone or with Alt, shown as ` [y]` or ` [Alt+y]` after the label, like in
   terminal prompts. A key with Alt and the same letter alone are separate
   keys, which can press different buttons. A fixed label gives the key at
   its end (`submit_button("Yes [y]")`, `"Yes [Alt+y]"`, via
@@ -88,9 +88,9 @@ Known bugs are in BUGS.md.
   `ButtonLabel::new(text).key('y')` (or `.alt_key('y')`), which parses
   nothing; `String` isn't accepted, to discourage parsing runtime data (it
   can't be forbidden). A fixed label ending in a bracketed key also needs
-  the builder. `build` rejects keys whose letter isn't lowercase, duplicate
-  keys, and keys without Alt in an island with text fields, which take
-  typed letters. A key alone works while the island as a whole has focus;
+  the builder. `build` rejects keys that aren't a lowercase letter or a
+  digit, duplicate keys, and keys without Alt in an island with text
+  fields, which take typed characters. A key alone works while the island as a whole has focus;
   with Alt, also while one of its fields has focus. The key is a separate
   field of the tree (`key`: `"y"` or `"Alt+y"`, left out when absent), so
   headless clients get it as data, and islands saved before Alt keys
@@ -100,6 +100,16 @@ Known bugs are in BUGS.md.
   the letter alone (the user wants them to be independent bindings);
   `key` and `alt` as two fields in JSON (a string is shorter, and old
   islands have just the letter).
+- In kettle-ui-iced, a digit key is matched by the physical key, so it
+  works in layouts whose number row types other characters (Czech `ě`,
+  French `&`): the number row key presses it alone, and with Shift only if
+  that types the digit (so in English, Shift+1 (`!`) isn't `1`); a numpad
+  key presses it if it types the digit (Num Lock on), and otherwise stays
+  an arrow. Checked in a real session with Czech, English and French
+  layouts (wayvnc `-k`, keysyms sent with vncdotool). Rejected: matching
+  only the typed character (layouts that need Shift for digits would need
+  Shift+key, and Alt+digit wouldn't work there); ignoring Shift on the
+  number row altogether (Shift+1 in English would press `[1]`).
 - Besides submit and cancel buttons there's a plain `button(id, label)`:
   the island reports `Outcome::Pressed(id, fields)`. Enter never presses
   it (only a submit button), so a confirmation of a dangerous action must

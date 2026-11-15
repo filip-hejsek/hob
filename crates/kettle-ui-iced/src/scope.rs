@@ -192,16 +192,22 @@ impl Scope<'_> {
         Focus::Field(last.unwrap_or(&self.fields[field].id).clone())
     }
 
-    /// What pressing `key` (at `physical_key`) with `modifiers` does, if
-    /// anything, while `field` has focus.
+    /// What pressing `key` (at `physical_key`, a button key's `digit` if
+    /// any) with `modifiers` does, if anything, while `field` has focus.
     fn key_action(
         &mut self,
         tree: &Tree,
         field: Option<usize>,
         key: &keyboard::Key,
         physical_key: key::Physical,
+        digit: Option<char>,
         modifiers: keyboard::Modifiers,
     ) -> Option<KeyAction> {
+        // Shift may be how the layout types the digit.
+        let modifiers = match digit {
+            Some(_) => modifiers.difference(keyboard::Modifiers::SHIFT),
+            None => modifiers,
+        };
         let plain = modifiers.is_empty();
         let alt = modifiers == keyboard::Modifiers::ALT;
         if !plain && !alt && modifiers != keyboard::Modifiers::COMMAND {
@@ -230,8 +236,11 @@ impl Scope<'_> {
         match key.as_ref() {
             // Like other Alt shortcuts, it works with any keyboard layout.
             keyboard::Key::Character(_) if alt && (whole || field.is_some()) => {
-                let letter = key.to_latin(physical_key)?.to_ascii_lowercase();
-                self.press(ButtonKey { letter, alt: true })
+                let char = match digit {
+                    Some(digit) => digit,
+                    None => key.to_latin(physical_key)?.to_ascii_lowercase(),
+                };
+                self.press(ButtonKey { char, alt: true })
             }
             keyboard::Key::Named(key::Named::Enter) if alt && (whole || field.is_some()) => {
                 self.submit.clone().map(KeyAction::send)
@@ -319,7 +328,7 @@ impl Scope<'_> {
                     });
                 }
                 self.press(ButtonKey {
-                    letter: c,
+                    char: digit.unwrap_or(c),
                     alt: false,
                 })
             }
@@ -332,6 +341,53 @@ impl Scope<'_> {
         let (_, message) = self.keys.iter().find(|(k, _)| *k == key)?;
         Some(KeyAction::send(message.clone()))
     }
+}
+
+/// The digit that a key press stands for as a button key: a key of the
+/// number row, whatever the layout types there (but with Shift only if that
+/// types the digit), or of the numpad, if it types the digit (with Num
+/// Lock on).
+fn digit(
+    modified_key: &keyboard::Key,
+    physical_key: key::Physical,
+    modifiers: keyboard::Modifiers,
+) -> Option<char> {
+    use key::Code;
+    const ROW: [Code; 10] = [
+        Code::Digit0,
+        Code::Digit1,
+        Code::Digit2,
+        Code::Digit3,
+        Code::Digit4,
+        Code::Digit5,
+        Code::Digit6,
+        Code::Digit7,
+        Code::Digit8,
+        Code::Digit9,
+    ];
+    const NUMPAD: [Code; 10] = [
+        Code::Numpad0,
+        Code::Numpad1,
+        Code::Numpad2,
+        Code::Numpad3,
+        Code::Numpad4,
+        Code::Numpad5,
+        Code::Numpad6,
+        Code::Numpad7,
+        Code::Numpad8,
+        Code::Numpad9,
+    ];
+    let key::Physical::Code(code) = physical_key else {
+        return None;
+    };
+    let (i, numpad) = match ROW.iter().position(|&c| c == code) {
+        Some(i) => (i, false),
+        None => (NUMPAD.iter().position(|&c| c == code)?, true),
+    };
+    let digit = char::from_digit(i as u32, 10)?;
+    let typed =
+        matches!(modified_key.as_ref(), keyboard::Key::Character(c) if c.chars().eq([digit]));
+    (typed || !numpad && !modifiers.shift()).then_some(digit)
 }
 
 impl Widget<Message, Theme, Renderer> for Scope<'_> {
@@ -459,9 +515,11 @@ impl Widget<Message, Theme, Renderer> for Scope<'_> {
                     (keyboard::Key::Named(_), keyboard::Key::Character(_)) => modified_key,
                     _ => key,
                 };
+                let digit = digit(modified_key, *physical_key, *modifiers);
                 // Before any key moves focus away from it.
                 let field = self.focused_field(tree, child(layout), renderer);
-                if let Some(action) = self.key_action(tree, field, key, *physical_key, *modifiers) {
+                let action = self.key_action(tree, field, key, *physical_key, digit, *modifiers);
+                if let Some(action) = action {
                     if let Some(message) = action.send {
                         shell.publish(message);
                     }

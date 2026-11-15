@@ -1032,14 +1032,25 @@ mod tests {
         key: impl Into<iced::keyboard::Key>,
         code: iced::keyboard::key::Code,
     ) -> Vec<iced::Event> {
-        use iced::keyboard::{self, Location, Modifiers, key::Physical};
         let key = key.into();
-        let modifiers = Modifiers::ALT;
+        key_events(key.clone(), key, code, iced::keyboard::Modifiers::ALT)
+    }
+
+    /// The events of pressing and releasing the physical key `code` with
+    /// `modifiers`: `key` without them, `modified_key` with them.
+    fn key_events(
+        key: iced::keyboard::Key,
+        modified_key: iced::keyboard::Key,
+        code: iced::keyboard::key::Code,
+        modifiers: iced::keyboard::Modifiers,
+    ) -> Vec<iced::Event> {
+        use iced::keyboard::{self, Location, key::Physical};
+        // Unused, so not set right for the numpad.
         let location = Location::Standard;
         vec![
             iced::Event::Keyboard(keyboard::Event::KeyPressed {
                 key: key.clone(),
-                modified_key: key.clone(),
+                modified_key: modified_key.clone(),
                 physical_key: Physical::Code(code),
                 location,
                 modifiers,
@@ -1047,13 +1058,65 @@ mod tests {
                 repeat: false,
             }),
             iced::Event::Keyboard(keyboard::Event::KeyReleased {
-                key: key.clone(),
-                modified_key: key,
+                key,
+                modified_key,
                 physical_key: Physical::Code(code),
                 location,
                 modifiers,
             }),
         ]
+    }
+
+    #[test]
+    fn digit_keys_work_from_the_number_row_and_numpad() {
+        use iced::keyboard::key::{Code, Named};
+        use iced::keyboard::{Key, Modifiers};
+
+        let builder = IslandBuilder::new(column([
+            label("Pick"),
+            row((1..=6).map(|i| {
+                let label = kettle_ui::widget::ButtonLabel::new(i.to_string());
+                let digit = char::from_digit(i, 10).unwrap();
+                let label = if i <= 4 {
+                    label.key(digit)
+                } else {
+                    label.alt_key(digit)
+                };
+                kettle_ui::widget::button(&i.to_string(), label)
+            })),
+        ]));
+        let island = Island::new(builder).unwrap().0;
+        let c = |s: &str| Key::Character(s.into());
+        let none = Modifiers::empty();
+        let messages: Vec<String> = {
+            let mut ui = simulator(island.view());
+            ui.click("Pick").unwrap();
+            // The number row, typing the digit.
+            ui.simulate(key_events(c("1"), c("1"), Code::Digit1, none));
+            // In Czech, the row types letters, and digits with Shift: both
+            // work.
+            ui.simulate(key_events(c("ě"), c("ě"), Code::Digit2, none));
+            ui.simulate(key_events(c("š"), c("3"), Code::Digit3, Modifiers::SHIFT));
+            // In English, Shift+1 types "!": nothing.
+            ui.simulate(key_events(c("1"), c("!"), Code::Digit1, Modifiers::SHIFT));
+            // The numpad, with Num Lock on, and off (just Left).
+            let left = Key::Named(Named::ArrowLeft);
+            ui.simulate(key_events(left.clone(), c("4"), Code::Numpad4, none));
+            ui.simulate(key_events(left.clone(), left, Code::Numpad4, none));
+            // With Alt, the same.
+            ui.simulate(alt(c("ř"), Code::Digit5));
+            ui.simulate(key_events(
+                Key::Named(Named::ArrowRight),
+                c("6"),
+                Code::Numpad6,
+                Modifiers::ALT,
+            ));
+            ui.into_messages().map(|m| format!("{m:?}")).collect()
+        };
+        assert_eq!(
+            messages,
+            ["1", "2", "3", "4", "5", "6"].map(|id| format!(r#"Message(Press("{id}"))"#))
+        );
     }
 
     #[test]

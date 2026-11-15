@@ -100,12 +100,13 @@ pub enum Error {
     /// [`IslandBuilder::set_checked`] targets a form element that isn't a
     /// checkbox.
     NotACheckbox(String),
-    /// A button's key isn't a lowercase ASCII letter (maybe with Alt).
+    /// A button's key isn't a lowercase ASCII letter or a digit (maybe with
+    /// Alt).
     InvalidKey(widget::ButtonKey),
     /// Two buttons have the same key.
     DuplicateKey(widget::ButtonKey),
     /// A button has a key without Alt, but the island has text fields,
-    /// which take typed letters.
+    /// which take typed characters.
     KeyWithTextField(char),
     /// An [`action_button`](widget::action_button) has an id that no
     /// [`IslandBuilder::action`] has.
@@ -133,7 +134,10 @@ impl fmt::Display for Error {
             Error::NotATextField(id) => write!(f, "form element {id:?} is not a text field"),
             Error::NotACheckbox(id) => write!(f, "form element {id:?} is not a checkbox"),
             Error::InvalidKey(key) => {
-                write!(f, "button key {key} isn't a lowercase ASCII letter")
+                write!(
+                    f,
+                    "button key {key} isn't a lowercase ASCII letter or a digit"
+                )
             }
             Error::DuplicateKey(key) => write!(f, "several buttons have the key {key}"),
             Error::KeyWithTextField(key) => write!(
@@ -654,14 +658,14 @@ fn check_keys(root: &Widget, fields: &Fields) -> Result<(), Error> {
     widget::keys(root, &mut |key, _| keys.push(key));
     let has_text_field = fields.0.values().any(|f| matches!(f, Field::Text(_)));
     for (i, &key) in keys.iter().enumerate() {
-        if !key.letter.is_ascii_lowercase() {
+        if !(key.char.is_ascii_lowercase() || key.char.is_ascii_digit()) {
             return Err(Error::InvalidKey(key));
         }
         if keys[..i].contains(&key) {
             return Err(Error::DuplicateKey(key));
         }
         if has_text_field && !key.alt {
-            return Err(Error::KeyWithTextField(key.letter));
+            return Err(Error::KeyWithTextField(key.char));
         }
     }
     Ok(())
@@ -799,19 +803,26 @@ mod tests {
         assert!(keys(row([submit_button("Yes [y]"), cancel_button("No [n]")])).is_ok());
         assert!(matches!(
             keys(row([submit_button("A [a]"), cancel_button("B [a]")])),
-            Err(Error::DuplicateKey(k)) if k.letter == 'a' && !k.alt
+            Err(Error::DuplicateKey(k)) if k.char == 'a' && !k.alt
         ));
         assert!(matches!(
             keys(row([submit_button("A [Alt+a]"), cancel_button("B [Alt+a]")])),
-            Err(Error::DuplicateKey(k)) if k.letter == 'a' && k.alt
+            Err(Error::DuplicateKey(k)) if k.char == 'a' && k.alt
         ));
         // A key with Alt and without are different keys.
         assert!(keys(row([submit_button("A [a]"), cancel_button("B [Alt+a]")])).is_ok());
-        for key in ['Y', '1', 'é'] {
+        assert!(
+            keys(row([
+                submit_button("One [1]"),
+                cancel_button("Two [Alt+2]")
+            ]))
+            .is_ok()
+        );
+        for key in ['Y', 'é', '٣', '!'] {
             let label = widget::ButtonLabel::new("A").alt_key(key);
             assert!(matches!(
                 keys(submit_button(label)),
-                Err(Error::InvalidKey(k)) if k.letter == key && k.alt
+                Err(Error::InvalidKey(k)) if k.char == key && k.alt
             ));
         }
         // Text fields take plain letters, so keys there need Alt.
