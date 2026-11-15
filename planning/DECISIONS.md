@@ -218,6 +218,12 @@ conditional reads must be over-declared.
   sees the same (hidden or shown) value. Rejected: a dedicated error widget
   (a label does the job), and a per-field error slot (cross-field checks
   wouldn't fit).
+- An island validates what its command would reject (e.g. a note without
+  text, a title that's only a tag), so a mistake keeps the island open
+  with what was typed instead of failing the command. The command still
+  checks too, since its arguments can give the same values. An island
+  that validates has a cancel button, so it can be closed without valid
+  values.
 - Only a submit button validates; cancel and plain buttons don't, since
   they often mean "not this" (e.g. Delete).
 - The model, not the backend, decides when a submit goes through

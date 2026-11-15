@@ -198,14 +198,22 @@ fn title(ctx: &mut Context, args: &Matches, mut db: Db) -> CommandResult {
     }
 }
 
-/// Asks for a note's name, showing the old one to edit.
+/// Asks for a note's name, showing the old one to edit. It can't be
+/// submitted without one (once the tag is taken out).
 fn ask_title(ctx: &mut Context, db: &mut Db, note: &Note) -> CommandResult {
     let mut island = IslandBuilder::new(column([
         label(format!("Name {}", describe(note))),
         text_field("title", "Title"),
+        label(kettle_ui::widget::state("error")),
         row([submit_button("Save"), cancel_button("Cancel")]),
     ]));
     island.set_text("title", note.title.as_deref().unwrap_or(""));
+    island.validate("error", |f| {
+        untagged_title(f.text("title"))
+            .1
+            .is_empty()
+            .then(|| "The title is empty.".into())
+    });
     match ctx.show(island)? {
         Outcome::Submitted(fields) => set_title(ctx, db, note.id, fields.text("title"), deleted),
         Outcome::Cancelled | Outcome::Pressed(..) => {
@@ -224,11 +232,7 @@ fn set_title(
     title: &str,
     missing: fn(i64) -> String,
 ) -> CommandResult {
-    let title = title.trim();
-    let (tag, title) = match tag::split(title) {
-        Some((tag, title)) => (Some(tag), title),
-        None => (None, title),
-    };
+    let (tag, title) = untagged_title(title);
     if title.is_empty() {
         return Err("the title is empty".into());
     }
@@ -241,6 +245,15 @@ fn set_title(
     })?;
     ctx.print(format!("Named note #{id}: {title}"));
     Ok(())
+}
+
+/// A title as `title` sets it: trimmed, with its tag, if any, taken out.
+fn untagged_title(title: &str) -> (Option<tag::Tag>, &str) {
+    let title = title.trim();
+    match tag::split(title) {
+        Some((tag, title)) => (Some(tag), title),
+        None => (None, title),
+    }
 }
 
 /// Offers a few TODO items; acts on the one picked.
@@ -485,11 +498,13 @@ fn edit(ctx: &mut Context, db: &mut Db, note: &Note) -> CommandResult {
 }
 
 /// The island that asks for a note: title, text, and a checkbox for each
-/// category.
+/// category. It can't be submitted without text (once the tag is taken
+/// out).
 fn note_island(categories: &[Category]) -> IslandBuilder {
     let mut children = vec![
         text_field("title", "Title (optional)"),
         text_area("text", "Note"),
+        label(kettle_ui::widget::state("error")),
     ];
     if !categories.is_empty() {
         children.push(label("Categories:"));
@@ -498,7 +513,12 @@ fn note_island(categories: &[Category]) -> IslandBuilder {
         }
     }
     children.push(row([submit_button("Save"), cancel_button("Cancel")]));
-    IslandBuilder::new(column(children))
+    let mut island = IslandBuilder::new(column(children));
+    island.validate("error", |f| {
+        let note = tag::parse(f.text("title"), f.text("text"));
+        note.text.is_empty().then(|| "The note is empty.".into())
+    });
+    island
 }
 
 /// The id of a category's checkbox. Not its name, which may be anything.

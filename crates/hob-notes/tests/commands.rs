@@ -4,7 +4,7 @@
 use futures_executor::{BlockingStream, block_on_stream};
 use hob_core::{Interpreter, Request, Requests};
 use kettle_ui::Outcome;
-use kettle_ui_headless::{Island, outline};
+use kettle_ui_headless::{ActionError, Island, outline};
 use tempfile::TempDir;
 
 /// An interpreter with the note commands and an empty database.
@@ -59,6 +59,18 @@ fn run_answering(
     let mut requests = start(interpreter, line);
     answer(&mut requests, answer_with);
     rest(requests)
+}
+
+/// Checks that pressing Save doesn't submit the island, and that it shows
+/// `error`.
+fn assert_invalid(island: &mut Island, error: &str) {
+    let result = island.press("Save");
+    assert_eq!(
+        result.unwrap_err(),
+        ActionError::Invalid(vec![error.to_owned()])
+    );
+    let label = format!("label {error:?}");
+    assert!(island.to_string().contains(&label), "{island}");
 }
 
 /// Notes as `notes list` shows them: `#ID state title` per row.
@@ -147,11 +159,17 @@ fn note_asks_for_text() {
     let output = run_answering(&hob, "note", |island| island.press("Cancel").unwrap());
     assert_eq!(output, ["Not saved."]);
 
+    // Without text, it can't be saved; the island says why.
     let output = run_answering(&hob, "note", |island| {
         island.type_text("title", "nothing").unwrap();
-        island.press("Save").unwrap()
+        assert_invalid(island, "The note is empty.");
+        // Only a tag isn't enough either.
+        island.type_text("title", "").unwrap();
+        island.type_text("text", " todo: ").unwrap();
+        assert_invalid(island, "The note is empty.");
+        island.press("Cancel").unwrap()
     });
-    assert_eq!(output, ["error: the note is empty"]);
+    assert_eq!(output, ["Not saved."]);
 
     // The text was trimmed; the title island shows its first line.
     let output = run_answering(&hob, "title", |island| {
@@ -161,6 +179,9 @@ fn note_asks_for_text() {
                 .contains(r#"label "Name #1: first line…""#),
             "{island}"
         );
+        assert_invalid(island, "The title is empty.");
+        island.type_text("title", "todo:").unwrap();
+        assert_invalid(island, "The title is empty.");
         island.type_text("title", "Lines").unwrap();
         island.press("Save").unwrap()
     });
@@ -568,9 +589,10 @@ fn notes_edit_changes_a_note() {
 
     let output = run_answering(&hob, "notes edit 1", |island| {
         island.type_text("text", "  ").unwrap();
-        island.press("Save").unwrap()
+        assert_invalid(island, "The note is empty.");
+        island.press("Cancel").unwrap()
     });
-    assert_eq!(output, ["error: the note is empty"]);
+    assert_eq!(output, ["Not saved."]);
     let output = run_answering(&hob, "notes edit 1", |island| {
         island.type_text("text", "changed").unwrap();
         island.press("Cancel").unwrap()

@@ -137,6 +137,26 @@ fn pizza_can_be_cancelled() {
 }
 
 #[test]
+fn swatch_takes_only_a_color() {
+    let mut requests = run("swatch");
+    answer(&mut requests, |island| {
+        island.type_text("color", "orange").unwrap();
+        let error = island.press("OK").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "not submitted: Enter a color, like #ff8800."
+        );
+        island.type_text("color", " #ff8800").unwrap();
+        island.press("OK").unwrap()
+    });
+    assert_eq!(rest(requests), ["Color: #ff8800"]);
+
+    let mut requests = run("swatch");
+    answer(&mut requests, |island| island.press("Cancel").unwrap());
+    assert!(rest(requests).is_empty());
+}
+
+#[test]
 fn view_saves_images_as_asked() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("red.png");

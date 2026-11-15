@@ -271,13 +271,17 @@ fn view(ctx: &mut Context, args: &Matches) -> CommandResult {
 }
 
 /// Shows a swatch of the color typed, made as the user types: an image in
-/// derived state.
+/// derived state. Only a valid color can be submitted.
 fn swatch(ctx: &mut Context, _: &Matches) -> CommandResult {
     let mut b = IslandBuilder::new(column([
         text_field("color", "A color, like #ff8800"),
         image("swatch"),
-        submit_button("OK"),
+        label(state("error")),
+        row([submit_button("OK"), cancel_button("Cancel")]),
     ]));
+    b.validate("error", |f| {
+        (parse_color(f.text("color")).is_none()).then(|| "Enter a color, like #ff8800.".into())
+    });
     b.derive("swatch", |f| {
         let color = f.text("color");
         let Some([r, g, b]) = parse_color(color) else {
@@ -290,7 +294,7 @@ fn swatch(ctx: &mut Context, _: &Matches) -> CommandResult {
         }
     });
     if let Outcome::Submitted(fields) = ctx.show(b)? {
-        ctx.print(format!("Color: {}", fields.text("color")));
+        ctx.print(format!("Color: {}", fields.text("color").trim()));
     }
     Ok(())
 }
