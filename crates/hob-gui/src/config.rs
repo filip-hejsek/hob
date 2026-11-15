@@ -1,10 +1,13 @@
-//! The config file: TOML, read once when the shell starts. So far it only
-//! has key bindings, which change the defaults:
+//! The config file: TOML, read once when the shell starts. It has key
+//! bindings, which change the defaults, and prompt settings:
 //!
 //! ```toml
 //! [keys]
 //! "Ctrl+Shift+L" = "clear"
 //! "Ctrl+L" = false         # unbinds it
+//!
+//! [prompt]
+//! word-chars = "_-."       # words for Ctrl+W, like zsh's WORDCHARS
 //! ```
 
 use std::fmt;
@@ -23,6 +26,19 @@ pub(crate) struct Config {
     /// Key bindings that replace or remove the default ones, in order.
     #[serde(default)]
     keys: Keys,
+    /// Settings of the prompt.
+    #[serde(default)]
+    pub(crate) prompt: Prompt,
+}
+
+/// The `[prompt]` table.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(crate) struct Prompt {
+    /// The chars that, besides letters and digits, make up a word for
+    /// `delete-word-before`, like zsh's `WORDCHARS`. Without it, a word is
+    /// anything but whitespace, as in bash.
+    pub(crate) word_chars: Option<String>,
 }
 
 impl Config {
@@ -227,6 +243,18 @@ mod tests {
         assert_eq!(
             lookup(&bindings, char_key("l"), Modifiers::CTRL),
             Some(Action::Clear)
+        );
+    }
+
+    #[test]
+    fn prompt_word_chars() {
+        assert_eq!(Config::parse("").unwrap().prompt.word_chars, None);
+        let config = Config::parse("[prompt]\nword-chars = \"_-\"\n").unwrap();
+        assert_eq!(config.prompt.word_chars.as_deref(), Some("_-"));
+        let error = Config::parse("[prompt]\nword_chars = \"_\"\n").unwrap_err();
+        assert!(
+            error.starts_with(":2: unknown field `word_chars`"),
+            "{error}"
         );
     }
 

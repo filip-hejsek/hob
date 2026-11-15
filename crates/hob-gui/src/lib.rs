@@ -36,11 +36,13 @@
 //! The config file ([`GuiConfig::config_file`]) is TOML, read once at
 //! start, by the shell and the preview. A missing file is fine; one that
 //! can't be read or parsed is reported with a notice (not saved), and
-//! the defaults are used. So far it only has key bindings: in a `[keys]`
-//! table, each key (modifiers first, joined by `+`, e.g. `"Ctrl+Shift+L"`;
+//! the defaults are used. In its `[keys]` table, each key (modifiers first, joined by `+`, e.g. `"Ctrl+Shift+L"`;
 //! named keys like `Tab`, `PageUp` or `F1`) gets an action, named in kebab
 //! case (e.g. `"clear"`, `"delete-word-before"`), or `false` to unbind it.
-//! Other keys keep their default bindings.
+//! Other keys keep their default bindings. A `[prompt]` table can set
+//! `word-chars`: the chars that, besides letters and digits, make up a word
+//! for Ctrl+W, like zsh's `WORDCHARS` (without it, words end at whitespace,
+//! as in bash).
 //!
 //! Command lines and output can be selected with the mouse and copied with
 //! Ctrl+C, one printed text or log record at a time.
@@ -253,6 +255,10 @@ struct Shell {
     taken: Option<Taken>,
     /// The key bindings.
     bindings: Vec<Binding>,
+    /// The chars that, besides letters and digits, make up a word for
+    /// Ctrl+W; without them, anything but whitespace does (see
+    /// [`deleted_range`]).
+    word_chars: Option<String>,
     /// The scrollback, oldest first.
     scrollback: Vec<Item>,
     /// Log records of cleared items, kept for `messages`, but not saved.
@@ -542,6 +548,7 @@ impl Shell {
             offer: None,
             taken: None,
             bindings: keys::defaults(),
+            word_chars: None,
             scrollback: Vec::new(),
             cleared_records: Vec::new(),
             next_id: 0,
@@ -645,7 +652,10 @@ impl Shell {
             return;
         };
         match Config::load(path) {
-            Ok(config) => config.apply(&mut self.bindings),
+            Ok(config) => {
+                config.apply(&mut self.bindings);
+                self.word_chars = config.prompt.word_chars;
+            }
             Err(e) => {
                 let message = format!("Couldn't read the config file, so using the defaults: {e}");
                 let notice = self.notice(Level::Error, message).ephemeral();
@@ -1078,7 +1088,9 @@ impl Shell {
             Action::DeleteWordBefore | Action::DeleteToStart | Action::DeleteToEnd => {
                 let position = self.prompt.cursor().position;
                 let line = self.prompt.line(position.line).map(|l| l.text.into_owned());
-                let range = deleted_range(&line.unwrap_or_default(), position.column, action);
+                let line = line.unwrap_or_default();
+                let word_chars = self.word_chars.as_deref();
+                let range = deleted_range(&line, position.column, action, word_chars);
                 if range.is_empty() {
                     return Task::none();
                 }
@@ -1763,15 +1775,25 @@ fn prompt_binding(bindings: &[Binding], key: KeyPress) -> Option<text_editor::Bi
 }
 
 /// The byte range of `line` that a delete `action` removes, with the
-/// cursor at byte `cursor`. Words end at whitespace, as with Ctrl+W in
-/// bash.
-fn deleted_range(line: &str, cursor: usize, action: Action) -> std::ops::Range<usize> {
+/// cursor at byte `cursor`. A word is letters, digits and `word_chars`,
+/// like with Ctrl+W in zsh; without `word_chars`, it's anything but
+/// whitespace, as in bash.
+fn deleted_range(
+    line: &str,
+    cursor: usize,
+    action: Action,
+    word_chars: Option<&str>,
+) -> std::ops::Range<usize> {
     let cursor = cursor.min(line.len());
     match action {
         Action::DeleteWordBefore => {
-            let before = line[..cursor].trim_end();
-            let start = before.trim_end_matches(|c: char| !c.is_whitespace()).len();
-            start..cursor
+            let is_word = |c: char| match word_chars {
+                Some(chars) => c.is_alphanumeric() || chars.contains(c),
+                None => !c.is_whitespace(),
+            };
+            // What's after the word, then the word.
+            let before = line[..cursor].trim_end_matches(|c| !is_word(c));
+            before.trim_end_matches(is_word).len()..cursor
         }
         Action::DeleteToStart => 0..cursor,
         Action::DeleteToEnd => cursor..line.len(),

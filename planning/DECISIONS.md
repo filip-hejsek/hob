@@ -961,6 +961,13 @@ Works like a terminal: a scrollback with the prompt below it.
   per action listing its keys, which makes moving one key between actions
   two edits. Enter (running the line) isn't an action, so it can't be
   rebound yet.
+- `[prompt]` has `word-chars`, which sets what Ctrl+W takes as a word,
+  like zsh's `WORDCHARS`: letters, digits (`char::is_alphanumeric`) and
+  those chars. Unset, a word is anything but whitespace, as in bash (and
+  as before), so the default deletes a whole path. Rejected: a choice
+  between named styles (`"bash"`, `"zsh"`), since zsh's own default
+  includes `/` and people tune `WORDCHARS` anyway; and a second action
+  (like readline's `unix-filename-rubout`), which covers only `/`.
 - The program's name, as shown to the user (e.g. in `exit`'s description
   and the note on interrupted commands), belongs to the interpreter
   (`Interpreter::named`; `new` names it hob), since commands need it too,
@@ -1101,9 +1108,10 @@ Works like a terminal: a scrollback with the prompt below it.
   (it's a focusable with the island's Id), then a second one scrolls.
   Closing the window still exits without asking.
   Escape only cancels picking a completion candidate (see below).
-  In the prompt, Ctrl+W deletes the word before the cursor (back to
-  whitespace, like bash's Ctrl+W, so a whole path goes at once) and the
-  whitespace after it; Ctrl+U and Ctrl+K delete to the start and end of
+  In the prompt, Ctrl+W deletes the word before the cursor (by default
+  back to whitespace, like bash's Ctrl+W, so a whole path goes at once;
+  `word-chars` in the config changes that, see above) and what's after
+  it up to the cursor; Ctrl+U and Ctrl+K delete to the start and end of
   the line. They're `Binding::Custom`s: the shell reads the cursor from
   the prompt's `Content`, selects the range (`Content::move_to`), and
   deletes it as an ordinary Delete edit, so it acts like other edits (it

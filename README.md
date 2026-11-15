@@ -74,12 +74,15 @@ when trying the trimming out. The history keeps 10,000 lines.
 
 The window reads a config file (TOML) on start, from the platform's
 config directory (e.g. `~/.config/hob/config.toml`); set `HOB_CONFIG` to
-use another file. So far it only changes key bindings:
+use another file. It changes key bindings, and how far Ctrl+W deletes:
 
 ```toml
 [keys]
 "Ctrl+Shift+L" = "clear"   # an action, in kebab case
 "Ctrl+L" = false           # unbinds the key
+
+[prompt]
+word-chars = "*?_-.[]~=&;!#$%^(){}<>"
 ```
 
 The actions are those of hob-gui's `keys` module: `up`, `down`, `left`,
@@ -87,6 +90,12 @@ The actions are those of hob-gui's `keys` module: `up`, `down`, `left`,
 `delete-word-before`, `delete-to-start`, `delete-to-end`, `page-up`,
 `page-down`, `clear` and `exit`. Keys not named keep their defaults. If
 the file can't be read, hob says so and uses the defaults.
+
+Ctrl+W (`delete-word-before`) deletes the word before the cursor. A word
+is anything but whitespace, as in bash, so `cd foo/bar/` loses the whole
+path. With `word-chars`, a word is letters, digits and those chars, like
+with zsh's `WORDCHARS`: the example above is zsh's default without `/`,
+so Ctrl+W deletes one directory at a time.
 
 Notes are kept in the platform's data directory (e.g.
 `~/.local/share/hob/notes.sqlite`); set `HOB_NOTES` to use another file,

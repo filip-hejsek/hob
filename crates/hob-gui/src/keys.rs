@@ -31,8 +31,8 @@ pub(crate) enum Action {
     /// Takes the picked candidate bare, or cycles the endings of the one
     /// taken; otherwise types a space.
     TakePick,
-    /// Deletes the word before the cursor (up to whitespace), and the
-    /// whitespace after it.
+    /// Deletes the word before the cursor (up to whitespace, unless the
+    /// config sets `word-chars`), and what's after it.
     DeleteWordBefore,
     /// Deletes from the start of the line to the cursor.
     DeleteToStart,

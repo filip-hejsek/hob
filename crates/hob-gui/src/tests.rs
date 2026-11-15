@@ -710,7 +710,7 @@ fn history_puts_the_cursor_at_the_end() {
 
 #[test]
 fn deleted_ranges() {
-    let word = |line, cursor| deleted_range(line, cursor, Action::DeleteWordBefore);
+    let word = |line, cursor| deleted_range(line, cursor, Action::DeleteWordBefore, None);
     assert_eq!(word("cd foo/bar", 10), 3..10);
     assert_eq!(word("say  one  ", 10), 5..10);
     assert_eq!(word("say one", 5), 4..5);
@@ -718,8 +718,26 @@ fn deleted_ranges() {
     assert_eq!(word("  ", 2), 0..2);
     assert_eq!(word("", 0), 0..0);
     assert_eq!(word("a\u{3000}čaj", 6), 4..6);
-    assert_eq!(deleted_range("say one", 4, Action::DeleteToStart), 0..4);
-    assert_eq!(deleted_range("say one", 4, Action::DeleteToEnd), 4..7);
+    let to_start = deleted_range("say one", 4, Action::DeleteToStart, None);
+    assert_eq!(to_start, 0..4);
+    let to_end = deleted_range("say one", 4, Action::DeleteToEnd, None);
+    assert_eq!(to_end, 4..7);
+}
+
+#[test]
+fn deleted_words_with_word_chars() {
+    let word =
+        |line: &str, chars| deleted_range(line, line.len(), Action::DeleteWordBefore, Some(chars));
+    // Like zsh with / left out of WORDCHARS.
+    assert_eq!(word("cd foo/bar_2", "_-."), 7..12);
+    // What's after the word goes with it.
+    assert_eq!(word("cd foo/bar/", "_-."), 7..11);
+    assert_eq!(word("cd 'my-dir' ", "_-."), 4..12);
+    assert_eq!(word("cd 'my-dir' ", ""), 7..12);
+    // With /, like zsh's default.
+    assert_eq!(word("cd foo/bar/", "/"), 3..11);
+    assert_eq!(word("ls čaj", ""), 3..7);
+    assert_eq!(word("--", ""), 0..2);
 }
 
 #[test]
@@ -741,6 +759,30 @@ fn ctrl_w_u_and_k_delete_at_the_cursor() {
     // Nothing to delete.
     act(&mut shell, Action::DeleteToStart);
     assert_eq!(shell.prompt.text(), " ");
+}
+
+#[test]
+fn word_chars_come_from_the_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[prompt]\nword-chars = \"_\"\n").unwrap();
+    let config = GuiConfig {
+        config_file: Some(path),
+        ..gui_config()
+    };
+    let (mut shell, _) = Shell::new(
+        Some(Arc::new(interpreter())),
+        None,
+        Limits::default(),
+        Arc::new(config),
+        Level::Info,
+        None,
+    );
+    type_into(&mut shell, "look foo/bar_baz");
+    act(&mut shell, Action::DeleteWordBefore);
+    assert_eq!(shell.prompt.text(), "look foo/");
+    act(&mut shell, Action::DeleteWordBefore);
+    assert_eq!(shell.prompt.text(), "look ");
 }
 
 #[test]
