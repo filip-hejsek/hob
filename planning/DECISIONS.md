@@ -738,7 +738,7 @@ from the notes whenever `todo` runs.
   would (same flags), one at a time in an island: "Note 2 of 5", the
   heading and details as `notes show` prints them, the categories line,
   the text. It starts with the newest, or note ID (an error if the flags
-  leave it out). Action buttons "Previous [p]" and "Next [n]" move by id
+  leave it out). Action buttons "Previous [k]" and "Next [j]" move by id
   and wrap around; "Close" (cancel) prints nothing, since closing is all
   there is to do. Each press reads the notes again (the connection is
   kept, behind a mutex, for the actions), so notes added, changed or

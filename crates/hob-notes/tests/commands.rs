@@ -680,7 +680,7 @@ fn notes_browse() {
         // The newest first; the done note is left out.
         assert_eq!(browsed(island), "Note 2 of 2 | #3 | c");
         let outline = island.to_string();
-        assert!(outline.contains(r#"button "Next" [n]"#), "{outline}");
+        assert!(outline.contains(r#"button "Next" [j]"#), "{outline}");
         assert!(island.press("Next").unwrap().is_none());
         // Past the end, it wraps around.
         assert_eq!(browsed(island), "Note 1 of 2 | #2: second | b");

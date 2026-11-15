@@ -49,8 +49,8 @@ pub(crate) fn browse(
         when("has_categories", label(state("categories"))),
         label(state("text")),
         row([
-            action_button("previous", "Previous [p]"),
-            action_button("next", "Next [n]"),
+            action_button("previous", "Previous [k]"),
+            action_button("next", "Next [j]"),
             cancel_button("Close"),
         ]),
     ]));
