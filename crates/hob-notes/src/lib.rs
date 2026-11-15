@@ -2,8 +2,9 @@
 //! `notes`.
 //!
 //! Notes are kept in an SQLite database. `note` takes one, `title` names
-//! one, and `notes` lists, browses, searches, shows, edits, deletes or reopens
-//! them, and manages the categories notes can be in. A note can have a tag, written
+//! one, and `notes` lists, browses, searches, shows, edits, archives, deletes
+//! or reopens them, and manages the categories notes can be in. Archived
+//! notes are kept but hidden. A note can have a tag, written
 //! as the first word of its title (or text); `todo` makes it a TODO note.
 //! TODO items aren't stored: `todo` makes them from the notes each time
 //! (TODO notes to work on, unnamed notes to name), and offers a few; `done`
@@ -87,6 +88,7 @@ pub fn register(interpreter: &mut Interpreter, path: Option<PathBuf>) {
         Spec::new()
             .flag("all", "Also the notes that are done")
             .flag("todo", "Only TODO notes")
+            .flag("archived", "Only archived notes")
             .option(
                 "category",
                 "NAME",
@@ -127,6 +129,12 @@ pub fn register(interpreter: &mut Interpreter, path: Option<PathBuf>) {
         )
         .subcommand("reopen", "Make a done or active TODO note open again", id())
         .subcommand(
+            "archive",
+            "Archive a note: hide it, without deleting it",
+            id(),
+        )
+        .subcommand("unarchive", "Take a note out of the archive", id())
+        .subcommand(
             "categories",
             "List, add, rename or delete categories",
             Spec::new()
@@ -158,7 +166,7 @@ pub fn register(interpreter: &mut Interpreter, path: Option<PathBuf>) {
         .optional();
     interpreter.register_spec(
         "notes",
-        "List, show, edit or delete notes, and manage categories",
+        "List, show, edit, archive or delete notes, and manage categories",
         spec,
         move |ctx, args| notes(ctx, args, open()?),
     );
@@ -318,6 +326,9 @@ fn todo(ctx: &mut Context, mut db: Db) -> CommandResult {
                 if !note.is_todo() {
                     return Err(format!("note #{id} isn't a TODO note any more"));
                 }
+                if note.archived.is_some() {
+                    return Err(format!("note #{id} was archived meanwhile"));
+                }
                 Ok(Change::Status(Status::Active))
             })?;
             ctx.print(format!(
@@ -384,6 +395,8 @@ fn notes(ctx: &mut Context, args: &Matches, mut db: Db) -> CommandResult {
         "show" => show(ctx, &existing(&db, id)?),
         "delete" => delete(ctx, &mut db, id, args.flag("yes")),
         "reopen" => reopen(ctx, &mut db, id),
+        "archive" => archive(ctx, &mut db, id, true),
+        "unarchive" => archive(ctx, &mut db, id, false),
         _ => unreachable!("subcommands are declared"),
     }
 }
@@ -395,13 +408,15 @@ struct Filter {
     all: bool,
     /// Only TODO notes.
     todo: bool,
+    /// Only archived notes; otherwise, only those that aren't.
+    archived: bool,
     /// Only those in the category with this name, as stored.
     category: Option<String>,
 }
 
 impl Filter {
-    /// The filter given by `--all`, `--todo` and `--category`; the category
-    /// must exist.
+    /// The filter given by `--all`, `--todo`, `--archived` and
+    /// `--category`; the category must exist.
     fn new(db: &Db, args: &Matches) -> Result<Self, db::Error> {
         let category = match args.value("category") {
             Some(name) => Some(existing_category(db, name)?.name),
@@ -410,6 +425,7 @@ impl Filter {
         Ok(Filter {
             all: args.flag("all"),
             todo: args.flag("todo"),
+            archived: args.flag("archived"),
             category,
         })
     }
@@ -419,18 +435,23 @@ impl Filter {
         Ok((db.all()?.into_iter())
             .filter(|note| self.all || note.status != Status::Done)
             .filter(|note| !self.todo || note.is_todo())
+            .filter(|note| note.archived.is_some() == self.archived)
             .filter(|note| (self.category.as_ref()).is_none_or(|c| note.categories.contains(c)))
             .collect())
     }
 
     /// What to say when it lets no notes through: which notes there are
     /// none of, e.g. `No TODO notes in category "work" that aren't done.`
-    /// Done ones are mentioned only if some would be let through.
+    /// Done and archived ones are mentioned only if some would be let
+    /// through.
     fn none_message(&self, db: &Db) -> rusqlite::Result<String> {
         if db.all()?.is_empty() {
             return Ok("No notes.".to_owned());
         }
         let mut message = "No ".to_owned();
+        if self.archived {
+            message.push_str("archived ");
+        }
         if self.todo {
             message.push_str("TODO ");
         }
@@ -438,13 +459,27 @@ impl Filter {
         if let Some(category) = &self.category {
             message.push_str(&format!(" in category {category:?}"));
         }
-        let with_done = Filter {
-            all: true,
-            todo: self.todo,
-            category: self.category.clone(),
+        // Whether there are notes like these that are done (`all`) or
+        // archived.
+        let some = |all, archived| -> rusqlite::Result<bool> {
+            let filter = Filter {
+                all,
+                archived,
+                todo: self.todo,
+                category: self.category.clone(),
+            };
+            Ok(!filter.notes(db)?.is_empty())
         };
-        if !self.all && !with_done.notes(db)?.is_empty() {
-            message.push_str(" that aren't done");
+        let mut done = !self.all && some(true, self.archived)?;
+        let mut archived = !self.archived && some(self.all, true)?;
+        if !self.all && !self.archived && !done && !archived && some(true, true)? {
+            (done, archived) = (true, true);
+        }
+        match (done, archived) {
+            (true, true) => message.push_str(" that aren't done or archived"),
+            (true, false) => message.push_str(" that aren't done"),
+            (false, true) => message.push_str(" that aren't archived"),
+            (false, false) => {}
         }
         message.push('.');
         Ok(message)
@@ -499,7 +534,7 @@ fn heading(note: &Note) -> String {
 }
 
 /// A note's state and dates, e.g. `done, created 2026-01-02 10:00, done
-/// 2026-01-03 09:00`.
+/// 2026-01-03 09:00, archived 2026-01-04 08:00`.
 fn details(note: &Note) -> String {
     let mut details = Vec::new();
     let state = state(note);
@@ -509,6 +544,9 @@ fn details(note: &Note) -> String {
     details.push(format!("created {}", note.created));
     if let Some(done) = &note.done {
         details.push(format!("done {done}"));
+    }
+    if let Some(archived) = &note.archived {
+        details.push(format!("archived {archived}"));
     }
     details.join(", ")
 }
@@ -725,6 +763,27 @@ fn reopen(ctx: &mut Context, db: &mut Db, id: i64) -> CommandResult {
         Ok(Change::Status(Status::Open))
     })?;
     ctx.print(format!("Reopened {}", describe(&note)));
+    Ok(())
+}
+
+/// Archives a note (`archive`), or takes it out of the archive.
+fn archive(ctx: &mut Context, db: &mut Db, id: i64, archive: bool) -> CommandResult {
+    let note = db.change(id, |note| {
+        let note = note.ok_or_else(|| no_note(id))?;
+        match (archive, note.archived.is_some()) {
+            (true, true) => Err(format!("#{id} is already archived")),
+            (false, false) => Err(format!("#{id} isn't archived")),
+            _ => Ok(Change::Archive(archive)),
+        }
+    })?;
+    let message = match archive {
+        true if note.status == Status::Active => {
+            format!("Archived {}; it's no longer active.", describe(&note))
+        }
+        true => format!("Archived {}", describe(&note)),
+        false => format!("Unarchived {}", describe(&note)),
+    };
+    ctx.print(message);
     Ok(())
 }
 

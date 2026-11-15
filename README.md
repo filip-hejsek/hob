@@ -122,7 +122,9 @@ with the word "todo", which is then taken out (`note todo: call Ada`). Picking a
 browse` shows them one at a time, with Previous and Next buttons; `notes
 search` finds them as you type, to show or edit the top match; `notes show`,
 `edit`, `delete` and `reopen` act on one, given as `3` or `#3` (`edit`
-alone edits the last one). `notes
+alone edits the last one). `notes archive ID` hides a note without
+deleting it (`notes list --archived` lists those, `notes unarchive ID`
+brings one back). `notes
 categories` defines categories; a note's are checked in the `notes edit`
 island, and `notes list -c NAME` lists the notes in one.
 

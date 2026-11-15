@@ -677,7 +677,7 @@ named like git's so they're familiar; `!git ...` still runs the real one.
 
 `note` is the quick way to write something down, `todo` and `done` the
 way to work, and `notes` (`list`, `browse`, `search`, `show`, `edit`, `delete`, `reopen`,
-`categories`) manages what's stored. Notes are stored; TODO items aren't, they're made
+`archive`, `unarchive`, `categories`) manages what's stored. Notes are stored; TODO items aren't, they're made
 from the notes whenever `todo` runs.
 
 - Notes are kept in SQLite, through rusqlite with SQLite bundled (built
@@ -838,6 +838,30 @@ from the notes whenever `todo` runs.
   "Close" prints nothing. Rejected: picking a
   result other than the top one (a list's lines can't be clicked; that
   would need buttons per result).
+- Archiving (version 5) hides a note without deleting it: an `archived`
+  column holds when it was archived (`NULL` if it isn't). `notes archive
+  ID` and `notes unarchive ID` set and clear it; doing either twice is an
+  error ("#3 is already archived", "#3 isn't archived"). `list`, `browse`
+  and `search` leave archived notes out; their `--archived` flag shows
+  only archived ones instead (the other flags still apply, so `--all` is
+  needed for done ones), which is how to find them again. `todo` offers
+  none, and picking one archived meanwhile is an error. Archiving the
+  active note makes it open, saying so ("…; it's no longer active."), so
+  `todo` never shows a hidden note as being worked on. Commands given an
+  ID (`show`, `edit`, `done`, `reopen`, `delete`, `title -n`) still act on
+  archived notes; `show` and `browse` add "archived DATE" to the details.
+  `title` and `notes edit` without an ID still mean the last note made,
+  archived or not; category counts include archived notes. Rejected: a
+  status value (a TODO note's status is separate, and is kept when it's
+  archived), and `--archived` meaning "archived ones too" (they'd be lost
+  among the rest).
+- When `list`, `browse` or `search` find no notes, the message mentions
+  what one flag would show: "that aren't done" (`--all`), "that aren't
+  archived" (`--archived`), or, when only both together would show some,
+  "that aren't done or archived".
+- Migrating to version 5 only adds the column; the v3 tag migration runs
+  only for databases older than version 4, since by the old rule it
+  would tag notes that aren't TODO notes now.
 
 Rejected:
 

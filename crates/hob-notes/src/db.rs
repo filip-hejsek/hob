@@ -12,7 +12,7 @@ use crate::tag::{self, Tag};
 pub(crate) type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// The schema version (SQLite's `user_version`) this code reads and writes.
-const VERSION: i32 = 4;
+const VERSION: i32 = 5;
 
 /// The notes table, as of version 2. A note's `status` matters only for
 /// TODO notes; at most one note is active. Ids aren't reused
@@ -50,6 +50,9 @@ CREATE INDEX note_categories_category ON note_categories (category);
 /// [`migrate_tags`].
 const TAGS: &str = "ALTER TABLE notes ADD COLUMN tag TEXT;";
 
+/// Version 5 adds archiving: when a note was archived, or `NULL`.
+const ARCHIVED: &str = "ALTER TABLE notes ADD COLUMN archived TEXT;";
+
 /// Version 1 to 2: rebuilds the table with `AUTOINCREMENT`, keeping
 /// everything (ids too). Its index goes first, as index names are global.
 const MIGRATE_1: &str = "
@@ -70,6 +73,7 @@ DROP TABLE notes_v1;
 const COLUMNS: &str = "id, title, text, tag, status, \
     strftime('%Y-%m-%d %H:%M', created, 'localtime'), \
     strftime('%Y-%m-%d %H:%M', done, 'localtime'), \
+    strftime('%Y-%m-%d %H:%M', archived, 'localtime'), \
     (SELECT group_concat(c.name, char(10) ORDER BY c.name) \
         FROM note_categories nc JOIN categories c ON c.id = nc.category \
         WHERE nc.note = notes.id)";
@@ -106,6 +110,8 @@ pub(crate) struct Note {
     pub(crate) created: String,
     /// When it was done, like `created`.
     pub(crate) done: Option<String>,
+    /// When it was archived, like `created`; `None` if it isn't.
+    pub(crate) archived: Option<String>,
     /// The names of its categories, sorted.
     pub(crate) categories: Vec<String>,
 }
@@ -132,7 +138,8 @@ impl Note {
             },
             created: row.get(5)?,
             done: row.get(6)?,
-            categories: (row.get::<_, Option<String>>(7)?)
+            archived: row.get(7)?,
+            categories: (row.get::<_, Option<String>>(8)?)
                 .map(|names| names.split('\n').map(str::to_owned).collect())
                 .unwrap_or_default(),
         })
@@ -176,6 +183,9 @@ pub(crate) enum Change {
     /// Sets its status. Making it active puts the one active before back
     /// to open; making it done records the time, other statuses clear it.
     Status(Status),
+    /// Archives it (recording the time, and making it open if it was
+    /// active), or takes it out of the archive.
+    Archive(bool),
     /// Removes it, for good.
     Delete,
 }
@@ -244,19 +254,21 @@ impl Db {
         self.many(&format!("SELECT {COLUMNS} FROM notes ORDER BY id"))
     }
 
-    /// Open TODO notes, oldest first.
+    /// Open TODO notes that aren't archived, oldest first.
     pub(crate) fn open_todos(&self) -> rusqlite::Result<Vec<Note>> {
         let notes = self.many(&format!(
-            "SELECT {COLUMNS} FROM notes WHERE status = 'open' ORDER BY id"
+            "SELECT {COLUMNS} FROM notes \
+                WHERE status = 'open' AND archived IS NULL ORDER BY id"
         ))?;
         Ok(notes.into_iter().filter(Note::is_todo).collect())
     }
 
     /// Unnamed notes that aren't TODO notes (their text says what they
-    /// are), oldest first.
+    /// are) or archived, oldest first.
     pub(crate) fn unnamed(&self) -> rusqlite::Result<Vec<Note>> {
         let notes = self.many(&format!(
-            "SELECT {COLUMNS} FROM notes WHERE title IS NULL ORDER BY id"
+            "SELECT {COLUMNS} FROM notes \
+                WHERE title IS NULL AND archived IS NULL ORDER BY id"
         ))?;
         Ok(notes.into_iter().filter(|n| !n.is_todo()).collect())
     }
@@ -427,6 +439,16 @@ fn apply(tx: &Transaction<'_>, id: i64, change: Change) -> rusqlite::Result<()> 
                 params![id, status.sql()],
             )?;
         }
+        Change::Archive(true) => {
+            tx.execute(
+                "UPDATE notes SET archived = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), \
+                    status = iif(status = 'active', 'open', status) WHERE id = ?1",
+                [id],
+            )?;
+        }
+        Change::Archive(false) => {
+            tx.execute("UPDATE notes SET archived = NULL WHERE id = ?1", [id])?;
+        }
         Change::Delete => {
             tx.execute("DELETE FROM notes WHERE id = ?1", [id])?;
         }
@@ -444,18 +466,24 @@ fn migrate(conn: &mut Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let sql = match version {
         VERSION => return Ok(()),
-        0 => format!("{NOTES}{CATEGORIES}{TAGS}"),
-        1 => format!("{MIGRATE_1}{NOTES}{MIGRATE_1_COPY}{CATEGORIES}{TAGS}"),
-        2 => format!("{CATEGORIES}{TAGS}"),
-        3 => TAGS.to_owned(),
+        0 => format!("{NOTES}{CATEGORIES}{TAGS}{ARCHIVED}"),
+        1 => format!("{MIGRATE_1}{NOTES}{MIGRATE_1_COPY}{CATEGORIES}{TAGS}{ARCHIVED}"),
+        2 => format!("{CATEGORIES}{TAGS}{ARCHIVED}"),
+        3 => format!("{TAGS}{ARCHIVED}"),
+        4 => ARCHIVED.to_owned(),
         _ => {
             return Err(format!(
                 "the database has version {version}; this hob knows only up to {VERSION}"
             ));
         }
     };
+    // Tags were found by the old rule only before version 4.
+    let tags = |tx: &Transaction<'_>| match version {
+        ..4 => migrate_tags(tx),
+        _ => Ok(()),
+    };
     tx.execute_batch(&sql)
-        .and_then(|()| migrate_tags(&tx))
+        .and_then(|()| tags(&tx))
         .and_then(|()| tx.pragma_update(None, "user_version", VERSION))
         .and_then(|()| tx.commit())
         .map_err(|e| e.to_string())
@@ -525,6 +553,46 @@ mod tests {
         assert!(b.done.is_some());
         set(&mut db, b.id, Change::Status(Status::Open));
         assert_eq!(db.get(b.id).unwrap().unwrap().done, None);
+    }
+
+    #[test]
+    fn archiving_hides_from_todo() {
+        let (mut db, _dir) = db();
+        let a = db.add(None, "a", Some(Tag::Todo), &[]).unwrap();
+        let b = db.add(None, "b", None, &[]).unwrap();
+        set(&mut db, a, Change::Status(Status::Active));
+        set(&mut db, a, Change::Archive(true));
+        set(&mut db, b, Change::Archive(true));
+        // No longer active, and not offered.
+        assert!(db.active().unwrap().is_none());
+        assert!(db.open_todos().unwrap().is_empty());
+        assert!(db.unnamed().unwrap().is_empty());
+        let note = db.get(a).unwrap().unwrap();
+        assert_eq!(note.status, Status::Open);
+        assert!(note.archived.is_some());
+        set(&mut db, a, Change::Archive(false));
+        assert_eq!(db.get(a).unwrap().unwrap().archived, None);
+        assert_eq!(ids(db.open_todos().unwrap()), [a]);
+    }
+
+    #[test]
+    fn migrates_version_4() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.sqlite");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(&format!("{NOTES}{CATEGORIES}{TAGS}"))
+            .unwrap();
+        // The text starts with "todo", but it's not a tag: there's a title.
+        conn.execute_batch(
+            "PRAGMA user_version = 4;
+            INSERT INTO notes (id, title, text) VALUES (1, 'Named', 'todo: not a tag');",
+        )
+        .unwrap();
+        drop(conn);
+        let db = Db::open(&path).unwrap();
+        let note = db.get(1).unwrap().unwrap();
+        assert_eq!((note.text.as_str(), note.tag), ("todo: not a tag", None));
+        assert_eq!(note.archived, None);
     }
 
     #[test]

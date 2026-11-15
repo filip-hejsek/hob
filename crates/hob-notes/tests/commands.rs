@@ -141,10 +141,10 @@ fn every_command_has_a_usage_line() {
     assert_eq!(usage("done"), "usage: done [ID]");
     assert_eq!(
         usage("notes"),
-        "usage: notes [list [--all] [--todo] [-c NAME] \
-         | browse [--all] [--todo] [-c NAME] [ID] \
-         | search [--all] [--todo] [-c NAME] [QUERY...] | show ID | edit [ID] | delete [-y] ID \
-         | reopen ID | categories [list | add NAME... | rename NAME NEW | delete [-y] NAME]]"
+        "usage: notes [list [--all] [--todo] [--archived] [-c NAME] \
+         | browse [--all] [--todo] [--archived] [-c NAME] [ID] \
+         | search [--all] [--todo] [--archived] [-c NAME] [QUERY...] | show ID | edit [ID] \
+         | delete [-y] ID | reopen ID | archive ID | unarchive ID | categories [list | add NAME... | rename NAME NEW | delete [-y] NAME]]"
     );
 }
 
@@ -480,7 +480,7 @@ fn notes_lists_them() {
     );
     assert_eq!(
         run(&hob, "notes list -x"),
-        ["error: unknown option -x; usage: notes list [--all] [--todo] [-c NAME]"]
+        ["error: unknown option -x; usage: notes list [--all] [--todo] [--archived] [-c NAME]"]
     );
     let error = run(&hob, "notes frob");
     assert!(
@@ -907,6 +907,96 @@ fn notes_reopen() {
 }
 
 #[test]
+fn archived_notes_are_hidden() {
+    let (hob, _dir) = setup();
+    run(&hob, "note plain");
+    run(&hob, "note todo: a");
+    run(&hob, "note todo: b");
+    run(&hob, "note unnamed");
+    run(&hob, "title -n 1 Plain");
+    run_answering(&hob, "todo", |island| island.press("Do #2: a").unwrap());
+    assert_eq!(
+        run(&hob, "notes archive 2"),
+        ["Archived #2: a; it's no longer active."]
+    );
+    assert_eq!(run(&hob, "notes archive #4"), ["Archived #4: unnamed"]);
+    assert_eq!(
+        run(&hob, "notes archive 4"),
+        ["error: #4 is already archived"]
+    );
+    assert_eq!(run(&hob, "notes archive 5"), ["error: there's no note #5"]);
+    assert_eq!(listed(&hob, "notes"), ["#1  Plain", "#3 todo b"]);
+    assert_eq!(
+        listed(&hob, "notes list --archived"),
+        ["#2 todo a", "#4  unnamed"]
+    );
+    assert_eq!(listed(&hob, "notes list --archived --todo"), ["#2 todo a"]);
+    // Neither is offered, nor active.
+    run_answering(&hob, "todo", |island| {
+        assert_eq!(
+            offered(island),
+            [r#""Do #3: b" [a]"#, r#""Not now" (cancel)"#],
+            "{island}"
+        );
+        Some(Outcome::Cancelled)
+    });
+    assert_eq!(
+        run(&hob, "done"),
+        ["error: nothing is active; pick a TODO note with todo, or give its ID"]
+    );
+    // Shown in full, with when it was archived.
+    let (heading, details, _) = shown(&run(&hob, "notes show 4"));
+    assert_eq!(heading, "#4");
+    assert!(details.contains(", archived "), "{details}");
+    // Hidden from browsing too.
+    let output = run(&hob, "notes browse 2");
+    assert_eq!(output, ["error: note #2 isn't among the notes browsed"]);
+    assert_eq!(run(&hob, "notes unarchive 2"), ["Unarchived #2: a"]);
+    assert_eq!(run(&hob, "notes unarchive 2"), ["error: #2 isn't archived"]);
+    assert_eq!(
+        listed(&hob, "notes list --todo"),
+        ["#2 todo a", "#3 todo b"]
+    );
+    let (_, details, _) = shown(&run(&hob, "notes show 2"));
+    check_details(&details, "todo", false);
+}
+
+#[test]
+fn none_message_mentions_archived_notes() {
+    let (hob, _dir) = setup();
+    run(&hob, "note todo x");
+    run(&hob, "notes archive 1");
+    assert_eq!(run(&hob, "notes"), ["No notes that aren't archived."]);
+    assert_eq!(
+        run(&hob, "notes search"),
+        ["No notes that aren't archived."]
+    );
+    run(&hob, "done 1");
+    assert_eq!(
+        run(&hob, "notes list --todo"),
+        ["No TODO notes that aren't done or archived."]
+    );
+    assert_eq!(
+        run(&hob, "notes list --archived"),
+        ["No archived notes that aren't done."]
+    );
+    run(&hob, "note todo y");
+    run(&hob, "done 2");
+    // Only what one flag would show is mentioned.
+    assert_eq!(
+        run(&hob, "notes list --todo"),
+        ["No TODO notes that aren't done."]
+    );
+    assert_eq!(listed(&hob, "notes list --all"), ["#2 done y"]);
+    run(&hob, "notes unarchive 1");
+    assert_eq!(run(&hob, "notes"), ["No notes that aren't done."]);
+    assert_eq!(
+        run(&hob, "notes list --archived --all"),
+        ["No archived notes."]
+    );
+}
+
+#[test]
 fn picking_rechecks_the_note() {
     let (hob, _dir) = setup();
     run(&hob, "note todo: a");
@@ -931,6 +1021,12 @@ fn picking_rechecks_the_note() {
         island.press("Do #3: c").unwrap()
     });
     assert_eq!(output, ["error: note #3 isn't a TODO note any more"]);
+    run(&hob, "note todo: d");
+    let output = run_answering(&hob, "todo", |island| {
+        assert_eq!(run(&hob, "notes archive 4"), ["Archived #4: d"]);
+        island.press("Do #4: d").unwrap()
+    });
+    assert_eq!(output, ["error: note #4 was archived meanwhile"]);
     assert!(
         listed(&hob, "notes")
             .iter()
