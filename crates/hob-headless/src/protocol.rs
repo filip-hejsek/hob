@@ -59,6 +59,15 @@ pub enum Call {
         /// Whether it's checked.
         checked: bool,
     },
+    /// Selects an option of a radio group in a live island.
+    Select {
+        /// The island.
+        island: IslandId,
+        /// The radio group's id.
+        field: String,
+        /// The option's value.
+        value: String,
+    },
     /// Picks one of the suggestions shown for a text field.
     Pick {
         /// The island.
@@ -79,7 +88,7 @@ pub enum Call {
 
 impl Call {
     /// The names of all methods.
-    pub const METHODS: &[&str] = &["run", "type_text", "set_checked", "pick", "press"];
+    pub const METHODS: &[&str] = &["run", "type_text", "set_checked", "select", "pick", "press"];
 }
 
 /// The reply to [`Call::Run`].
@@ -306,6 +315,11 @@ mod tests {
                 island,
                 field: field(),
                 checked: true,
+            },
+            Call::Select {
+                island,
+                field: field(),
+                value: "v".into(),
             },
             Call::Pick {
                 island,

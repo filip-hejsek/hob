@@ -926,6 +926,12 @@ Rejected:
 - Islands are sent structured: as frozen islands (the format of saved
   sessions), again after every change, and frozen once submitted or
   cancelled. Clients render them; hob-cli prints the text outline.
+- The protocol has no version (see TODO.md). A new widget kind breaks
+  clients built before it, but only for islands that use it: they can't
+  parse those, drop them with a "bad message" on stderr, and so can't act
+  on them. Accepted for radio groups (`select` was added as a method);
+  the clients are built from this workspace, and the installed hob-mcp is
+  reinstalled after such changes.
 - `hob` is the binary, with a `--headless` flag, so both frontends get the
   same commands. hob-headless itself doesn't know about specific commands.
 - The window is the `hob` crate's `gui` feature, on by default; without it
@@ -947,7 +953,7 @@ Rejected:
 ## hob-cli (demo client)
 
 - Lines are run as hob commands; lines starting with `/` act on islands
-  (`/type`, `/check`, `/pick`, `/press`, `/show`), by default on the newest
+  (`/type`, `/check`, `/select`, `/pick`, `/press`, `/show`), by default on the newest
   live island, or on `#N`.
 - Output is prefixed with the block number, like `[3] hi`. After the first
   time, an island is printed only as its changed lines.
@@ -959,10 +965,14 @@ Rejected:
   commands as the GUI.
 - MCP is implemented by hand (initialize, ping, tools/list, tools/call):
   that's all tools need, and the official Rust SDK would bring in tokio.
-- Tools: `run` (a command line), `fill` (any number of text fields and
-  checkboxes at once), `press` (a button), `state` (overview), `wait` (for
+- Tools: `run` (a command line), `fill` (any number of text fields,
+  checkboxes and radio groups at once), `press` (a button), `state` (overview), `wait` (for
   something to happen, or a command to finish). `run` and `press` wait until
   the command finishes or shows an island, so a step usually takes one call.
+- `fill` takes a radio group's value as a string, like a text field's:
+  hob-mcp has the island's tree, so it tells them apart and sends `select`
+  for a radio group. Rejected: a separate tool or argument (more for the
+  agent to learn; the outline already shows which is which).
 - `fill` with `submit: true` then presses the island's first shown submit
   button (the one Enter presses), like `press`, saving a call; it's an
   error if there's none. Other buttons still need `press`: only submitting

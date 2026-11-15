@@ -28,6 +28,10 @@ const TESTS: &[(&str, fn())] = &[
         fill_presses_the_submit_button,
     ),
     (
+        "fill_selects_radio_options_by_value",
+        fill_selects_radio_options_by_value,
+    ),
+    (
         "action_buttons_keep_the_island_open",
         action_buttons_keep_the_island_open,
     ),
@@ -150,6 +154,16 @@ fn interpreter() -> Interpreter {
                 fields.text("name"),
                 fields.checked("loud")
             ));
+        }
+        Ok(())
+    });
+    i.register("size", "Ask for a size", |ctx, _| {
+        let builder = IslandBuilder::new(column([
+            radio_group("size", [("s", "Small"), ("m", "Medium")]),
+            submit_button("OK"),
+        ]));
+        if let Outcome::Submitted(fields) = ctx.show(builder)? {
+            ctx.print(format!("got {:?}", fields.selected("size")));
         }
         Ok(())
     });
@@ -311,6 +325,27 @@ fn fill_presses_the_submit_button() {
     assert!(text.contains("island #4 has no submit button"), "{text}");
     let (text, _) = tool(&mut bridge, "press", json!({"island": 4, "label": "A"}));
     assert!(text.contains("[3] chose a"), "{text}");
+}
+
+fn fill_selects_radio_options_by_value() {
+    let mut bridge = bridge();
+    let (text, _) = tool(&mut bridge, "run", json!({"line": "size"}));
+    assert!(text.contains("radio_group size\n"), "{text}");
+    assert!(text.contains("option s: ( ) \"Small\" [1]\n"), "{text}");
+    let (text, error) = tool(
+        &mut bridge,
+        "fill",
+        json!({"island": 2, "fields": {"size": "x"}}),
+    );
+    assert!(error, "{text}");
+    assert!(
+        text.contains("radio group \"size\" has no option \"x\""),
+        "{text}"
+    );
+    let arguments = json!({"island": 2, "fields": {"size": "m"}, "submit": true});
+    let (text, error) = tool(&mut bridge, "fill", arguments);
+    assert!(!error, "{text}");
+    assert!(text.contains(r#"[1] got Some("m")"#), "{text}");
 }
 
 fn action_buttons_keep_the_island_open() {

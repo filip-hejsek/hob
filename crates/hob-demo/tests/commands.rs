@@ -98,7 +98,17 @@ fn pizza() {
     answer(&mut requests, |island| {
         island.set_checked("cheese", true).unwrap();
         island.set_checked("ham", true).unwrap();
-        assert!(island.to_string().contains(r#"label "Price: €11.00""#));
+        // No size yet, so no price, and it isn't submitted.
+        assert!(!island.to_string().contains("Price"));
+        let error = island.press("Next").unwrap_err();
+        assert_eq!(error.to_string(), "not submitted: Choose a size.");
+        island.select("size", "medium").unwrap();
+        let outline = island.to_string();
+        assert!(
+            outline.contains("    option medium: (o) \"Medium\" [m]\n"),
+            "{outline}"
+        );
+        assert!(outline.contains(r#"label "Price: €11.00""#), "{outline}");
         island.press("Next").unwrap()
     });
     answer(&mut requests, |island| {
@@ -119,7 +129,7 @@ fn pizza() {
         [r#"column
   label "Receipt for Ada Lovelace"
   list
-    - "Pizza  €8.00"
+    - "Medium pizza  €8.00"
     - "Extra cheese  €1.00"
     - "Ham  €2.00"
   label "Total: €11.00"
@@ -131,7 +141,10 @@ fn pizza() {
 #[test]
 fn pizza_can_be_cancelled() {
     let mut requests = run("pizza");
-    answer(&mut requests, |island| island.press("Next").unwrap());
+    answer(&mut requests, |island| {
+        island.select("size", "small").unwrap();
+        island.press("Next").unwrap()
+    });
     answer(&mut requests, |island| island.press("Cancel").unwrap());
     assert_eq!(rest(requests), ["Order cancelled."]);
 }

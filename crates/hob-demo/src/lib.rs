@@ -161,8 +161,18 @@ const TOPPINGS: [(&str, &str, u32); 4] = [
     ("ham", "Ham", 200),
 ];
 
-/// The price of a pizza without toppings, in cents.
-const BASE_PRICE: u32 = 800;
+/// The sizes: value, name, key, price without toppings (in cents).
+const SIZES: [(&str, &str, char, u32); 3] = [
+    ("small", "Small", 's', 600),
+    ("medium", "Medium", 'm', 800),
+    ("large", "Large", 'l', 1100),
+];
+
+/// The size with the value `selected`: its name and price.
+fn size(selected: Option<&str>) -> Option<(&'static str, u32)> {
+    let (_, name, _, cents) = SIZES.iter().find(|(value, ..)| Some(*value) == selected)?;
+    Some((name, *cents))
+}
 
 /// Orders a pizza in several steps, then prints a receipt. The arguments are
 /// the name to prefill.
@@ -171,6 +181,7 @@ fn pizza(ctx: &mut Context, args: &[String]) -> CommandResult {
         ctx.print("Order cancelled.");
         return Ok(());
     };
+    let (size, base_price) = size(fields.selected("size")).ok_or("no size chosen")?;
     let toppings: Vec<_> = TOPPINGS
         .iter()
         .filter(|(id, ..)| fields.checked(id))
@@ -183,13 +194,13 @@ fn pizza(ctx: &mut Context, args: &[String]) -> CommandResult {
     let name = fields.text("name").trim();
     let address = fields.text("address").trim();
 
-    let mut items = vec![format!("Pizza  {}", price(BASE_PRICE))];
+    let mut items = vec![format!("{size} pizza  {}", price(base_price))];
     items.extend(
         toppings
             .iter()
             .map(|(_, label, cents)| format!("{label}  {}", price(*cents))),
     );
-    let total = BASE_PRICE + toppings.iter().map(|(.., cents)| cents).sum::<u32>();
+    let total = base_price + toppings.iter().map(|(.., cents)| cents).sum::<u32>();
     let mut receipt = IslandBuilder::new(column([
         label(format!("Receipt for {name}")),
         list("items"),
@@ -202,18 +213,31 @@ fn pizza(ctx: &mut Context, args: &[String]) -> CommandResult {
 }
 
 fn toppings_island() -> IslandBuilder {
-    let mut children = vec![label("Step 1 of 2: choose toppings")];
+    let sizes = SIZES.map(|(value, name, key, _)| (value, ButtonLabel::new(name).key(key)));
+    let mut children = vec![
+        label("Step 1 of 2: choose the size and toppings"),
+        radio_group("size", sizes),
+        label(state("size_error")),
+    ];
     children.extend(TOPPINGS.iter().map(|(id, label, _)| checkbox(id, label)));
     children.push(label(state("price")));
     children.push(row([submit_button("Next"), cancel_button("Cancel")]));
     let mut builder = IslandBuilder::new(column(children));
+    builder.validate("size_error", |f| {
+        f.selected("size")
+            .is_none()
+            .then(|| "Choose a size.".into())
+    });
     builder.derive("price", |f| {
+        let Some((_, base_price)) = size(f.selected("size")) else {
+            return "".into();
+        };
         let toppings: u32 = TOPPINGS
             .iter()
             .filter(|(id, ..)| f.checked(id))
             .map(|(.., cents)| cents)
             .sum();
-        format!("Price: {}", price(BASE_PRICE + toppings)).into()
+        format!("Price: {}", price(base_price + toppings)).into()
     });
     builder
 }

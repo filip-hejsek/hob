@@ -245,6 +245,11 @@ impl<W: Write> Server<W> {
                 field,
                 checked,
             } => self.act(island, |i| i.set_checked(&field, checked).map(|()| None)),
+            Call::Select {
+                island,
+                field,
+                value,
+            } => self.act(island, |i| i.select(&field, &value).map(|()| None)),
             Call::Pick {
                 island,
                 field,

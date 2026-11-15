@@ -34,9 +34,14 @@ command does is reported with it. Run `help` to list the commands.
 Islands are shown as outlines, one widget per line, e.g.:
   text_field name: \"Ada\" (placeholder \"Your name\")
   checkbox subscribe: [x] \"Subscribe\"
+  radio_group size
+    option s: ( ) \"Small\" [1]
+    option m: (o) \"Medium\" [2]
   button \"Submit\" (submit)
-Fill in text fields and checkboxes by their ids (here name and subscribe) \
-with fill, and press buttons by their labels with press. A button may show \
+Fill in text fields, checkboxes and radio groups by their ids (here name, \
+subscribe and size) with fill; a radio group takes the value of an option \
+(here s or m; (o) marks the selected one). Press buttons by their labels with \
+press. A button may show \
 its keyboard key after the label, as in `button \"Yes\" [y]` or `[Alt+y]`; its \
 label is still just Yes. Labels and lists update as you fill fields in. To fill in \
 fields and press the submit button (marked (submit)) in one step, use fill \
@@ -301,7 +306,8 @@ fn tools(launch: &Launch, restart: bool) -> Value {
         {
             "name": "fill",
             "description": "Fill in fields of a live island: text fields (the text replaces \
-                what's there) and checkboxes. Reports the island as it is afterwards; with \
+                what's there), checkboxes and radio groups. Reports the island as it is \
+                afterwards; with \
                 submit, presses its submit button too, and reports like press.",
             "inputSchema": {
                 "type": "object",
@@ -310,7 +316,8 @@ fn tools(launch: &Launch, restart: bool) -> Value {
                     "fields": {
                         "type": "object",
                         "description": "Field ids mapped to values: a string for a text \
-                            field, true or false for a checkbox.",
+                            field, true or false for a checkbox, an option's value (a \
+                            string) for a radio group.",
                         "additionalProperties": {"type": ["string", "boolean"]},
                     },
                     "submit": {

@@ -260,7 +260,8 @@ impl Bridge {
     }
 
     /// Fills in fields of a live island: text fields with strings, checkboxes
-    /// with booleans. With `submit`, then presses its submit button, as
+    /// with booleans, radio groups with an option's value (a string). With
+    /// `submit`, then presses its submit button, as
     /// [`press`](Self::press) does; it's an error if none is shown.
     pub fn fill(
         &mut self,
@@ -274,7 +275,14 @@ impl Bridge {
             return Err(self.report_with(NOT_RUNNING));
         }
         for (field, value) in fields {
+            let is_radio_group = (self.islands.get(&island))
+                .is_some_and(|i| has_radio_group(i.contents.root(), field));
             let call = match value {
+                Value::String(value) if is_radio_group => Call::Select {
+                    island,
+                    field: field.clone(),
+                    value: value.clone(),
+                },
                 Value::String(text) => Call::TypeText {
                     island,
                     field: field.clone(),
@@ -287,8 +295,8 @@ impl Bridge {
                 },
                 _ => {
                     let message = format!(
-                        "the value for {field:?} must be a string (for a text field) or a \
-                         boolean (for a checkbox)"
+                        "the value for {field:?} must be a string (for a text field, or an \
+                         option's value for a radio group) or a boolean (for a checkbox)"
                     );
                     return Err(self.report_with(&message));
                 }
@@ -748,6 +756,19 @@ fn submit_label(island: &FrozenIsland, widget: &Widget) -> Option<String> {
             ..
         } => Some(label.clone()),
         _ => None,
+    }
+}
+
+/// Whether `widget` has a radio group with the id `field`.
+fn has_radio_group(widget: &Widget, field: &str) -> bool {
+    match widget.kind() {
+        Kind::Column(children) | Kind::Row(children) => {
+            children.iter().any(|c| has_radio_group(c, field))
+        }
+        Kind::Table { rows, .. } => rows.iter().flatten().any(|c| has_radio_group(c, field)),
+        Kind::When { child, .. } => has_radio_group(child, field),
+        Kind::RadioGroup { id, .. } => **id == *field,
+        _ => false,
     }
 }
 

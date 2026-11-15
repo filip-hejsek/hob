@@ -45,20 +45,6 @@ The widget API is defined in kettle-ui core; kettle-ui-iced renders it.
   past the last checkbox, so they're hard to discover there; and in a
   checkbox, `y`/`n` mean something else than a button's `[y]`/`[n]`.
 
-### Radio groups (in progress)
-
-Done in kettle-ui, kettle-ui-headless and kettle-ui-iced. Left:
-
-1. hob-headless `Call::Select`; hob-cli `/select [#N] FIELD VALUE`; hob-mcp
-   `fill` with a string selects in a radio group (it knows the tree).
-   Islands with radio groups break older clients (they drop them as bad
-   messages): record that, and reinstall hob-mcp.
-2. A radio group in hob-demo's toppings demo; check the hints in a real
-   window.
-
-- The headless protocol has no version; any new widget breaks older
-  clients. Consider one (e.g. a `hello` notification with a version).
-
 ### Images
 
 - Opt-in lossy compression for lossless images: lossy JPEG XL can still be
@@ -94,6 +80,9 @@ Done in kettle-ui, kettle-ui-headless and kettle-ui-iced. Left:
 
 ## hob-headless and hob-cli
 
+- The protocol has no version, so a new widget kind breaks older clients
+  (they drop islands that use it). Consider one, e.g. a `hello`
+  notification with a version, or a version on islands.
 - Whether the text outline is the right thing to show an agent; hob-mcp
   hasn't been tried with a real agent yet.
     - The outline works fine, but simplifying it and converting to Markdown

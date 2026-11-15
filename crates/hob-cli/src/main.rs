@@ -43,13 +43,14 @@ const VERSION: &str = concat!(
 const HELP: &str = "\
 Lines are run as hob commands (try help). Driver commands act on the newest
 live island, or on island N if given as #N:
-  /type [#N] FIELD TEXT   set the text of a text field
-  /check [#N] FIELD       check a checkbox (/uncheck to uncheck)
-  /pick [#N] FIELD LINE   pick a suggestion shown for a text field
-  /press [#N] LABEL       press a button
-  /show [#N]              print an island again
-  /help                   show this
-  /quit                   quit (or end the input)";
+  /type [#N] FIELD TEXT     set the text of a text field
+  /check [#N] FIELD         check a checkbox (/uncheck to uncheck)
+  /select [#N] FIELD VALUE  select an option of a radio group, by its value
+  /pick [#N] FIELD LINE     pick a suggestion shown for a text field
+  /press [#N] LABEL         press a button
+  /show [#N]                print an island again
+  /help                     show this
+  /quit                     quit (or end the input)";
 
 /// How long output must pause before the prompt is shown.
 const PROMPT_DELAY: Duration = Duration::from_millis(50);
@@ -373,6 +374,7 @@ enum Input {
 enum Action {
     Type { field: String, text: String },
     SetChecked { field: String, checked: bool },
+    Select { field: String, value: String },
     Pick { field: String, line: String },
     Press { label: String },
 }
@@ -389,6 +391,11 @@ impl Action {
                 island,
                 field,
                 checked,
+            },
+            Action::Select { field, value } => Call::Select {
+                island,
+                field,
+                value,
             },
             Action::Pick { field, line } => Call::Pick {
                 island,
@@ -434,6 +441,10 @@ fn parse(line: &str) -> Result<Input, String> {
                 checked: name == "check",
             },
             _ => return usage("[#N] FIELD"),
+        },
+        "select" => match field("[#N] FIELD VALUE") {
+            Ok((field, value)) if !value.is_empty() => Action::Select { field, value },
+            _ => return usage("[#N] FIELD VALUE"),
         },
         "pick" => match field("[#N] FIELD LINE") {
             Ok((field, line)) if !line.is_empty() => Action::Pick { field, line },
@@ -504,6 +515,16 @@ mod tests {
             )
         );
         assert_eq!(
+            parse("/select #2 size m"),
+            act(
+                Some(2),
+                Action::Select {
+                    field: "size".into(),
+                    value: "m".into()
+                }
+            )
+        );
+        assert_eq!(
             parse("/pick fruit Apple pie"),
             act(
                 None,
@@ -530,6 +551,10 @@ mod tests {
     fn rejects_bad_driver_commands() {
         assert_eq!(parse("/press"), Err("usage: /press [#N] LABEL".into()));
         assert_eq!(parse("/check a b"), Err("usage: /check [#N] FIELD".into()));
+        assert_eq!(
+            parse("/select size"),
+            Err("usage: /select [#N] FIELD VALUE".into())
+        );
         assert_eq!(parse("/type #x a"), Err("bad island #x".into()));
         assert!(
             parse("/fly")
