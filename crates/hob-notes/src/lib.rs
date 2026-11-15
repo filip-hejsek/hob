@@ -682,7 +682,10 @@ fn delete(ctx: &mut Context, db: &mut Db, id: i64, yes: bool) -> CommandResult {
         let island = IslandBuilder::new(column([
             label(format!("Delete {}?", describe(&note))),
             label(details(&note)),
-            row([button_danger("delete", "Delete"), cancel_button("Cancel")]),
+            row([
+                button_danger("delete", "Delete [d]"),
+                cancel_button("Cancel"),
+            ]),
         ]));
         if !matches!(ctx.show(island)?, Outcome::Pressed(..)) {
             ctx.print("Not deleted.");

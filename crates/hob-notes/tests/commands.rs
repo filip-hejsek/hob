@@ -636,7 +636,7 @@ fn notes_delete_asks_first() {
         let outline = island.to_string();
         assert!(outline.contains(r#"label "Delete #1: a?""#), "{outline}");
         assert!(outline.contains(r#"label "todo, created "#), "{outline}");
-        assert!(outline.contains(r#"button "Delete" (danger)"#), "{outline}");
+        assert!(outline.contains(r#"button "Delete" [d] (danger)"#), "{outline}");
         island.press("Cancel").unwrap()
     });
     assert_eq!(output, ["Not deleted."]);
