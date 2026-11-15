@@ -107,7 +107,7 @@ if it's tagged `todo`: its title (or, without a title, its text) starts
 with the word "todo", which is then taken out (`note todo: call Ada`). Picking a TODO note makes it active, until
 `done` (which also takes an ID). `notes` lists the notes, and `notes
 browse` shows them one at a time, with Previous and Next buttons; `notes
-search` finds them as you type; `notes show`,
+search` finds them as you type, to show or edit the top match; `notes show`,
 `edit`, `delete` and `reopen` act on one, given as `3` or `#3` (`edit`
 alone edits the last one). `notes
 categories` defines categories; a note's are checked in the `notes edit`

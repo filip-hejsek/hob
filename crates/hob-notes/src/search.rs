@@ -15,7 +15,8 @@ use crate::{Filter, count_notes, describe, details, heading};
 const RESULTS: usize = 5;
 
 /// Searches the notes `filter` lets through, starting with `query`. "Show"
-/// (Enter) prints the top match as `notes show` does.
+/// (Enter) prints the top match as `notes show` does, and "Edit" edits it
+/// as `notes edit` does.
 pub(crate) fn search(ctx: &mut Context, db: Db, filter: Filter, query: &str) -> CommandResult {
     if filter.notes(&db)?.is_empty() {
         ctx.print(filter.none_message(&db)?);
@@ -29,7 +30,11 @@ pub(crate) fn search(ctx: &mut Context, db: Db, filter: Filter, query: &str) -> 
         label(state("details")),
         when("has_categories", label(state("categories"))),
         label(state("text")),
-        row([submit_button("Show"), cancel_button("Close")]),
+        row([
+            submit_button("Show"),
+            button("edit", "Edit [Alt+e]"),
+            cancel_button("Close"),
+        ]),
     ]));
     island.set_text("query", query);
 
@@ -93,14 +98,16 @@ pub(crate) fn search(ctx: &mut Context, db: Db, filter: Filter, query: &str) -> 
         });
     }
 
-    let fields = match ctx.show(island)? {
-        Outcome::Submitted(fields) => fields,
+    let (edit, fields) = match ctx.show(island)? {
+        Outcome::Submitted(fields) => (false, fields),
+        Outcome::Pressed(id, fields) if &*id == "edit" => (true, fields),
         // Closing is all there is to do, so it says nothing.
         Outcome::Cancelled | Outcome::Pressed(..) => return Ok(()),
     };
     // Searched again: notes may have changed since the last keystroke.
-    let db = db.lock().unwrap();
+    let mut db = db.lock().unwrap();
     match matches(&db, &filter, fields.text("query"))?.first() {
+        Some(note) if edit => crate::edit(ctx, &mut db, note),
         Some(note) => crate::show(ctx, note),
         None => {
             ctx.print("No notes match.");

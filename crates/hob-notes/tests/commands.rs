@@ -829,6 +829,26 @@ fn notes_search() {
     });
     assert_eq!(output, ["No notes match."]);
 
+    // Edit edits the top match, as `notes edit` does.
+    let mut requests = start(&hob, "notes search fence");
+    answer(&mut requests, |island| {
+        let outline = island.to_string();
+        assert!(outline.contains(r#"button "Edit" [Alt+e]"#), "{outline}");
+        island.press("Edit").unwrap()
+    });
+    answer(&mut requests, |island| {
+        assert_eq!(island.fields().text("text"), "paint the fence");
+        island.type_text("text", "paint the fence green").unwrap();
+        island.press("Save").unwrap()
+    });
+    assert_eq!(rest(requests), ["Saved note #4."]);
+    assert_eq!(shown(&run(&hob, "notes show 4")).2, "paint the fence green");
+    let output = run_answering(&hob, "notes search fence", |island| {
+        island.type_text("query", "nothing like it").unwrap();
+        island.press("Edit").unwrap()
+    });
+    assert_eq!(output, ["No notes match."]);
+
     // The filters are those of `notes list`.
     run(&hob, "done 2");
     run_answering(&hob, "notes search ada", |island| {

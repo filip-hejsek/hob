@@ -768,7 +768,10 @@ from the notes whenever `todo` runs.
   derive per widget, each searching (the same search six times).
 - "Show" (submit, so Enter in the search box) prints the top match as
   `notes show` does, searching again with the final query; with no match
-  it says "No notes match.". "Close" prints nothing. Rejected: picking a
+  it says "No notes match.". "Edit [Alt+e]" (a plain button, ending the
+  island) edits the top match the same way, with `notes edit`'s island
+  after the search island. Alt, since the search box takes plain letters.
+  "Close" prints nothing. Rejected: picking a
   result other than the top one (a list's lines can't be clicked; that
   would need buttons per result).
 
