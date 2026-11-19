@@ -6,6 +6,9 @@ known bugs are in BUGS.md.
 What's most important is to get the core primitives right. UI polish can
 come later.
 
+Resources ("everything is a resource") and the scripting language are
+planned in resources/.
+
 ## kettle-ui core
 
 ### Dependency tracking
