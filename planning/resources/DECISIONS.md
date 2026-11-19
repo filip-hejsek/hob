@@ -37,29 +37,41 @@ syntax, which ends up underspecified and full of special cases.
 - `cd` and the working directory stay filesystem only: external programs
   run in the working directory, so it must be a real one.
 
-## Values and places
+## Values, places and paths
 
 - Values have three types so far: *string*, *resource* and *path*.
-- A path is relative to a resource (its base) and needn't exist; it's how
-  resources that don't exist yet are passed (e.g. a file to create).
+- A path value is relative to a resource (its base) and needn't exist;
+  it's how resources that don't exist yet are passed (e.g. a file to
+  create).
 - A command's spec says whether each argument takes a resource, a path
   or a string.
-- Places (lvalues) are variables (`$n`) and attributes (`./dir/:owner`).
-  A place can be read as a value.
-- A variable holds a resource's identity, not a copy of its contents, and
-  only a resource that exists can be assigned to it.
+- Expressions come in three categories: *values*, *places* and *paths*.
+  Places (lvalues) are variables (`$n`) and attributes (`./dir/:owner`).
+  Paths are path expressions (`./foo`, `$n/3`).
+- A place coerces to a value by reading it; a path by resolving it,
+  giving a resource (an error if nothing is there). There's explicit
+  syntax for taking a path as a path value instead of resolving it (like
+  `&` takes a place's address in Rust or C).
+- Assignment takes a value, so a variable can hold any value: a string,
+  a resource or a path. `$x = ./foo` holds the resource (which must
+  exist), and the path syntax holds the path.
+- A variable holding a resource holds its identity, not a copy of its
+  contents.
 
 ## Syntax
 
 ```
 statement    := command args... | literal_path args... | place '=' expression
-place        := '$' name | value '/:' name        -- variable, attribute
-value        := path | string | place
-path         := base ('/' component)*
-base         := '/' | '.' | '~' | ':' name | place
-literal_path := ('/' | '.' | '~' | ':' name) ('/' component)*
+expression   := value | place | path
+place        := '$' name | expression '/:' name   -- variable, attribute
+path         := root ('/' component)* | expression '/' component
+root         := '/' | '.' | '~' | ':' name
+value        := string | '&' path                 -- '&': proposed, see TODO.md
+literal_path := root ('/' component)*
 command      := [a-zA-Z0-9] [a-zA-Z0-9._-]*
 ```
+
+Where a value is needed, a place or path is coerced to one (see above).
 
 - `/` is an operator, like `.` in many languages: `$n/3` is child `3` of
   the resource in `$n`. Paths aren't plain strings.

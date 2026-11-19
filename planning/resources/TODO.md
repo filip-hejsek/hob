@@ -5,13 +5,23 @@ open question, not agreed yet.
 
 ## Values
 
-- Path to resource: proposal: path expressions always build a path (a
-  base resource plus components, no I/O), and resolving it gives a
-  resource, failing if nothing is there. Resolving happens only where a
-  resource is needed: an argument whose spec asks for one, assignment to
-  a variable, and the left side of `/:attr`. Strings never become paths
-  (or paths strings) without being asked to.
-- Can variables hold strings and paths too (by value)?
+- Syntax for a path value: proposal: `&./new.txt`, `&$n/3`. Its base is
+  resolved when it's evaluated, so a later `cd` doesn't change what
+  `$p = &./new` points to. `&` applies only to path expressions.
+- Path values when used: `$p/x` (with `$p` holding a path) extends the
+  path, and resolves like any path expression. Resolving `$p` itself
+  needs explicit syntax, since a path value shouldn't resolve silently:
+  maybe `*$p`, after the same analogy.
+- Path arguments in canonical syntax: proposal: written with `&`
+  (`touch &./new`), like a Rust function taking a reference; interactive
+  sugar adds it when the spec expects a path. Alternative: the spec
+  decides, like a C++ reference parameter (`touch ./new`), which reads
+  better but makes a script's meaning depend on the command's spec.
+- Getting a resource's path (its canonical address) as a path value.
+- Strings never become paths (or paths strings) without being asked to.
+- Running path expressions: with three categories, `$x` is a place and
+  can't start a statement, but `$x/bin/tool a b` is a path. Allow it
+  (`run` only for places and other values), or keep `literal_path`?
 - How long variables live and who sees them: maybe like the working
   directory (shared by the interpreter, each command gets a snapshot when
   it starts). Saved with the session?
