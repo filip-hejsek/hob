@@ -433,6 +433,13 @@ thread) or as a snapshot of a live island (`Model::freeze`).
   option, or else the first. iced's radio has no disabled state, so a
   frozen one ignores events itself and gets a style like a disabled
   checkbox's.
+- In a run of checkboxes or a radio group, `j` and `k` (as in vim) focus
+  the next and previous field of the run, like Down and Up, but stop at its
+  ends: leaving it with one, the other couldn't lead back (a text field
+  takes the letter). They don't select, like Up and Down. A radio option
+  whose letter is `j` or `k` keeps it: there the letter selects it.
+  Rejected: forbidding `j` and `k` as option letters (a label like
+  "Jam [j]" is natural).
 - A text area is iced's `text_editor` inside our own widget, which keeps the
   editor's `Content` in its widget state and takes the value as a string,
   like `text_input`. The `Content` is remade only when the value changes

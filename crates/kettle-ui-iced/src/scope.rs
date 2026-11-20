@@ -27,6 +27,8 @@ use crate::Message;
 /// - In a checkbox: Space toggles it; `y` checks it and `n` unchecks it, and
 ///   both move on to the next field, or after the last one to the island as
 ///   a whole.
+/// - In a run, `j` and `k` focus the next and previous field of the run, but
+///   never leave it (a radio option's letter `j` or `k` selects it instead).
 /// - In a radio option: Space selects it; an option's number (`1` to `9`)
 ///   or letter selects it and moves on past the group, to the next field or
 ///   else the island as a whole.
@@ -282,6 +284,26 @@ impl Scope<'_> {
             Some(next) => Focus::Field(next.id.clone()),
             None => Focus::Whole,
         };
+        // `j` and `k` go to the next and previous field of a run (not past
+        // it, so the other key always leads back), unless they are keys of
+        // a radio option there.
+        if plain
+            && digit.is_none()
+            && let Some(field) = field
+            && self.fields[field].kind.is_choice()
+            && let Some(c @ ('j' | 'k')) = single_char(key)
+            && self.option_with_key(field, c).is_none()
+        {
+            let run = run(&self.fields, field);
+            let to = match c {
+                'j' => Some(field + 1),
+                _ => field.checked_sub(1),
+            };
+            return Some(match to.filter(|to| run.contains(to)) {
+                Some(to) => KeyAction::focus(Focus::Field(self.fields[to].id.clone())),
+                None => KeyAction::default(),
+            });
+        }
         match key.as_ref() {
             // Like other Alt shortcuts, it works with any keyboard layout.
             keyboard::Key::Character(_) if alt && (whole || field.is_some()) => {
@@ -373,15 +395,7 @@ impl Scope<'_> {
                     Some(digit) => digit,
                     None => single_char(key)?,
                 };
-                let option =
-                    self.fields[run(&self.fields, field?)]
-                        .iter()
-                        .find(|f| match &f.kind {
-                            FieldKind::RadioOption { digit, letter, .. } => {
-                                *digit == Some(c) || *letter == Some(c)
-                            }
-                            _ => false,
-                        })?;
+                let option = self.option_with_key(field?, c)?;
                 let FieldKind::RadioOption {
                     selected, select, ..
                 } = &option.kind
@@ -415,6 +429,19 @@ impl Scope<'_> {
             }
             _ => None,
         }
+    }
+
+    /// The radio option whose number or letter is `c`, in the run of the
+    /// field at `field`.
+    fn option_with_key(&self, field: usize, c: char) -> Option<&Field> {
+        self.fields[run(&self.fields, field)]
+            .iter()
+            .find(|f| match &f.kind {
+                FieldKind::RadioOption { digit, letter, .. } => {
+                    *digit == Some(c) || *letter == Some(c)
+                }
+                _ => false,
+            })
     }
 
     /// Presses the button with `key`, if there's one.

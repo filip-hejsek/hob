@@ -54,7 +54,9 @@
 //! fields, and Down from the last one to the island as a whole; Ctrl+Up
 //! and Ctrl+Down do that in a text area too, and in a run skip the rest of
 //! it; landing on a run, they go to its selected radio option, or else the
-//! field there that last had focus. Escape
+//! field there that last had focus. In a run, `j` and `k` move to the next
+//! and previous field of the run, but never out of it (unless they are a
+//! radio option's letter). Escape
 //! cancels (if there's a cancel button). While the island as a whole has focus,
 //! Enter submits and a button's key (see
 //! [`ButtonKey`]) presses it; a key with Alt
@@ -1655,6 +1657,61 @@ mod tests {
                 r#"Message(TextChanged("t", "x"))"#,
                 r#"Message(Selected("s", "b"))"#,
                 r#"Message(Selected("r", "a"))"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn j_and_k_move_within_a_run() {
+        use iced::keyboard::{Key, key::Named};
+
+        let builder = IslandBuilder::new(column([
+            checkbox("c", "C"),
+            checkbox("d", "D"),
+            radio_group("r", [("a", "A"), ("b", "B")]),
+            radio_group("s", [("a", "A"), ("j", "Jam [j]"), ("x", "X")]),
+            submit_button("OK"),
+        ]));
+        let island = Island::new(builder).unwrap().0;
+        let c = island.field_id("c").unwrap();
+        let mut ui = simulator(island.view());
+        // Clicking c checks it; k stays there, j goes to d, and j again
+        // stays there (the view isn't rebuilt, so Space checks c again).
+        ui.click(c).unwrap();
+        ui.typewrite("k");
+        ui.tap_key(Key::Named(Named::Space));
+        ui.typewrite("j");
+        ui.typewrite("j");
+        ui.tap_key(Key::Named(Named::Space));
+        // Down into r: j to b, but no further; k back to a, but no
+        // further.
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.typewrite("j");
+        ui.typewrite("j");
+        ui.tap_key(Key::Named(Named::Space));
+        ui.typewrite("k");
+        ui.typewrite("k");
+        ui.tap_key(Key::Named(Named::Space));
+        // In s, k still moves, but j is an option's letter: it selects it
+        // and moves on to the island as a whole.
+        ui.simulate(ctrl(Named::ArrowDown));
+        ui.tap_key(Key::Named(Named::ArrowDown));
+        ui.typewrite("k");
+        ui.tap_key(Key::Named(Named::Space));
+        ui.typewrite("j");
+        ui.tap_key(Key::Named(Named::Enter));
+        let messages: Vec<String> = ui.into_messages().map(|m| format!("{m:?}")).collect();
+        assert_eq!(
+            messages,
+            [
+                r#"Message(Toggled("c", true))"#,
+                r#"Message(Toggled("c", true))"#,
+                r#"Message(Toggled("d", true))"#,
+                r#"Message(Selected("r", "b"))"#,
+                r#"Message(Selected("r", "a"))"#,
+                r#"Message(Selected("s", "a"))"#,
+                r#"Message(Selected("s", "j"))"#,
+                "Message(Submit)",
             ]
         );
     }
