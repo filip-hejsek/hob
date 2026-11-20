@@ -21,7 +21,6 @@ hob-fs = { path = "crates/hob-fs" }
 hob-git = { path = "crates/hob-git" }
 hob-gui = { path = "crates/hob-gui", version = "0.1.0" }
 hob-headless = { path = "crates/hob-headless", version = "0.1.0" }
-hob-mcp = { path = "crates/hob-mcp", version = "0.1.0" }
 hob-notes = { path = "crates/hob-notes" }
 kettle-jxl = { path = "crates/kettle-jxl", version = "0.1.0" }
 kettle-ui = { path = "crates/kettle-ui", version = "0.1.0" }
